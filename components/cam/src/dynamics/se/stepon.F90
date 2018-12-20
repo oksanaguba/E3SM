@@ -282,7 +282,12 @@ subroutine stepon_run2(phys_state, phys_tend, dyn_in, dyn_out )
 
        call edgeVunpack(edgebuf,dyn_in%elem(ie)%derived%FQ(:,:,:,:),nlev*pcnst,kptr,ie)
      endif
+   enddo
 
+!now FQ contains dss-ed new tracer field: FQ=Qsmooth+dQ
+!we need it to be FQ=Q+dq=SQ+dQ
+
+   do ie=1,nelemd
       tl_f = TimeLevel%n0   ! timelevel which was adjusted by physics
 
       call TimeLevel_Qdp(TimeLevel, qsplit, tl_fQdp)
@@ -295,6 +300,15 @@ subroutine stepon_run2(phys_state, phys_tend, dyn_in, dyn_out )
       dyn_in%elem(ie)%state%T = dyn_in%elem(ie)%state%ST
       dyn_in%elem(ie)%state%ps_v = dyn_in%elem(ie)%state%Sps_v
       dyn_in%elem(ie)%state%phis = dyn_in%elem(ie)%state%Sphis
+
+!before restoring Q, extract qQ and rewrite FQ      
+!state%Q right now is Qsmooth
+
+!now FQ = dQ
+      dyn_in%elem(ie)%derived%FQ(:,:,:,:) = dyn_in%elem(ie)%derived%FQ(:,:,:,:) - dyn_in%elem(ie)%state%Q
+!now FQ = dQ + SQ
+      dyn_in%elem(ie)%derived%FQ(:,:,:,:) = dyn_in%elem(ie)%derived%FQ(:,:,:,:) + dyn_in%elem(ie)%state%SQ
+
       dyn_in%elem(ie)%state%Q = dyn_in%elem(ie)%state%SQ
 
 
