@@ -88,7 +88,6 @@ contains
 
 
     ! unit test for analytic jacobian used by IMEX methods
-!disable till membug is fixed
 !    if (.not. theta_hydrostatic_mode) &
 !         call test_imex_jacobian(elem,hybrid,hvcoord,tl,nets,nete)
 

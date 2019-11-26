@@ -1471,6 +1471,9 @@ contains
   real (kind=real_kind) ::  v1,v2,w,d_eta_dot_dpdn_dn
   integer :: i,j,k,kptr,ie, nlyr_tot
 
+  real (kind=real_kind) ::  phihy_i(np,np,nlevp), phi_temp(np,np,2,nlev)
+
+
   call t_startf('compute_andor_apply_rhs')
 
   if (theta_hydrostatic_mode) then
@@ -1536,7 +1539,23 @@ contains
         v_i(:,:,2,k) = (dp3d(:,:,k)*elem(ie)%state%v(:,:,2,k,n0) + &
              dp3d(:,:,k-1)*elem(ie)%state%v(:,:,2,k-1,n0) ) / (2*dp3d_i(:,:,k))
      end do
-     
+    
+
+
+
+!!!!! SPLITTING
+     call phi_from_eos(hvcoord,elem(ie)%state%phis,vtheta_dp,dp3d,phihy_i)
+     !gradient of it
+     do k=1,nlev
+       phi_temp(:,:,:,k) = gradient_sphere( phihy_i(:,:,k), deriv, elem(ie)%Dinv);
+       phi_temp(:,:,1,k) = phi_temp(:,:,1,k) * v_i(:,:,1,k)
+       phi_temp(:,:,2,k) = phi_temp(:,:,2,k) * v_i(:,:,2,k)
+     enddo
+
+
+
+
+ 
      if (theta_hydrostatic_mode) then
         do k=nlev,1,-1          ! traditional Hydrostatic integral
            phi_i(:,:,k)=phi_i(:,:,k+1)+&
@@ -1697,12 +1716,19 @@ contains
            ! add imex phi_h splitting 
            ! use approximate phi_h = hybi*phis 
            ! could also use true hydrostatic pressure, but this requires extra DSS in dirk()
+#define NEWS
+#ifndef NEWS
            phi_tens(:,:,k) =  phi_tens(:,:,k)+(scale1-scale2)*(&
                 v_i(:,:,1,k)*elem(ie)%derived%gradphis(:,:,1) + &
                 v_i(:,:,2,k)*elem(ie)%derived%gradphis(:,:,2) )*hvcoord%hybi(k)
+#else
+           phi_tens(:,:,k) =  phi_tens(:,:,k)+(scale1-scale2)*&
+                ( phi_temp(:,:,1,k) + phi_temp(:,:,2,k) )
+
+#endif
+
         endif
      end do
-
 
      ! k =nlevp case, all terms in the imex methods are treated explicitly at the boundary
      k =nlevp 
@@ -2083,7 +2109,66 @@ contains
      endif
      call limiter_dp3d_k(elem(ie)%state%dp3d(:,:,:,np1),elem(ie)%state%vtheta_dp(:,:,:,np1),&
           elem(ie)%spheremp,hvcoord%dp0)
+
+  enddo !ie
+
+
+#ifdef NEWS
+  do ie=nets,nete
+
+     dp3d  => elem(ie)%state%dp3d(:,:,:,np1)
+     vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,np1)
+
+     dp3d_i(:,:,1) = dp3d(:,:,1)
+     dp3d_i(:,:,nlevp) = dp3d(:,:,nlev)
+     do k=2,nlev
+        dp3d_i(:,:,k)=(dp3d(:,:,k)+dp3d(:,:,k-1))/2
+     end do
+
+     ! special averaging for velocity for energy conservation
+     v_i(:,:,1:2,1) = elem(ie)%state%v(:,:,1:2,1,np1)
+     v_i(:,:,1:2,nlevp) = elem(ie)%state%v(:,:,1:2,nlev,np1)
+     do k=2,nlev
+        v_i(:,:,1,k) = (dp3d(:,:,k)*elem(ie)%state%v(:,:,1,k,np1) + &
+             dp3d(:,:,k-1)*elem(ie)%state%v(:,:,1,k-1,np1) ) / (2*dp3d_i(:,:,k))
+        v_i(:,:,2,k) = (dp3d(:,:,k)*elem(ie)%state%v(:,:,2,k,np1) + &
+             dp3d(:,:,k-1)*elem(ie)%state%v(:,:,2,k-1,np1) ) / (2*dp3d_i(:,:,k))
+     end do
+
+!!!!! SPLITTING
+     call phi_from_eos(hvcoord,elem(ie)%state%phis,vtheta_dp,dp3d,phihy_i)
+     !gradient of it
+     do k=1,nlev
+       phi_temp(:,:,:,k) = gradient_sphere( phihy_i(:,:,k), deriv, elem(ie)%Dinv);
+       phi_temp(:,:,1,k) = phi_temp(:,:,1,k) * v_i(:,:,1,k)
+       phi_temp(:,:,2,k) = phi_temp(:,:,2,k) * v_i(:,:,2,k)
+     enddo
+
+
+!!!!! pack it to 
+     do k=1,nlev
+       elem(ie)%derived%ugradphihy(:,:,k) = (phi_temp(:,:,1,k)+phi_temp(:,:,2,k))*elem(ie)%spheremp(:,:)
+     enddo
+     kptr=0
+     call edgeVpack_nlyr(edge_g,elem(ie)%desc,&
+          elem(ie)%derived%ugradphihy(:,:,:),nlev,kptr,nlev)
   end do
+
+  call t_startf('caar_bexchV')
+  call bndry_exchangeV(hybrid,edge_g)
+  call t_stopf('caar_bexchV')
+
+  do ie=nets,nete
+     kptr=0
+     call edgeVunpack_nlyr(edge_g,elem(ie)%desc,&
+          elem(ie)%derived%ugradphihy(:,:,:),nlev,kptr,nlev)
+     do k=1,nlev
+        elem(ie)%derived%ugradphihy(:,:,k)=&
+        elem(ie)%derived%ugradphihy(:,:,k)*elem(ie)%rspheremp(:,:)
+     enddo
+  enddo
+#endif
+
   call t_stopf('compute_andor_apply_rhs')
 
   end subroutine compute_andor_apply_rhs
@@ -2091,7 +2176,7 @@ contains
 
 
 
-  subroutine compute_gwphis(gwh_i,dp3d,v,gradphis,hvcoord)
+  subroutine compute_gwphis(gwh_i,dp3d,v,gradphis,hvcoord,ugradphihy)
 !
 !  compute a vertical velocity induced by surface topography
 !  wh_i =  ubar grad phis 
@@ -2099,13 +2184,14 @@ contains
   real (kind=real_kind) :: gwh_i(np,np,nlevp)
   real (kind=real_kind) :: dp3d(np,np,nlev)
   real (kind=real_kind) :: v(np,np,2,nlev)
-  real (kind=real_kind) :: gradphis(np,np,2)
+  real (kind=real_kind) :: gradphis(np,np,2),ugradphihy(np,np,nlev)
   type (hvcoord_t)     , intent(in) :: hvcoord  
 
   ! local
   integer :: k
   real (kind=real_kind) :: v_i(np,np,2,nlevp)
 
+#ifndef NEWS
   ! add wh_i(n0) term to RHS
   do k=2,nlev
      v_i(:,:,1,k) = (dp3d(:,:,k)*v(:,:,1,k) + &
@@ -2119,6 +2205,11 @@ contains
      gwh_i(:,:,k) = (v_i(:,:,1,k)*gradphis(:,:,1) + v_i(:,:,2,k)*gradphis(:,:,2))&
           *hvcoord%hybi(k)
   enddo
+#else
+  gwh_i = 0.0
+  gwh_i(:,:,1:nlev) = ugradphihy(:,:,1:nlev)
+#endif
+
   end subroutine
 
 
@@ -2237,9 +2328,9 @@ contains
             exner,dpnh_dp_i,caller='dirk0')
        w_n0(:,:,1:nlev)     = w_n0(:,:,1:nlev) + &
             dt3*g*(dpnh_dp_i(:,:,1:nlev)-1d0)
-       
+
        call compute_gwphis(gwh_i,elem(ie)%state%dp3d(:,:,:,nt),elem(ie)%state%v(:,:,:,:,nt),&
-            elem(ie)%derived%gradphis,hvcoord)
+            elem(ie)%derived%gradphis,hvcoord,elem(ie)%derived%ugradphihy)
        phi_n0(:,:,1:nlev) = phi_n0(:,:,1:nlev) + &
             dt3*g*elem(ie)%state%w_i(:,:,1:nlev,nt) -  dt3*gwh_i(:,:,1:nlev)
     end if
@@ -2255,7 +2346,7 @@ contains
             dt3*g*(dpnh_dp_i(:,:,1:nlev)-1d0)
        
        call compute_gwphis(gwh_i,elem(ie)%state%dp3d(:,:,:,nt),elem(ie)%state%v(:,:,:,:,nt),&
-            elem(ie)%derived%gradphis,hvcoord)
+            elem(ie)%derived%gradphis,hvcoord,elem(ie)%derived%ugradphihy)
        phi_n0(:,:,1:nlev) = phi_n0(:,:,1:nlev) + &
             dt3*g*elem(ie)%state%w_i(:,:,1:nlev,nt) -  dt3*gwh_i(:,:,1:nlev)
     end if
@@ -2263,7 +2354,7 @@ contains
     ! add just the wphis(np1) term to the RHS
     nt=np1
     call compute_gwphis(gwh_i,elem(ie)%state%dp3d(:,:,:,nt),elem(ie)%state%v(:,:,:,:,nt),&
-         elem(ie)%derived%gradphis,hvcoord)
+         elem(ie)%derived%gradphis,hvcoord,elem(ie)%derived%ugradphihy)
     phi_n0(:,:,1:nlev) = phi_n0(:,:,1:nlev) -  dt2*gwh_i(:,:,1:nlev)
 
 
