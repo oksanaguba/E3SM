@@ -1597,7 +1597,7 @@ contains
   if (dt_remap_factor==0) then
      adjust_ps=.true.   ! stay on reference levels for Eulerian case
   else
-     adjust_ps=.true.   ! Lagrangian case can support adjusting dp3d or ps
+     adjust_ps=.false.   ! Lagrangian case can support adjusting dp3d or ps
   endif
 #else
   adjust_ps=.true.      ! preqx requires forcing to stay on reference levels
@@ -1605,7 +1605,11 @@ contains
 
   dp=elem%state%dp3d(:,:,:,np1)
   dp_adj=dp
-  ps=elem%state%ps_v(:,:,np1)
+  !ps=elem%state%ps_v(:,:,np1)
+
+!OG should not be used anyway
+  ps=  hvcoord%hyai(1)*hvcoord%ps0 + &
+       sum(elem%state%dp3d(:,:,:,np1),3)
   !ps=hvcoord%hyai(1)*hvcoord%ps0 + sum(dp(:,:,:),3) ! introduces roundoff
 
   ! after calling this routine, ps_v may not be valid and should not be used
@@ -1613,9 +1617,12 @@ contains
 
 #ifdef MODEL_THETA_L
    !compute temperatue and NH perturbation pressure before Q tendency
-   do k=1,nlev
-      phydro(:,:,k)=hvcoord%ps0*hvcoord%hyam(k) + ps(:,:)*hvcoord%hybm(k)
-   enddo
+!   do k=1,nlev
+!      phydro(:,:,k)=hvcoord%ps0*hvcoord%hyam(k) + ps(:,:)*hvcoord%hybm(k)
+!   enddo
+
+   call get_hydro_pressure(phydro,elem%state%dp3d(:,:,:,np1),hvcoord)
+
 
    !one can set pprime=0 to hydro regime but it is not done in master
    !compute pnh, here only pnh is needed
