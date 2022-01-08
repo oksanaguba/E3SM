@@ -97,6 +97,9 @@ hh=4
 do j=1,np
 do i=1,np
 
+!1000 is pretty much all land, 2000 and 3000 is slightly less land
+if(elem(ie)%state%phis(i,j) > 3000.0) then
+
 pptop =  hvcoord%hyai(1)*hvcoord%ps0
 ppbot = pptop+sum( elem(ie)%state%dp3d(i,j,:,np1))
 
@@ -119,6 +122,9 @@ newdp(i,j,1:nlev-hh-1) = hvcoord%dp0(1:nlev-hh-1)*a2/a3
 
 !reassign dp now
 dp(i,j,:) = newdp(i,j,:)
+
+
+endif
 
 enddo
 enddo
