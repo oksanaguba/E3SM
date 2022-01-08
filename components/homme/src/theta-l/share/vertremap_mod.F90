@@ -46,11 +46,13 @@ contains
   real (kind=real_kind)           :: dt
 
   integer :: ie,i,j,k,np1,nets,nete,np1_qdp
-  integer :: q
+  integer :: q, hh
 
-  real (kind=real_kind), dimension(np,np,nlev)  :: dp,dp_star
+  real (kind=real_kind), dimension(np,np,nlev)  :: dp,dp_star, newdp
   real (kind=real_kind), dimension(np,np,nlevp) :: phi_ref
   real (kind=real_kind), dimension(np,np,nlev,5)  :: ttmp
+
+  real (kind=real_kind) :: ppbot, pptop, a1, a2, a3
 
   call t_startf('vertical_remap')
 
@@ -78,6 +80,7 @@ contains
      elem(ie)%state%ps_v(:,:,np1) = hvcoord%hyai(1)*hvcoord%ps0 + &
           sum(elem(ie)%state%dp3d(:,:,:,np1),3)
      do k=1,nlev
+!orig dp based on A, B
         dp(:,:,k) = ( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
              ( hvcoord%hybi(k+1) - hvcoord%hybi(k) )*elem(ie)%state%ps_v(:,:,np1)
         if (rsplit==0) then
@@ -87,6 +90,41 @@ contains
            dp_star(:,:,k) = elem(ie)%state%dp3d(:,:,k,np1)
         endif
      enddo
+
+
+hh=4
+
+do j=1,np
+do i=1,np
+
+pptop =  hvcoord%hyai(1)*hvcoord%ps0
+ppbot = pptop+sum( elem(ie)%state%dp3d(i,j,:,np1))
+
+do k=nlev-hh,nlev
+newdp(i,j,k)=hvcoord%dp0(k)
+enddo
+
+a1=sum(newdp(i,j,nlev-hh:nlev))
+!let's hope that the sum is small
+if( a1  > (ppbot - pptop) )then
+print *, 'OG SUM VIOLATED!!!!!!!!!!!!!'
+stop
+endif
+
+!base all domain on dp0?
+a2=ppbot-pptop-a1
+a3=sum(hvcoord%dp0(1:nlev-hh-1))
+
+newdp(i,j,1:nlev-hh-1) = hvcoord%dp0(1:nlev-hh-1)*a2/a3
+
+!reassign dp now
+dp(i,j,:) = newdp(i,j,:)
+
+enddo
+enddo
+
+
+
      if (minval(dp_star)<0) then
         do k=1,nlev
         do i=1,np
