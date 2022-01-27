@@ -15,7 +15,7 @@ module physpkg
 
   use shr_kind_mod,     only: i8 => shr_kind_i8, r8 => shr_kind_r8
   use spmd_utils,       only: masterproc
-  use physconst,        only: latvap, latice, rh2o
+  use physconst,        only: latvap, latice, rh2o, cpair
   use physics_types,    only: physics_state, physics_tend, physics_state_set_grid, &
        physics_ptend, physics_tend_init,    &
        physics_type_alloc, physics_ptend_dealloc,&
@@ -29,7 +29,7 @@ module physpkg
   use camsrfexch,       only: cam_out_t, cam_in_t
 
   use cam_control_mod,  only: ideal_phys, adiabatic
-  use phys_control,     only: phys_do_flux_avg, phys_getopts, waccmx_is
+  use phys_control,     only: phys_do_flux_avg, phys_getopts, waccmx_is, use_global_cpterms
   use zm_conv,          only: do_zmconv_dcape_ull => trigdcape_ull, &
                               do_zmconv_dcape_only => trig_dcape_only
   use scamMod,          only: single_column, scm_crm_mode
@@ -1771,6 +1771,19 @@ end if ! l_gw_drag
 
 if (l_ac_energy_chk) then
     !-------------- Energy budget checks vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+
+
+
+    state%cpterme(:ncol) =          cpair * state%t(:ncol,pver)     * cam_in%cflx(:ncol,1)
+    state%cptermp(:ncol) = 1000.0 * cpair * state%t(:ncol,pver)     * (cam_out%precl(:ncol) + cam_out%precc(:ncol) )
+
+    if(use_global_cpterms)then
+    !take CP term out of te_cur
+    state%te_cur(:ncol) = state%te_cur(:ncol) - state%cptermp(:ncol)*ztodt &
+                                              + state%cpterme(:ncol)*ztodt
+    endif
+
+
 
     call pbuf_set_field(pbuf, teout_idx, state%te_cur, (/1,itim_old/),(/pcols,1/))       
 

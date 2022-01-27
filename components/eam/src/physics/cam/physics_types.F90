@@ -103,6 +103,7 @@ module physics_types
           te_ini,  &! vertically integrated total (kinetic + static) energy of initial state
           te_cur,  &! vertically integrated total (kinetic + static) energy of current state
           tw_ini,  &! vertically integrated total water of initial state
+          cpterme, cptermp, &
           tw_cur    ! vertically integrated total water of new state
      integer :: count ! count of values with significant energy or water imbalances
      integer, dimension(:),allocatable           :: &
@@ -502,6 +503,13 @@ contains
          varname="state%te_ini",    msg=msg)
     call shr_assert_in_domain(state%te_cur(:ncol),      is_nan=.false., &
          varname="state%te_cur",    msg=msg)
+
+    call shr_assert_in_domain(state%cpterme(:ncol),      is_nan=.false., &
+         varname="state%cpterme",    msg=msg)
+    call shr_assert_in_domain(state%cptermp(:ncol),      is_nan=.false., &
+         varname="state%cptermp",    msg=msg)
+
+
     call shr_assert_in_domain(state%tw_ini(:ncol),      is_nan=.false., &
          varname="state%tw_ini",    msg=msg)
     call shr_assert_in_domain(state%tw_cur(:ncol),      is_nan=.false., &
@@ -576,6 +584,13 @@ contains
          varname="state%te_ini",    msg=msg)
     call shr_assert_in_domain(state%te_cur(:ncol),      lt=posinf_r8, gt=neginf_r8, &
          varname="state%te_cur",    msg=msg)
+
+    call shr_assert_in_domain(state%cpterme(:ncol),     lt=posinf_r8, gt=neginf_r8, &
+         varname="state%cpterme",    msg=msg)
+    call shr_assert_in_domain(state%cptermp(:ncol),     lt=posinf_r8, gt=neginf_r8, &
+         varname="state%cptermp",    msg=msg)
+
+
     call shr_assert_in_domain(state%tw_ini(:ncol),      lt=posinf_r8, gt=neginf_r8, &
          varname="state%tw_ini",    msg=msg)
     call shr_assert_in_domain(state%tw_cur(:ncol),      lt=posinf_r8, gt=neginf_r8, &
@@ -1238,6 +1253,8 @@ end subroutine physics_ptend_copy
        state_out%phis(i)   = state_in%phis(i)
        state_out%te_ini(i) = state_in%te_ini(i) 
        state_out%te_cur(i) = state_in%te_cur(i) 
+       state_out%cptermp(i) = state_in%cptermp(i) 
+       state_out%cpterme(i) = state_in%cpterme(i) 
        state_out%tw_ini(i) = state_in%tw_ini(i) 
        state_out%tw_cur(i) = state_in%tw_cur(i) 
     end do
@@ -1566,6 +1583,15 @@ subroutine physics_state_alloc(state,lchnk,psetcols)
   allocate(state%te_cur(psetcols), stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%te_cur')
   
+
+  allocate(state%cptermp(psetcols), stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%cpp')
+
+  allocate(state%cpterme(psetcols), stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%cpe')
+
+
+
   allocate(state%tw_ini(psetcols), stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%tw_ini')
   
@@ -1615,6 +1641,9 @@ subroutine physics_state_alloc(state,lchnk,psetcols)
   state%te_cur(:) = inf
   state%tw_ini(:) = inf
   state%tw_cur(:) = inf
+
+  state%cpterme(:) = 0.0
+  state%cptermp(:) = 0.0
 
 end subroutine physics_state_alloc
 
@@ -1717,6 +1746,13 @@ subroutine physics_state_dealloc(state)
   deallocate(state%te_cur, stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%te_cur')
   
+
+  deallocate(state%cpterme, stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%cpterme')
+  deallocate(state%cptermp, stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%cptermp')
+
+
   deallocate(state%tw_ini, stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%tw_ini')
   

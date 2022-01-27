@@ -3846,6 +3846,7 @@ if ($nl->get_value('use_gw_convect') =~ /$TRUE/io) {
 }
 
 add_default($nl, 'use_gw_energy_fix'    , 'val'=>'.true.');
+add_default($nl, 'use_global_cpterms'    , 'val'=>'.false.');
 
 
 # Some complexity to unpack.
