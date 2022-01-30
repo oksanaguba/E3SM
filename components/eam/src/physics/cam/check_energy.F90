@@ -69,6 +69,11 @@ module check_energy
   public :: check_ieflx_fix         ! add ieflx to sensible heat flux 
 
   public :: energy_helper_eam_def
+  public :: energy_helper_eam_def_column
+  public :: fixer_semi_pb
+  public :: fixer_pb
+  public :: fixer_pb_simple
+  public :: dme_adjust
 
 ! Private module data
 
@@ -459,9 +464,9 @@ end subroutine check_energy_get_integrals
     integer :: ncol                      ! number of active columns
     integer :: lchnk                     ! chunk index
 
-    real(r8) :: te(pcols,begchunk:endchunk,3)   
+    real(r8) :: te(pcols,begchunk:endchunk,6)   
                                          ! total energy of input/output states (copy)
-    real(r8) :: te_glob(3)               ! global means of total energy
+    real(r8) :: te_glob(6)               ! global means of total energy
     real(r8), pointer :: teout(:)
 !-----------------------------------------------------------------------
 
@@ -479,11 +484,15 @@ end subroutine check_energy_get_integrals
        te(:ncol,lchnk,2) = teout(1:ncol)
        ! surface pressure for heating rate
        te(:ncol,lchnk,3) = state(lchnk)%pint(:ncol,pver+1)
+
+       te(:ncol,lchnk,4) = state(lchnk)%cptermp(:ncol)
+       te(:ncol,lchnk,5) = state(lchnk)%cpterme(:ncol)
+       te(:ncol,lchnk,6) = state(lchnk)%pw(:ncol)
     end do
 
     ! Compute global means of input and output energies and of
     ! surface pressure for heating rate (assume uniform ptop)
-    call gmean(te, te_glob, 3)
+    call gmean(te, te_glob, 6)
 
     if (begchunk .le. endchunk) then
        teinp_glob = te_glob(1)
@@ -497,6 +506,7 @@ end subroutine check_energy_get_integrals
 
        if (masterproc) then
           write(iulog,'(1x,a9,1x,i8,4(1x,e25.17))') "nstep, te", nstep, teinp_glob, teout_glob, heat_glob, psurf_glob
+          write(iulog,'(1x,a13,1x,i8,2(1x,e25.17))') "nstep, pw, cp", nstep, te_glob(6), (te_glob(4)-te_glob(5))*dtime
        end if
     else
        heat_glob = 0._r8
@@ -1228,6 +1238,111 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
     tw = wv + wl + wi + wr + ws
 
   end subroutine energy_helper_eam_def_column
+
+
+!use: state2 with TE2,
+!state2  +=  ttend/dtime ==> state2 now has energy TE1
+  subroutine fixer_semi_pb(teloc1, teloc2, psterm1, psterm2, pdel, ttend)
+
+!state vars are of size psetcols,pver, so, not exactly correct
+    real(r8), intent(inout) :: ttend(pver)
+    real(r8), intent(in) :: pdel(pver)
+
+    real(r8), intent(in) :: teloc1(pver)
+    real(r8), intent(in) :: teloc2(pver)
+    real(r8), intent(in) :: psterm1
+    real(r8), intent(in) :: psterm2
+
+    integer :: i,k
+    real(r8) :: fq
+
+    !compute temperature tend from PW adjustment
+    !keep is as local as possible
+    ttend(1:pver)=0.0
+    !first, tendency from terms at each vertical level
+    fq=0.0
+    do k=1,pver
+       ttend(k)=(teloc1(k)-teloc2(k))*gravit/cpair/pdel(k)
+       !sum pdel into fq for the next, boundary (or ps) term
+       fq=fq+pdel(k)
+    enddo
+
+    !second, tendency from ps term is peanutbuttered to each level
+    ttend(1:pver) = ttend(1:pver) + (psterm1-psterm2)*gravit/cpair/fq
+
+  end subroutine fixer_semi_pb
+
+  subroutine fixer_pb(teloc1, teloc2, psterm1, psterm2, pdel, ttend)
+
+!state vars are of size psetcols,pver, so, not exactly correct
+    real(r8), intent(inout) :: ttend(pver)
+    real(r8), intent(in) :: pdel(pver)
+    real(r8), intent(in) :: teloc1(pver)
+    real(r8), intent(in) :: teloc2(pver)
+    real(r8), intent(in) :: psterm1
+    real(r8), intent(in) :: psterm2
+
+    real(r8) :: zeroarray(pver)
+
+    zeroarray(:) = 0.0
+    call fixer_semi_pb(zeroarray, zeroarray, &
+              psterm1+sum(teloc1), psterm2+sum(teloc2), pdel, ttend)
+
+  end subroutine fixer_pb
+
+!state1 with te1
+!state2 with pdel
+!returns ttend st state2 with ttend and pdel adds deltate
+  subroutine fixer_pb_simple(deltate, pdel, ttend)
+
+!state vars are of size psetcols,pver, so, not exactly correct
+    real(r8), intent(inout) :: ttend(pver)
+    real(r8), intent(in) :: pdel(pver)
+    real(r8), intent(in) :: deltate
+
+    real(r8) :: zeroarray(pver)
+
+    zeroarray(:) = 0.0
+    call fixer_semi_pb(zeroarray, zeroarray, &
+              deltate, 0.0_r8, pdel, ttend)
+
+  end subroutine fixer_pb_simple
+
+
+  subroutine dme_adjust(state, qini, dt)
+
+    implicit none
+    type(physics_state), intent(inout) :: state
+    real(r8),            intent(in   ) :: qini(pcols,pver)    ! initial specific humidity
+    real(r8),            intent(in   ) :: dt                  ! model physics timestep
+    integer  :: lchnk         ! chunk identifier
+    integer  :: ncol          ! number of atmospheric columns
+    integer  :: i,k,m         ! Longitude, level indices
+    real(r8) :: fdq(pcols)    ! mass adjustment factor
+
+    lchnk = state%lchnk
+    ncol  = state%ncol
+
+    ! adjust dry mass in each layer back to input value, while conserving
+    ! constituents, momentum, and total energy
+    do k = 1, pver
+
+       ! adjusment factor is just change in water vapor
+       fdq(:ncol) = 1._r8 + state%q(:ncol,k,1) - qini(:ncol,k)
+
+       ! adjust constituents to conserve mass in each layer
+       do m = 1, pcnst
+          state%q(:ncol,k,m) = state%q(:ncol,k,m) / fdq(:ncol)
+       end do
+
+! compute new total pressure variables
+       state%pdel  (:ncol,k  ) = state%pdel(:ncol,k  ) * fdq(:ncol)
+       state%pint  (:ncol,k+1) = state%pint(:ncol,k  ) + state%pdel(:ncol,k)
+    end do
+    state%ps(:ncol) = state%pint  (:ncol,pver+1)
+
+  end subroutine dme_adjust
+
 
 
 

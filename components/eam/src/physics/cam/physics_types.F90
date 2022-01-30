@@ -68,6 +68,7 @@ module physics_types
           lat,     &! latitude (radians)
           lon,     &! longitude (radians)
           ps,      &! surface pressure
+          oldps,      &! surface pressure
           psdry,   &! dry surface pressure
           phis,    &! surface geopotential
           ulat,    &! unique latitudes  (radians)
@@ -81,6 +82,7 @@ module physics_types
           pmid,    &! midpoint pressure (Pa) 
           pmiddry, &! midpoint pressure dry (Pa) 
           pdel,    &! layer thickness (Pa)
+          oldpdel,    &! layer thickness (Pa)
           pdeldry, &! layer thickness dry (Pa)
           rpdel,   &! reciprocal of layer thickness (Pa)
           rpdeldry,&! recipricol layer thickness dry (Pa)
@@ -90,7 +92,8 @@ module physics_types
           zm        ! geopotential height above surface at midpoints (m)
 
      real(r8), dimension(:,:,:),allocatable      :: &
-          q         ! constituent mixing ratio (kg/kg moist or dry air depending on type)
+          q, &         ! constituent mixing ratio (kg/kg moist or dry air depending on type)
+          oldq         ! constituent mixing ratio (kg/kg moist or dry air depending on type)
 
      real(r8), dimension(:,:),allocatable        :: &
           pint,    &! interface pressure (Pa)
@@ -103,7 +106,7 @@ module physics_types
           te_ini,  &! vertically integrated total (kinetic + static) energy of initial state
           te_cur,  &! vertically integrated total (kinetic + static) energy of current state
           tw_ini,  &! vertically integrated total water of initial state
-          cpterme, cptermp, &
+          cpterme, cptermp, pw, &
           tw_cur    ! vertically integrated total water of new state
      integer :: count ! count of values with significant energy or water imbalances
      integer, dimension(:),allocatable           :: &
@@ -508,6 +511,15 @@ contains
          varname="state%cpterme",    msg=msg)
     call shr_assert_in_domain(state%cptermp(:ncol),      is_nan=.false., &
          varname="state%cptermp",    msg=msg)
+    call shr_assert_in_domain(state%pw(:ncol),      is_nan=.false., &
+         varname="state%pw",    msg=msg)
+    call shr_assert_in_domain(state%oldps(:ncol),          is_nan=.false., &
+         varname="state%ps",        msg=msg)
+    call shr_assert_in_domain(state%oldpdel(:ncol,:),      is_nan=.false., &
+         varname="state%pdel",      msg=msg)
+    call shr_assert_in_domain(state%oldq(:ncol,:,:),       is_nan=.false., &
+         varname="state%q",         msg=msg)
+
 
 
     call shr_assert_in_domain(state%tw_ini(:ncol),      is_nan=.false., &
@@ -589,6 +601,18 @@ contains
          varname="state%cpterme",    msg=msg)
     call shr_assert_in_domain(state%cptermp(:ncol),     lt=posinf_r8, gt=neginf_r8, &
          varname="state%cptermp",    msg=msg)
+    call shr_assert_in_domain(state%pw(:ncol),     lt=posinf_r8, gt=neginf_r8, &
+         varname="state%pw",    msg=msg)
+    call shr_assert_in_domain(state%oldps(:ncol),          lt=posinf_r8, gt=0._r8, &
+         varname="state%ps",        msg=msg)
+    call shr_assert_in_domain(state%oldpdel(:ncol,:),      lt=posinf_r8, gt=neginf_r8, &
+         varname="state%pdel",      msg=msg)
+    ! 3-D variables
+    do m = 1,pcnst
+       call shr_assert_in_domain(state%oldq(:ncol,:,m),    lt=posinf_r8, gt=neginf_r8, &
+            varname="state%q ("//trim(cnst_name(m))//")", msg=msg)
+    end do
+
 
 
     call shr_assert_in_domain(state%tw_ini(:ncol),      lt=posinf_r8, gt=neginf_r8, &
@@ -1250,11 +1274,13 @@ end subroutine physics_ptend_copy
        state_out%lat(i)    = state_in%lat(i)
        state_out%lon(i)    = state_in%lon(i)
        state_out%ps(i)     = state_in%ps(i)
+       state_out%oldps(i)     = state_in%oldps(i)
        state_out%phis(i)   = state_in%phis(i)
        state_out%te_ini(i) = state_in%te_ini(i) 
        state_out%te_cur(i) = state_in%te_cur(i) 
        state_out%cptermp(i) = state_in%cptermp(i) 
        state_out%cpterme(i) = state_in%cpterme(i) 
+       state_out%pw(i) = state_in%pw(i) 
        state_out%tw_ini(i) = state_in%tw_ini(i) 
        state_out%tw_cur(i) = state_in%tw_cur(i) 
     end do
@@ -1268,6 +1294,7 @@ end subroutine physics_ptend_copy
           state_out%omega(i,k)     = state_in%omega(i,k) 
           state_out%pmid(i,k)      = state_in%pmid(i,k) 
           state_out%pdel(i,k)      = state_in%pdel(i,k) 
+          state_out%oldpdel(i,k)      = state_in%oldpdel(i,k) 
           state_out%rpdel(i,k)     = state_in%rpdel(i,k) 
           state_out%lnpmid(i,k)    = state_in%lnpmid(i,k) 
           state_out%exner(i,k)     = state_in%exner(i,k) 
@@ -1306,6 +1333,7 @@ end subroutine physics_ptend_copy
        do k = 1, pver
           do i = 1, ncol
              state_out%q(i,k,m) = state_in%q(i,k,m) 
+             state_out%oldq(i,k,m) = state_in%oldq(i,k,m) 
           end do
        end do
     end do
@@ -1501,7 +1529,12 @@ subroutine physics_state_alloc(state,lchnk,psetcols)
   
   allocate(state%ps(psetcols), stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%ps')
-  
+ 
+
+  allocate(state%oldps(psetcols), stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%ps')
+
+ 
   allocate(state%psdry(psetcols), stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%psdry')
   
@@ -1537,7 +1570,12 @@ subroutine physics_state_alloc(state,lchnk,psetcols)
   
   allocate(state%pdel(psetcols,pver), stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%pdel')
-  
+ 
+
+  allocate(state%oldpdel(psetcols,pver), stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%pdel')
+
+ 
   allocate(state%pdeldry(psetcols,pver), stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%pdeldry')
   
@@ -1561,7 +1599,12 @@ subroutine physics_state_alloc(state,lchnk,psetcols)
   
   allocate(state%q(psetcols,pver,pcnst), stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%q')
-  
+ 
+
+  allocate(state%oldq(psetcols,pver,pcnst), stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%q')
+
+ 
   allocate(state%pint(psetcols,pver+1), stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%pint')
   
@@ -1590,6 +1633,9 @@ subroutine physics_state_alloc(state,lchnk,psetcols)
   allocate(state%cpterme(psetcols), stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%cpe')
 
+  allocate(state%pw(psetcols), stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%cpe')
+
 
 
   allocate(state%tw_ini(psetcols), stat=ierr)
@@ -1612,6 +1658,7 @@ subroutine physics_state_alloc(state,lchnk,psetcols)
   state%ulat(:) = inf
   state%ulon(:) = inf
   state%ps(:) = inf
+  state%oldps(:) = 0.0
   state%psdry(:) = inf
   state%phis(:) = inf
   state%t(:,:) = inf
@@ -1622,6 +1669,7 @@ subroutine physics_state_alloc(state,lchnk,psetcols)
   state%pmid(:,:) = inf
   state%pmiddry(:,:) = inf
   state%pdel(:,:) = inf
+  state%oldpdel(:,:) = 0.0
   state%pdeldry(:,:) = inf
   state%rpdel(:,:) = inf
   state%rpdeldry(:,:) = inf
@@ -1630,6 +1678,7 @@ subroutine physics_state_alloc(state,lchnk,psetcols)
   state%exner(:,:) = inf
   state%zm(:,:) = inf
   state%q(:,:,:) = inf
+  state%oldq(:,:,:) = 0.0
       
   state%pint(:,:) = inf
   state%pintdry(:,:) = inf
@@ -1644,6 +1693,7 @@ subroutine physics_state_alloc(state,lchnk,psetcols)
 
   state%cpterme(:) = 0.0
   state%cptermp(:) = 0.0
+  state%pw(:) = 0.0
 
 end subroutine physics_state_alloc
 
@@ -1665,6 +1715,11 @@ subroutine physics_state_dealloc(state)
   deallocate(state%ps, stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%ps')
   
+
+  deallocate(state%oldps, stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%ps')
+
+
   deallocate(state%psdry, stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%psdry')
   
@@ -1701,6 +1756,11 @@ subroutine physics_state_dealloc(state)
   deallocate(state%pdel, stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%pdel')
   
+
+  deallocate(state%oldpdel, stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%pdel')
+
+
   deallocate(state%pdeldry, stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%pdeldry')
   
@@ -1725,6 +1785,11 @@ subroutine physics_state_dealloc(state)
   deallocate(state%q, stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%q')
   
+
+  deallocate(state%oldq, stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%q')
+
+
   deallocate(state%pint, stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%pint')
   
@@ -1750,6 +1815,8 @@ subroutine physics_state_dealloc(state)
   deallocate(state%cpterme, stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%cpterme')
   deallocate(state%cptermp, stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%cptermp')
+  deallocate(state%pw, stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%cptermp')
 
 

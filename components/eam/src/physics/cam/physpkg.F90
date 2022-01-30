@@ -47,6 +47,9 @@ module physpkg
   use modal_aero_wateruptake, only: modal_aero_wateruptake_init, &
                                     modal_aero_wateruptake_reg
 
+  use check_energy,     only: dme_adjust, energy_helper_eam_def, energy_helper_eam_def_column,&
+                              fixer_pb_simple 
+
   implicit none
   private
 
@@ -1523,6 +1526,16 @@ subroutine tphysac (ztodt,   cam_in,  &
     logical :: l_gw_drag
     logical :: l_ac_energy_chk
 
+!ogdef
+    real(r8) :: ke(pcols), se(pcols), wv(pcols), wl(pcols), wi(pcols), te(pcols),&
+                tw(pcols), wr(pcols), ws(pcols), cpterm(pcols),te_after_pw(pcols),deltat(pcols) 
+
+    real(r8) :: small_ttend(pcols,pver)
+
+    real(r8) :: keloc, seloc, wvloc, wlloc, wiloc, teloc1, teloc2,&
+                twloc, wrloc, wsloc
+    integer  :: ic
+
     !
     !-----------------------------------------------------------------------
     !
@@ -1772,20 +1785,7 @@ end if ! l_gw_drag
 if (l_ac_energy_chk) then
     !-------------- Energy budget checks vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
 
-
-
-    state%cpterme(:ncol) =          cpair * state%t(:ncol,pver)     * cam_in%cflx(:ncol,1)
-    state%cptermp(:ncol) = 1000.0 * cpair * state%t(:ncol,pver)     * (cam_out%precl(:ncol) + cam_out%precc(:ncol) )
-
-    if(use_global_cpterms)then
-    !take CP term out of te_cur
-    state%te_cur(:ncol) = state%te_cur(:ncol) - state%cptermp(:ncol)*ztodt &
-                                              + state%cpterme(:ncol)*ztodt
-    endif
-
-
-
-    call pbuf_set_field(pbuf, teout_idx, state%te_cur, (/1,itim_old/),(/pcols,1/))       
+!    call pbuf_set_field(pbuf, teout_idx, state%te_cur, (/1,itim_old/),(/pcols,1/))       
 
     tmp_t(:ncol,:pver) = state%t(:ncol,:pver)
 
@@ -1802,11 +1802,107 @@ if (l_ac_energy_chk) then
     if ( dycore_is('LR') .or. dycore_is('SE')) call set_dry_to_wet(state)    ! Physics had dry, dynamics wants moist
 
 
+
+
+
+
+
+
+!cp terms
+    state%cpterme(:ncol) =          cpair * state%t(:ncol,pver)     * cam_in%cflx(:ncol,1)
+    state%cptermp(:ncol) = 1000.0 * cpair * state%t(:ncol,pver)     * (cam_out%precl(:ncol) + cam_out%precc(:ncol) )
+
+!current te is in te_cur
+
+!compute PW term
+!save dp, ps, q first
+    state%oldq = state%q
+    state%oldpdel = state%pdel
+    state%oldps = state%ps
+
+    call dme_adjust(state, qini, ztodt)
+
+!compute energy after PW, te with PW is in te_after_pw
+    !call eam_energy_helper(....te_after_pw)
+    call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
+                                   ke(:ncol),se(:ncol),wv(:ncol),wl(:ncol),&
+                                   wi(:ncol),wr(:ncol),ws(:ncol),te_after_pw(:ncol),tw(:ncol), &
+                                   ncol)
+
+!define pw
+    state%pw(:ncol) = state%te_cur(:ncol) - te_after_pw(:ncol) 
+!pw has to match cp terms, and it does
+!pw ~= (cptermp - cpterme)*ztodt
+
+!define cp term for simplicity
+    cpterm(:ncol) = state%cptermp(:ncol)*ztodt - state%cpterme(:ncol)*ztodt
+    deltat(:ncol) = cpterm(:ncol) - state%pw(:ncol) 
+
+    do ic=1,ncol
+
+    call fixer_pb_simple(deltat(ic), state%pdel(ic,:), small_ttend(ic,:) )
+
+!check
+    call energy_helper_eam_def_column(state%u(ic,:),state%v(ic,:),&
+             state%T(ic,:),&
+             state%q(ic,:,:),state%ps(ic),state%pdel(ic,:),state%phis(ic), &
+                                   keloc,seloc,wvloc,wlloc,wiloc,wrloc,wsloc,teloc1,twloc)
+    call energy_helper_eam_def_column(state%u(ic,:),state%v(ic,:),&
+             state%T(ic,:)+small_ttend(ic,:),&
+             state%q(ic,:,:),state%ps(ic),state%pdel(ic,:),state%phis(ic), &
+                                   keloc,seloc,wvloc,wlloc,wiloc,wrloc,wsloc,teloc2,twloc)
+
+!this one gets close results
+!print *, 'ic, deltat,teloc2-teloc1',deltat(ic), teloc2-teloc1
+!this one gets error of 1e-9 or less
+!if(abs(deltat(ic)) > 0.5)then
+!print *, 'ic, deltat - (teloc2-teloc1) / ..', (deltat(ic) - (teloc2-teloc1))/deltat(ic)
+!endif
+
+    enddo    
+
+!now we can reset all variables
+    state%q = state%oldq
+    state%pdel = state%oldpdel
+    state%ps = state%oldps
+
+!TEMP check how fixer looks like without PR in it. SHort run
+    state%te_cur(:ncol) = state%te_cur(:ncol) - state%pw(:ncol)
+
+!TEMP and then compare with removal of CP terms and small_tend
+
+#if 0
+    if(use_global_cpterms)then
+    !take CP term out of te_cur
+    state%te_cur(:ncol) = state%te_cur(:ncol) - state%cptermp(:ncol)*ztodt &
+                                              + state%cpterme(:ncol)*ztodt
+    endif
+#endif
+
+!WHEN ADDING SMALL_TTEND< dont forget dtime!
+
+    call pbuf_set_field(pbuf, teout_idx, state%te_cur, (/1,itim_old/),(/pcols,1/)) 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     ! Scale dry mass and energy (does nothing if dycore is EUL or SLD)
     tmp_q     (:ncol,:pver) = state%q(:ncol,:pver,1)
     tmp_cldliq(:ncol,:pver) = state%q(:ncol,:pver,icldliq)
     tmp_cldice(:ncol,:pver) = state%q(:ncol,:pver,icldice)
-    call physics_dme_adjust(state, tend, qini, ztodt)
+
+!    call physics_dme_adjust(state, tend, qini, ztodt)
 !!!   REMOVE THIS CALL, SINCE ONLY Q IS BEING ADJUSTED. WON'T BALANCE ENERGY. TE IS SAVED BEFORE THIS
 !!!   call check_energy_chng(state, tend, "drymass", nstep, ztodt, zero, zero, zero, zero)
 
