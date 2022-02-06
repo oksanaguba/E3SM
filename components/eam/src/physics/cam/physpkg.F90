@@ -1840,7 +1840,14 @@ if (l_ac_energy_chk) then
 
     do ic=1,ncol
 
+!what we want, small local fixer
     call fixer_pb_simple(deltat(ic), state%pdel(ic,:), small_ttend(ic,:) )
+!pw as a local fixer
+!id 143336
+!    call fixer_pb_simple(state%pw(ic), state%pdel(ic,:), small_ttend(ic,:) )
+!cpterms as local fixer
+!    call fixer_pb_simple((state%cptermp(ic)-state%cpterme(ic))*ztodt, &
+!                   state%pdel(ic,:), small_ttend(ic,:) )
 
 !check
     call energy_helper_eam_def_column(state%u(ic,:),state%v(ic,:),&
@@ -1866,17 +1873,27 @@ if (l_ac_energy_chk) then
     state%pdel = state%oldpdel
     state%ps = state%oldps
 
-!TEMP check how fixer looks like without PR in it. SHort run
-    state%te_cur(:ncol) = state%te_cur(:ncol) - state%pw(:ncol)
+!TEMP check how fixer looks like without PR in it. SHort run 141557
+!    state%te_cur(:ncol) = state%te_cur(:ncol) - state%pw(:ncol)
 
 !TEMP and then compare with removal of CP terms and small_tend
-
-#if 0
+#if 1
     if(use_global_cpterms)then
     !take CP term out of te_cur
     state%te_cur(:ncol) = state%te_cur(:ncol) - state%cptermp(:ncol)*ztodt &
                                               + state%cpterme(:ncol)*ztodt
     endif
+#endif
+#if 1
+     
+    !with this line run 142445 is bad, fixer too big
+!with PW local fixer it works, id 143336     
+!    tend%dtdt(:ncol,1:pver) = tend%dtdt(:ncol,1:pver) + small_ttend(:ncol,1:pver)/ztodt 
+!now remove cp terms locally
+!    tend%dtdt(:ncol,1:pver) = tend%dtdt(:ncol,1:pver) + small_ttend(:ncol,1:pver)/ztodt 
+
+!expriment with sign
+    tend%dtdt(:ncol,1:pver) = tend%dtdt(:ncol,1:pver) - small_ttend(:ncol,1:pver)/ztodt 
 #endif
 
 !WHEN ADDING SMALL_TTEND< dont forget dtime!
