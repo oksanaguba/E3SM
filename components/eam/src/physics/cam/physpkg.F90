@@ -1535,6 +1535,7 @@ subroutine tphysac (ztodt,   cam_in,  &
     real(r8) :: keloc, seloc, wvloc, wlloc, wiloc, teloc1, teloc2,&
                 twloc, wrloc, wsloc
     integer  :: ic
+    real(r8) :: ccpv, ccpl, ccpi, qdry(pver), cpnew(pver)
 
     !
     !-----------------------------------------------------------------------
@@ -1877,18 +1878,17 @@ if (l_ac_energy_chk) then
 !    state%te_cur(:ncol) = state%te_cur(:ncol) - state%pw(:ncol)
 
 !TEMP and then compare with removal of CP terms and small_tend
-#if 1
+#if 0
     if(use_global_cpterms)then
     !take CP term out of te_cur
     state%te_cur(:ncol) = state%te_cur(:ncol) - state%cptermp(:ncol)*ztodt &
                                               + state%cpterme(:ncol)*ztodt
     endif
 #endif
-#if 1
+#if 0
      
     !with this line run 142445 is bad, fixer too big
 !with PW local fixer it works, id 143336     
-!    tend%dtdt(:ncol,1:pver) = tend%dtdt(:ncol,1:pver) + small_ttend(:ncol,1:pver)/ztodt 
 !now remove cp terms locally
 !    tend%dtdt(:ncol,1:pver) = tend%dtdt(:ncol,1:pver) + small_ttend(:ncol,1:pver)/ztodt 
 
@@ -1896,7 +1896,36 @@ if (l_ac_energy_chk) then
     tend%dtdt(:ncol,1:pver) = tend%dtdt(:ncol,1:pver) - small_ttend(:ncol,1:pver)/ztodt 
 #endif
 
-!WHEN ADDING SMALL_TTEND< dont forget dtime!
+! rescale T
+#if 0
+   1  Q         Specific humidity                       wet
+   2  CLDLIQ    Grid box averaged cloud liquid amount   wet
+   3  CLDICE    Grid box averaged cloud ice amount      wet
+   4  NUMLIQ    Grid box averaged cloud liquid number   wet
+   5  NUMICE    Grid box averaged cloud ice number      wet
+   6  RAINQM    Grid box averaged rain amount           wet
+   7  SNOWQM    Grid box averaged snow amount           wet
+   8  NUMRAI    Grid box averaged rain number           wet
+   9  NUMSNO    Grid box averaged snow number
+   call cnst_get_ind('CLDICE', icldice, abrtf=.false.)
+   call cnst_get_ind('CLDLIQ', icldliq, abrtf=.false.)
+   call cnst_get_ind('RAINQM', irain, abrtf=.false.)
+   call cnst_get_ind('SNOWQM', isnow, abrtf=.false.)
+#endif
+
+#if 1
+    ccpv = 1810.0 
+    ccpl = 4188.0
+    ccpi = 2117.27
+
+    do ic=1,ncol
+      qdry(:) = 1.0 - state%q(ic,:,1) - state%q(ic,:,icldice) - state%q(ic,:,icldliq) &
+                    - state%q(ic,:,irain) - state%q(ic,:,isnow)
+      cpnew(:) = cpair*qdry(:) + ccpv*state%q(ic,:,1) + ccpl*( state%q(ic,:,icldliq) + state%q(ic,:,irain) ) &
+                                                      + ccpi*( state%q(ic,:,icldice) + state%q(ic,:,isnow) )
+      tend%dtdt(ic,1:pver) = tend%dtdt(ic,1:pver) * cpnew(1:pver) / cpair
+    enddo
+#endif
 
     call pbuf_set_field(pbuf, teout_idx, state%te_cur, (/1,itim_old/),(/pcols,1/)) 
 
