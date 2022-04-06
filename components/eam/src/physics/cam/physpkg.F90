@@ -15,7 +15,7 @@ module physpkg
 
   use shr_kind_mod,     only: i8 => shr_kind_i8, r8 => shr_kind_r8
   use spmd_utils,       only: masterproc
-  use physconst,        only: latvap, latice, rh2o, cpair
+  use physconst,        only: latvap, latice, rh2o, cpair, cpwv, cpliq, cpice
   use physics_types,    only: physics_state, physics_tend, physics_state_set_grid, &
        physics_ptend, physics_tend_init,    &
        physics_type_alloc, physics_ptend_dealloc,&
@@ -1535,7 +1535,7 @@ subroutine tphysac (ztodt,   cam_in,  &
     real(r8) :: keloc, seloc, wvloc, wlloc, wiloc, teloc1, teloc2,&
                 twloc, wrloc, wsloc
     integer  :: ic
-    real(r8) :: ccpv, ccpl, ccpi, qdry(pver), cpnew(pver)
+    real(r8) :: qdry(pver), cpstar(pver)
 
     !
     !-----------------------------------------------------------------------
@@ -1914,16 +1914,12 @@ if (l_ac_energy_chk) then
 #endif
 
 #if 1
-    ccpv = 1810.0 
-    ccpl = 4188.0
-    ccpi = 2117.27
-
     do ic=1,ncol
       qdry(:) = 1.0 - state%q(ic,:,1) - state%q(ic,:,icldice) - state%q(ic,:,icldliq) &
                     - state%q(ic,:,irain) - state%q(ic,:,isnow)
-      cpnew(:) = cpair*qdry(:) + ccpv*state%q(ic,:,1) + ccpl*( state%q(ic,:,icldliq) + state%q(ic,:,irain) ) &
-                                                      + ccpi*( state%q(ic,:,icldice) + state%q(ic,:,isnow) )
-      tend%dtdt(ic,1:pver) = tend%dtdt(ic,1:pver) * cpnew(1:pver) / cpair
+      cpstar(:) = cpair*qdry(:) + cpwv*state%q(ic,:,1) + cpliq*( state%q(ic,:,icldliq) + state%q(ic,:,irain) ) &
+                                                      + cpice*( state%q(ic,:,icldice) + state%q(ic,:,isnow) )
+      tend%dtdt(ic,1:pver) = tend%dtdt(ic,1:pver) / cpstar(1:pver) * cpair
     enddo
 #endif
 
