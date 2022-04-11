@@ -31,7 +31,7 @@ module check_energy
   use spmd_utils,      only: masterproc
   
   use phys_gmean,      only: gmean
-  use physconst,       only: gravit, latvap, latice, cpair, cpairv
+  use physconst,       only: gravit, latvap, latice, cpair, cpairv, cpwv, cpliq, cpice 
   use physics_types,   only: physics_state, physics_tend, physics_ptend, physics_ptend_init
   use constituents,    only: cnst_get_ind, pcnst, cnst_name, cnst_get_type_byind, &
                              icldliq, icldice, irain, isnow
@@ -1193,6 +1193,7 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
     real(r8), intent(inout), optional :: psterm
 
     integer :: i,k
+    real(r8) :: cpstar, qdry
 
     ! Compute vertical integrals of dry static energy and water (vapor, liquid, ice)
     ke = 0._r8
@@ -1218,7 +1219,13 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
 
     do k = 1, pver
        ke = ke + 0.5_r8*(u(k)**2 + v(k)**2)*pdel(k)/gravit
+#if 0
        se = se +         t(k)*cpair*pdel(k)/gravit
+#else
+       qdry = 1.0_r8 - q(k,1) - q(k,icldliq) - q(k,icldice) - q(k,irain) - q(k,isnow)
+       cpstar = cpair*qdry + cpwv*q(k,1) + cpliq*( q(k,icldliq) + q(k,irain) ) + &
+                                           cpice*( q(k,icldice) + q(k,isnow) )
+#endif
        wv = wv + q(k,1      )*pdel(k)/gravit
     end do
     se = se + phis*ps/gravit
