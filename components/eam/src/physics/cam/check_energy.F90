@@ -74,6 +74,7 @@ module check_energy
   public :: fixer_pb
   public :: fixer_pb_simple
   public :: dme_adjust
+  public :: dme_adjust_wl
 
 ! Private module data
 
@@ -507,6 +508,7 @@ end subroutine check_energy_get_integrals
        if (masterproc) then
           write(iulog,'(1x,a9,1x,i8,4(1x,e25.17))') "nstep, te", nstep, teinp_glob, teout_glob, heat_glob, psurf_glob
           write(iulog,'(1x,a13,1x,i8,2(1x,e25.17))') "nstep, pw, cp", nstep, te_glob(6), (te_glob(4)-te_glob(5))*dtime
+          write(iulog,'(1x,a13,1x,i8,2(1x,e25.17))') "nstep, cpp, cpe", nstep, te_glob(4)*dtime, te_glob(5)*dtime
        end if
     else
        heat_glob = 0._r8
@@ -1225,6 +1227,7 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
        qdry = 1.0_r8 - q(k,1) - q(k,icldliq) - q(k,icldice) - q(k,irain) - q(k,isnow)
        cpstar = cpair*qdry + cpwv*q(k,1) + cpliq*( q(k,icldliq) + q(k,irain) ) + &
                                            cpice*( q(k,icldice) + q(k,isnow) )
+       se = se +         t(k)*cpstar*pdel(k)/gravit
 #endif
        wv = wv + q(k,1      )*pdel(k)/gravit
     end do
@@ -1334,7 +1337,7 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
     ! constituents, momentum, and total energy
     do k = 1, pver
 
-       ! adjusment factor is just change in water vapor
+!!!       ! adjusment factor is just change in water vapor
        fdq(:ncol) = 1._r8 + state%q(:ncol,k,1) - qini(:ncol,k)
 
        ! adjust constituents to conserve mass in each layer
@@ -1349,6 +1352,49 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
     state%ps(:ncol) = state%pint  (:ncol,pver+1)
 
   end subroutine dme_adjust
+
+
+  subroutine dme_adjust_wl(state, qini, cldliqini, cldiceini, rainini, snowini, dt)
+
+    implicit none
+    type(physics_state), intent(inout) :: state
+    real(r8),            intent(in   ) :: qini(pcols,pver)    ! initial specific humidity
+    real(r8),            intent(in   ) :: cldliqini(pcols,pver)    ! initial specific humidity
+    real(r8),            intent(in   ) :: cldiceini(pcols,pver)    ! initial specific humidity
+    real(r8),            intent(in   ) :: rainini(pcols,pver)    ! initial specific humidity
+    real(r8),            intent(in   ) :: snowini(pcols,pver)    ! initial specific humidity
+    real(r8),            intent(in   ) :: dt                  ! model physics timestep
+    integer  :: lchnk         ! chunk identifier
+    integer  :: ncol          ! number of atmospheric columns
+    integer  :: i,k,m         ! Longitude, level indices
+    real(r8) :: fdq(pcols)    ! mass adjustment factor
+
+    lchnk = state%lchnk
+    ncol  = state%ncol
+
+    ! adjust dry mass in each layer back to input value, while conserving
+    ! constituents, momentum, and total energy
+    do k = 1, pver
+
+!!!       ! adjusment factor is just change in water vapor
+       fdq(:ncol) = 1._r8 + state%q(:ncol,k,1) - qini(:ncol,k)    &
+                  + state%q(:ncol,k,icldliq) - cldliqini(:ncol,k) &
+                  + state%q(:ncol,k,icldice) - cldiceini(:ncol,k) &
+                  + state%q(:ncol,k,irain) - rainini(:ncol,k)     &
+                  + state%q(:ncol,k,isnow) - snowini(:ncol,k)
+
+       ! adjust constituents to conserve mass in each layer
+       do m = 1, pcnst
+          state%q(:ncol,k,m) = state%q(:ncol,k,m) / fdq(:ncol)
+       end do
+
+! compute new total pressure variables
+       state%pdel  (:ncol,k  ) = state%pdel(:ncol,k  ) * fdq(:ncol)
+       state%pint  (:ncol,k+1) = state%pint(:ncol,k  ) + state%pdel(:ncol,k)
+    end do
+    state%ps(:ncol) = state%pint  (:ncol,pver+1)
+
+  end subroutine dme_adjust_wl
 
 
 

@@ -47,7 +47,7 @@ module physpkg
   use modal_aero_wateruptake, only: modal_aero_wateruptake_init, &
                                     modal_aero_wateruptake_reg
 
-  use check_energy,     only: dme_adjust, energy_helper_eam_def, energy_helper_eam_def_column,&
+  use check_energy,     only: dme_adjust, dme_adjust_wl, energy_helper_eam_def, energy_helper_eam_def_column,&
                               fixer_pb_simple 
 
   implicit none
@@ -60,6 +60,8 @@ module physpkg
   integer ::  qini_idx           = 0 
   integer ::  cldliqini_idx      = 0 
   integer ::  cldiceini_idx      = 0 
+  integer ::  rainini_idx        = 0 
+  integer ::  snowini_idx        = 0 
   integer ::  static_ener_ac_idx = 0
   integer ::  water_vap_ac_idx   = 0
 
@@ -200,6 +202,8 @@ subroutine phys_register
     call pbuf_add_field('QINI',      'physpkg', dtype_r8, (/pcols,pver/), qini_idx)
     call pbuf_add_field('CLDLIQINI', 'physpkg', dtype_r8, (/pcols,pver/), cldliqini_idx)
     call pbuf_add_field('CLDICEINI', 'physpkg', dtype_r8, (/pcols,pver/), cldiceini_idx)
+    call pbuf_add_field('RAININI', 'physpkg', dtype_r8, (/pcols,pver/), rainini_idx)
+    call pbuf_add_field('SNOWINI', 'physpkg', dtype_r8, (/pcols,pver/), snowini_idx)
     call pbuf_add_field('static_ener_ac', 'global', dtype_r8, (/pcols/), static_ener_ac_idx)
     call pbuf_add_field('water_vap_ac',   'global', dtype_r8, (/pcols/), water_vap_ac_idx)
 
@@ -1506,6 +1510,8 @@ subroutine tphysac (ztodt,   cam_in,  &
     real(r8), pointer, dimension(:,:) :: qini
     real(r8), pointer, dimension(:,:) :: cldliqini
     real(r8), pointer, dimension(:,:) :: cldiceini
+    real(r8), pointer, dimension(:,:) :: rainini
+    real(r8), pointer, dimension(:,:) :: snowini
     real(r8), pointer, dimension(:,:) :: dtcore
     real(r8), pointer, dimension(:,:) :: ast     ! relative humidity cloud fraction 
 
@@ -1576,6 +1582,8 @@ subroutine tphysac (ztodt,   cam_in,  &
     call pbuf_get_field(pbuf, qini_idx, qini)
     call pbuf_get_field(pbuf, cldliqini_idx, cldliqini)
     call pbuf_get_field(pbuf, cldiceini_idx, cldiceini)
+    call pbuf_get_field(pbuf, rainini_idx, snowini)
+    call pbuf_get_field(pbuf, snowini_idx, rainini)
 
     ifld = pbuf_get_index('CLD')
     call pbuf_get_field(pbuf, ifld, cld, start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
@@ -1810,8 +1818,11 @@ if (l_ac_energy_chk) then
 
 
 !cp terms
-    state%cpterme(:ncol) =          cpair * state%t(:ncol,pver)     * cam_in%cflx(:ncol,1)
-    state%cptermp(:ncol) = 1000.0 * cpair * state%t(:ncol,pver)     * (cam_out%precl(:ncol) + cam_out%precc(:ncol) )
+!maybe?
+!    state%cpterme(:ncol) =          cpwv * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
+    state%cpterme(:ncol) =          cpliq * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
+    state%cptermp(:ncol) = 1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
+                           1000.0 * cpice * state%t(:ncol,pver) * cam_out%precc(:ncol) 
 
 !current te is in te_cur
 
@@ -1821,7 +1832,8 @@ if (l_ac_energy_chk) then
     state%oldpdel = state%pdel
     state%oldps = state%ps
 
-    call dme_adjust(state, qini, ztodt)
+    !call dme_adjust(state, qini, ztodt)
+    call dme_adjust_wl(state, qini, cldliqini, cldiceini, rainini, snowini, ztodt)
 
 !compute energy after PW, te with PW is in te_after_pw
     !call eam_energy_helper(....te_after_pw)
@@ -1874,7 +1886,7 @@ if (l_ac_energy_chk) then
     state%pdel = state%oldpdel
     state%ps = state%oldps
 
-!TEMP check how fixer looks like without PR in it. SHort run 141557
+!TEMP check how fixer looks like without PW in it.
 !    state%te_cur(:ncol) = state%te_cur(:ncol) - state%pw(:ncol)
 
 !TEMP and then compare with removal of CP terms and small_tend
@@ -1913,12 +1925,14 @@ if (l_ac_energy_chk) then
    call cnst_get_ind('SNOWQM', isnow, abrtf=.false.)
 #endif
 
-#if 1
+
+!rescale TTEND with cpstar
+#if 0
     do ic=1,ncol
       qdry(:) = 1.0 - state%q(ic,:,1) - state%q(ic,:,icldice) - state%q(ic,:,icldliq) &
                     - state%q(ic,:,irain) - state%q(ic,:,isnow)
       cpstar(:) = cpair*qdry(:) + cpwv*state%q(ic,:,1) + cpliq*( state%q(ic,:,icldliq) + state%q(ic,:,irain) ) &
-                                                      + cpice*( state%q(ic,:,icldice) + state%q(ic,:,isnow) )
+                                                       + cpice*( state%q(ic,:,icldice) + state%q(ic,:,isnow) )
       tend%dtdt(ic,1:pver) = tend%dtdt(ic,1:pver) / cpstar(1:pver) * cpair
     enddo
 #endif
@@ -2143,6 +2157,8 @@ subroutine tphysbc (ztodt,               &
     real(r8), pointer, dimension(:,:) :: qini
     real(r8), pointer, dimension(:,:) :: cldliqini
     real(r8), pointer, dimension(:,:) :: cldiceini
+    real(r8), pointer, dimension(:,:) :: rainini
+    real(r8), pointer, dimension(:,:) :: snowini
     real(r8), pointer, dimension(:,:) :: dtcore
 
     real(r8), pointer, dimension(:,:,:) :: fracis  ! fraction of transported species that are insoluble
@@ -2305,6 +2321,8 @@ subroutine tphysbc (ztodt,               &
     call pbuf_get_field(pbuf, qini_idx, qini)
     call pbuf_get_field(pbuf, cldliqini_idx, cldliqini)
     call pbuf_get_field(pbuf, cldiceini_idx, cldiceini)
+    call pbuf_get_field(pbuf, rainini_idx, rainini)
+    call pbuf_get_field(pbuf, snowini_idx, snowini)
 
     ifld   =  pbuf_get_index('DTCORE')
     call pbuf_get_field(pbuf, ifld, dtcore, start=(/1,1,itim_old/), kount=(/pcols,pver,1/) )
@@ -2423,6 +2441,8 @@ if (l_bc_energy_fix) then
     qini     (:ncol,:pver) = state%q(:ncol,:pver,       1)
     cldliqini(:ncol,:pver) = state%q(:ncol,:pver,icldliq)
     cldiceini(:ncol,:pver) = state%q(:ncol,:pver,icldice)
+    rainini(:ncol,:pver) = state%q(:ncol,:pver,irain)
+    snowini(:ncol,:pver) = state%q(:ncol,:pver,isnow)
 
 
     call outfld('TEOUT', teout       , pcols, lchnk   )
