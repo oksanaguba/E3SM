@@ -508,7 +508,7 @@ end subroutine check_energy_get_integrals
        if (masterproc) then
           write(iulog,'(1x,a9,1x,i8,4(1x,e25.17))') "nstep, te", nstep, teinp_glob, teout_glob, heat_glob, psurf_glob
           write(iulog,'(1x,a13,1x,i8,2(1x,e25.17))') "nstep, pw, cp", nstep, te_glob(6), (te_glob(4)-te_glob(5))*dtime
-          write(iulog,'(1x,a13,1x,i8,2(1x,e25.17))') "nstep, cpp, cpe", nstep, te_glob(4)*dtime, te_glob(5)*dtime
+          write(iulog,'(1x,a15,1x,i8,2(1x,e25.17))') "nstep, cpp, cpe", nstep, te_glob(4)*dtime, te_glob(5)*dtime
        end if
     else
        heat_glob = 0._r8
@@ -1210,6 +1210,7 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
     if (present(teloc) .and. present(psterm))then
        teloc = 0.0; psterm = 0.0
        do k = 1, pver
+! ADD CPSTAR here too
           teloc(k) = 0.5_r8*(u(k)**2 + v(k)**2)*pdel(k)/gravit &
                    + t(k)*cpair*pdel(k)/gravit &
                    + (latvap+latice)*q(k,1       )*pdel(k)/gravit
@@ -1219,11 +1220,16 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
        psterm = phis*ps/gravit
     endif
 
+
     do k = 1, pver
        ke = ke + 0.5_r8*(u(k)**2 + v(k)**2)*pdel(k)/gravit
 #if 0
        se = se +         t(k)*cpair*pdel(k)/gravit
 #else
+
+!print *, 'CP constants, cpdry, cpwv, cpliq, cpice',cpair, cpwv, cpliq, cpice
+!print *, 'indices, ', icldliq, icldice, irain, isnow
+
        qdry = 1.0_r8 - q(k,1) - q(k,icldliq) - q(k,icldice) - q(k,irain) - q(k,isnow)
        cpstar = cpair*qdry + cpwv*q(k,1) + cpliq*( q(k,icldliq) + q(k,irain) ) + &
                                            cpice*( q(k,icldice) + q(k,isnow) )
@@ -1231,8 +1237,8 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
 #endif
        wv = wv + q(k,1      )*pdel(k)/gravit
     end do
-    se = se + phis*ps/gravit
 
+    se = se + phis*ps/gravit
     do k = 1, pver
        wl = wl + q(k,icldliq)*pdel(k)/gravit
        wi = wi + q(k,icldice)*pdel(k)/gravit
@@ -1377,12 +1383,15 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
     do k = 1, pver
 
 !!!       ! adjusment factor is just change in water vapor
+#if 0
+       fdq(:ncol) = 1._r8 + state%q(:ncol,k,1) - qini(:ncol,k)    
+#else
        fdq(:ncol) = 1._r8 + state%q(:ncol,k,1) - qini(:ncol,k)    &
                   + state%q(:ncol,k,icldliq) - cldliqini(:ncol,k) &
                   + state%q(:ncol,k,icldice) - cldiceini(:ncol,k) &
                   + state%q(:ncol,k,irain) - rainini(:ncol,k)     &
                   + state%q(:ncol,k,isnow) - snowini(:ncol,k)
-
+#endif
        ! adjust constituents to conserve mass in each layer
        do m = 1, pcnst
           state%q(:ncol,k,m) = state%q(:ncol,k,m) / fdq(:ncol)

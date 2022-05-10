@@ -15,7 +15,7 @@ module physpkg
 
   use shr_kind_mod,     only: i8 => shr_kind_i8, r8 => shr_kind_r8
   use spmd_utils,       only: masterproc
-  use physconst,        only: latvap, latice, rh2o, cpair, cpwv, cpliq, cpice
+  use physconst,        only: latvap, latice, rh2o, cpair, cpwv, cpliq, cpice, gravit
   use physics_types,    only: physics_state, physics_tend, physics_state_set_grid, &
        physics_ptend, physics_tend_init,    &
        physics_type_alloc, physics_ptend_dealloc,&
@@ -1541,7 +1541,7 @@ subroutine tphysac (ztodt,   cam_in,  &
     real(r8) :: keloc, seloc, wvloc, wlloc, wiloc, teloc1, teloc2,&
                 twloc, wrloc, wsloc
     integer  :: ic
-    real(r8) :: qdry(pver), cpstar(pver)
+    real(r8) :: qdry(pver), cpstar(pver), qvmass(pcols)
 
     !
     !-----------------------------------------------------------------------
@@ -1811,29 +1811,52 @@ if (l_ac_energy_chk) then
     if ( dycore_is('LR') .or. dycore_is('SE')) call set_dry_to_wet(state)    ! Physics had dry, dynamics wants moist
 
 
-
-
-
-
-
-
-!cp terms
-!maybe?
-!    state%cpterme(:ncol) =          cpwv * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
-    state%cpterme(:ncol) =          cpliq * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
+#if 0 
+!cpdry terms
+    state%cpterme(:ncol) =          cpair * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
+    state%cptermp(:ncol) = 1000.0 * cpair * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
+                           1000.0 * cpair * state%t(:ncol,pver) * cam_out%precc(:ncol)
+#else
+! cp* terms
+    state%cpterme(:ncol) =          cpwv * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
+!    state%cpterme(:ncol) =          cpliq * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
     state%cptermp(:ncol) = 1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
                            1000.0 * cpice * state%t(:ncol,pver) * cam_out%precc(:ncol) 
+
+!173656
+!    state%cpterme(:ncol) =          cpliq * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
+!    state%cptermp(:ncol) = 1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
+!                           1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precc(:ncol)
+#endif
+
 
 !current te is in te_cur
 
 !compute PW term
 !save dp, ps, q first
+!did mot save pint -- seems to not be used?
     state%oldq = state%q
     state%oldpdel = state%pdel
     state%oldps = state%ps
 
+!no WL version
     !call dme_adjust(state, qini, ztodt)
+!WL version
     call dme_adjust_wl(state, qini, cldliqini, cldiceini, rainini, snowini, ztodt)
+
+!!!! debug
+!    qini(:ncol,1:71)=state%q(:ncol,1:71,1)
+!    qini(:ncol,72)  =state%q(:ncol,72  ,1) + 0.02
+!    cldliqini(:ncol,1:72)  =state%q(:ncol,1:72,icldliq)
+!    cldiceini(:ncol,1:72)  =state%q(:ncol,1:72,icldice)
+!    snowini(:ncol,1:72)  =state%q(:ncol,1:72,isnow)
+!    rainini(:ncol,1:72)  =state%q(:ncol,1:72,irain)
+!    qvmass(:ncol) = 0.02*state%pdel(:ncol,72)/gravit
+
+!i=1
+!print *, 'Q before', state%q(i,72,1)
+!    call dme_adjust_wl(state, qini, cldliqini, cldiceini, rainini, snowini, ztodt)
+!print *, 'Q after', state%q(i,72,1)
 
 !compute energy after PW, te with PW is in te_after_pw
     !call eam_energy_helper(....te_after_pw)
@@ -1844,6 +1867,15 @@ if (l_ac_energy_chk) then
 
 !define pw
     state%pw(:ncol) = state%te_cur(:ncol) - te_after_pw(:ncol) 
+
+!!!!!!!! debug
+!now compare PW and 0.02*... number
+!   i=1
+!      print *, 'PW, enthalpy', state%pw(i), cpwv*state%t(i,pver)*qvmass(i), &
+!                               cpwv*state%t(i,pver)*qvmass(i)/state%pw(i)
+   
+
+
 !pw has to match cp terms, and it does
 !pw ~= (cptermp - cpterme)*ztodt
 
@@ -1851,12 +1883,12 @@ if (l_ac_energy_chk) then
     cpterm(:ncol) = state%cptermp(:ncol)*ztodt - state%cpterme(:ncol)*ztodt
     deltat(:ncol) = cpterm(:ncol) - state%pw(:ncol) 
 
-    do ic=1,ncol
 
+#if 0
+    do ic=1,ncol
 !what we want, small local fixer
     call fixer_pb_simple(deltat(ic), state%pdel(ic,:), small_ttend(ic,:) )
 !pw as a local fixer
-!id 143336
 !    call fixer_pb_simple(state%pw(ic), state%pdel(ic,:), small_ttend(ic,:) )
 !cpterms as local fixer
 !    call fixer_pb_simple((state%cptermp(ic)-state%cpterme(ic))*ztodt, &
@@ -1880,6 +1912,8 @@ if (l_ac_energy_chk) then
 !endif
 
     enddo    
+#endif 
+
 
 !now we can reset all variables
     state%q = state%oldq
@@ -1887,10 +1921,12 @@ if (l_ac_energy_chk) then
     state%ps = state%oldps
 
 !TEMP check how fixer looks like without PW in it.
+! that is fixer for dycore only
 !    state%te_cur(:ncol) = state%te_cur(:ncol) - state%pw(:ncol)
 
 !TEMP and then compare with removal of CP terms and small_tend
 #if 0
+!remove cp terms from fixer
     if(use_global_cpterms)then
     !take CP term out of te_cur
     state%te_cur(:ncol) = state%te_cur(:ncol) - state%cptermp(:ncol)*ztodt &
@@ -1898,6 +1934,8 @@ if (l_ac_energy_chk) then
     endif
 #endif
 #if 0
+
+!LOCAL fixer
      
     !with this line run 142445 is bad, fixer too big
 !with PW local fixer it works, id 143336     
