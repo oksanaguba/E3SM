@@ -1562,6 +1562,11 @@ contains
   use bfb_mod,            only : bfb_pow
 #endif
 #endif
+
+#ifdef CAM
+  use cam_control_mod,   only : cam_ctrl_waterloading
+#endif
+
   implicit none
   type (element_t),       intent(inout) :: elem
   real (kind=real_kind),  intent(in)    :: dt
@@ -1588,26 +1593,27 @@ contains
 
   integer :: q1ind, q2ind, q3ind, q6ind, q7ind
 
+  logical :: local_waterloading
+
 #if 0
-   1  Q         Specific humidity                                                                                                                 wet
-   2  CLDLIQ    Grid box averaged cloud liquid amount                                                                                             wet
-   3  CLDICE    Grid box averaged cloud ice amount                                                                                                wet
-   4  NUMLIQ    Grid box averaged cloud liquid number                                                                                             wet
-   5  NUMICE    Grid box averaged cloud ice number                                                                                                wet
-   6  RAINQM    Grid box averaged rain amount                                                                                                     wet
-   7  SNOWQM    Grid box averaged snow amount                                                                                                     wet
-   8  NUMRAI    Grid box averaged rain number                                                                                                     wet
-   9  NUMSNO    Grid box averaged snow number 
+1  Q         Specific humidity    
+2  CLDLIQ    Grid box averaged cloud liquid amount
+3  CLDICE    Grid box averaged cloud ice amount
+4  NUMLIQ    Grid box averaged cloud liquid number 
+5  NUMICE    Grid box averaged cloud ice number
+6  RAINQM    Grid box averaged rain amount    
+7  SNOWQM    Grid box averaged snow amount 
+8  NUMRAI    Grid box averaged rain number 
+9  NUMSNO    Grid box averaged snow number 
 #endif
 
-
-#define WL
-!#undef WL
-
-#ifdef WL
+#ifdef CAM
+local_waterloading = cam_ctrl_waterloading
 q1ind=1; q2ind=2; q3ind=3; q6ind=6; q7ind=7;
+#else
+local_waterloading = .false.
+q1ind=-1; q2ind=-1; q3ind=-1; q6ind=-1; q7ind=-1;
 #endif
-
 
 
 #ifdef HOMMEXX_BFB_TESTING
@@ -1668,13 +1674,21 @@ q1ind=1; q2ind=2; q3ind=3; q6ind=6; q7ind=7;
                   !        dyn_in%elem(ie)%state%Qdp(i,j,k,q,tl_fQdp) + fq 
                   elem%state%Qdp(i,j,k,q,np1_qdp) = &
                        dp(i,j,k)*elem%derived%FQ(i,j,k,q)
-      
-!this will only run wiht EAM, no need to check qsize    
-#ifdef WL
+     
+ 
+!this will only run with EAM, no need to check qsize    
+if(local_waterloading) then
+
                   if (q==q1ind .or. q==q2ind .or. q==q3ind .or. q==q6ind .or. q==q7ind) then
-#else        
+!repeated code
+                     fq = dp(i,j,k)*( elem%derived%FQ(i,j,k,q) -&
+                          elem%state%Q(i,j,k,q))
+                     ! force ps to conserve mass:  
+                     ps(i,j)=ps(i,j) + fq
+                     dp_adj(i,j,k)=dp_adj(i,j,k) + fq   !  ps =  ps0+sum(dp(k))
+                  endif
+else
                   if (q==1) then
-#endif
                      fq = dp(i,j,k)*( elem%derived%FQ(i,j,k,q) -&
                           elem%state%Q(i,j,k,q))
                      ! force ps to conserve mass:  
@@ -1685,6 +1699,8 @@ q1ind=1; q2ind=2; q3ind=3; q6ind=6; q7ind=7;
 #endif
                      dp_adj(i,j,k)=dp_adj(i,j,k) + fq   !  ps =  ps0+sum(dp(k))
                   endif
+endif
+
                enddo
             end do
          end do

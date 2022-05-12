@@ -53,6 +53,9 @@ module cam_control_mod
 
       integer :: magfield_fix_year = 1995
 
+!to pass waterloading logic to homme
+      logical :: cam_ctrl_waterloading = .false.
+
 contains
 
 subroutine cam_ctrl_set_physics_type(phys_package)

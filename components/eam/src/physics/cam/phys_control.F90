@@ -188,7 +188,7 @@ subroutine phys_ctl_readnl(nlfile)
    use namelist_utils,  only: find_group_name
    use units,           only: getunit, freeunit
    use mpishorthand
-   use cam_control_mod, only: cam_ctrl_set_physics_type
+   use cam_control_mod, only: cam_ctrl_set_physics_type, cam_ctrl_waterloading
    use physconst,       only: pi
 
    character(len=*), intent(in) :: nlfile  ! filepath for file containing namelist input
@@ -290,9 +290,9 @@ subroutine phys_ctl_readnl(nlfile)
    call mpibcast(use_gw_energy_fix,               1 , mpilog,  0, mpicom)
    call mpibcast(use_waterloading,                1 , mpilog,  0, mpicom)
    call mpibcast(use_cpstar,                      1 , mpilog,  0, mpicom)
-   call mpibcast(use_enthalpy_cpdry,            1 , mpilog,  0, mpicom)
-   call mpibcast(use_enthalpy_cl,               1 , mpilog,  0, mpicom)
-   call mpibcast(use_enthalpy_theoretical,      1 , mpilog,  0, mpicom)
+   call mpibcast(use_enthalpy_cpdry,              1 , mpilog,  0, mpicom)
+   call mpibcast(use_enthalpy_cl,                 1 , mpilog,  0, mpicom)
+   call mpibcast(use_enthalpy_theoretical,        1 , mpilog,  0, mpicom)
    call mpibcast(use_global_cpterms_dme,          1 , mpilog,  0, mpicom)
    call mpibcast(fix_g1_err_ndrop,                1 , mpilog,  0, mpicom)
    call mpibcast(ssalt_tuning,                    1 , mpilog,  0, mpicom)
@@ -328,6 +328,8 @@ subroutine phys_ctl_readnl(nlfile)
 #endif
 
    call cam_ctrl_set_physics_type(cam_physpkg)
+
+   cam_ctrl_waterloading = use_waterloading
 
    ! Error checking:
 
