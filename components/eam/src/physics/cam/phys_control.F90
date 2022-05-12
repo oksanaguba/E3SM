@@ -144,7 +144,15 @@ logical, public, protected :: use_gw_convect = .false.
 
 !GW energy fix
 logical, public, protected :: use_gw_energy_fix = .false.
-logical, public, protected :: use_global_cpterms = .false.
+
+!WL, cpstar, enthalpies
+!all set in eam guts and via namelists, their values are printed at init
+logical, public, protected :: use_waterloading         = .false.
+logical, public, protected :: use_cpstar               = .false.
+logical, public, protected :: use_enthalpy_cpdry       = .false.
+logical, public, protected :: use_enthalpy_cl          = .false.
+logical, public, protected :: use_enthalpy_theoretical = .false.
+logical, public, protected :: use_global_cpterms_dme   = .false.
 
 ! Switches that turn on/off individual parameterizations.
 !
@@ -204,7 +212,9 @@ subroutine phys_ctl_readnl(nlfile)
       use_qqflx_fixer, & 
       print_fixer_message, & 
       use_hetfrz_classnuc, use_gw_oro, use_gw_front, use_gw_convect, &
-      use_gw_energy_fix, use_global_cpterms, &
+      use_gw_energy_fix, &
+      use_waterloading, use_cpstar, use_enthalpy_cpdry, use_enthalpy_cl, &
+      use_enthalpy_theoretical, use_global_cpterms_dme, &
       cld_macmic_num_steps, micro_do_icesupersat, &
       fix_g1_err_ndrop, ssalt_tuning, resus_fix, convproc_do_aer, &
       convproc_do_gas, convproc_method_activate, liqcf_fix, regen_fix, demott_ice_nuc, pergro_mods, pergro_test_active, &
@@ -277,8 +287,13 @@ subroutine phys_ctl_readnl(nlfile)
    call mpibcast(use_gw_oro,                      1 , mpilog,  0, mpicom)
    call mpibcast(use_gw_front,                    1 , mpilog,  0, mpicom)
    call mpibcast(use_gw_convect,                  1 , mpilog,  0, mpicom)
-   call mpibcast(use_gw_energy_fix,              1 , mpilog,  0, mpicom)
-   call mpibcast(use_global_cpterms,              1 , mpilog,  0, mpicom)
+   call mpibcast(use_gw_energy_fix,               1 , mpilog,  0, mpicom)
+   call mpibcast(use_waterloading,                1 , mpilog,  0, mpicom)
+   call mpibcast(use_cpstar,                      1 , mpilog,  0, mpicom)
+   call mpibcast(use_enthalpy_cpdry,            1 , mpilog,  0, mpicom)
+   call mpibcast(use_enthalpy_cl,               1 , mpilog,  0, mpicom)
+   call mpibcast(use_enthalpy_theoretical,      1 , mpilog,  0, mpicom)
+   call mpibcast(use_global_cpterms_dme,          1 , mpilog,  0, mpicom)
    call mpibcast(fix_g1_err_ndrop,                1 , mpilog,  0, mpicom)
    call mpibcast(ssalt_tuning,                    1 , mpilog,  0, mpicom)
    call mpibcast(resus_fix,                       1 , mpilog,  0, mpicom)

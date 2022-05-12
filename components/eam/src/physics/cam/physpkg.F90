@@ -29,7 +29,9 @@ module physpkg
   use camsrfexch,       only: cam_out_t, cam_in_t
 
   use cam_control_mod,  only: ideal_phys, adiabatic
-  use phys_control,     only: phys_do_flux_avg, phys_getopts, waccmx_is, use_global_cpterms
+  use phys_control,     only: phys_do_flux_avg, phys_getopts, waccmx_is, &
+                              use_waterloading, use_cpstar, use_enthalpy_cpdry, &
+                              use_enthalpy_cl, use_enthalpy_theoretical, use_global_cpterms_dme
   use zm_conv,          only: do_zmconv_dcape_ull => trigdcape_ull, &
                               do_zmconv_dcape_only => trig_dcape_only
   use scamMod,          only: single_column, scm_crm_mode
@@ -48,7 +50,8 @@ module physpkg
                                     modal_aero_wateruptake_reg
 
   use check_energy,     only: dme_adjust, dme_adjust_wl, energy_helper_eam_def, energy_helper_eam_def_column,&
-                              fixer_pb_simple 
+                              fixer_pb_simple
+ 
 
   implicit none
   private
@@ -940,6 +943,9 @@ subroutine phys_init( phys_state, phys_tend, pbuf2d, cam_out )
     
    !BSINGH -  addfld and adddefault calls for perturb growth testing    
     if(pergro_test_active)call add_fld_default_calls()
+
+    !print WL- and cpstar-related variables
+    call print_wl_cpstar_info()
 
 end subroutine phys_init
 
@@ -1954,7 +1960,7 @@ if (l_ac_energy_chk) then
 !TEMP and then compare with removal of CP terms and small_tend
 #if 0
 !remove cp terms from fixer
-    if(use_global_cpterms)then
+    if(use_global_cpterms_dme)then
     !take CP term out of te_cur
     state%te_cur(:ncol) = state%te_cur(:ncol) - state%cptermp(:ncol)*ztodt &
                                               + state%cpterme(:ncol)*ztodt
@@ -3132,5 +3138,38 @@ subroutine add_fld_default_calls()
   enddo
 
 end subroutine add_fld_default_calls
+
+
+
+subroutine print_wl_cpstar_info()
+  use spmd_utils,     only : masterproc
+  use cam_abortutils, only : endrun
+
+  if (masterproc) write(iulog,*) 'use_waterloading = ', use_waterloading
+  if (masterproc) write(iulog,*) 'use_cpstar = ', use_cpstar
+  if (masterproc) write(iulog,*) 'use_enthalpy_cpdry = ', use_enthalpy_cpdry
+  if (masterproc) write(iulog,*) 'use_enthalpy_cl = ', use_enthalpy_cl
+  if (masterproc) write(iulog,*) 'use_enthalpy_theoretical = ', use_enthalpy_theoretical
+  if (masterproc) write(iulog,*) 'use_global_cpterms_dme = ', use_global_cpterms_dme
+
+  if ((use_cpstar).and.(.not. use_waterloading)) then
+    call endrun ('PHYS init error:  use_cpstar=true requires use_waterloading=true')
+  endif
+
+  if ((use_enthalpy_cpdry).and.(use_enthalpy_cl.or.use_enthalpy_theoretical)) then
+    call endrun ('PHYS init error:  use_enthalpy* -- only one should be set to true')
+  endif
+
+  if ((use_enthalpy_cl).and.(use_enthalpy_cpdry.or.use_enthalpy_theoretical)) then
+    call endrun ('PHYS init error:  use_enthalpy* -- only one should be set to true')
+  endif
+
+  if ((use_enthalpy_theoretical).and.(use_enthalpy_cl.or.use_enthalpy_cpdry)) then
+    call endrun ('PHYS init error:  use_enthalpy* -- only one should be set to true')
+  endif
+
+end subroutine print_wl_cpstar_info
+
+
 
 end module physpkg

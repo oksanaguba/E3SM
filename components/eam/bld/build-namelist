@@ -3846,7 +3846,14 @@ if ($nl->get_value('use_gw_convect') =~ /$TRUE/io) {
 }
 
 add_default($nl, 'use_gw_energy_fix'    , 'val'=>'.true.');
-add_default($nl, 'use_global_cpterms'    , 'val'=>'.false.');
+
+
+add_default($nl, 'use_waterloading'     , 'val'=>'.true.');
+add_default($nl, 'use_cpstar'           , 'val'=>'.true.');
+add_default($nl, 'use_enthalpy_cpdry'   , 'val'=>'.true.');
+add_default($nl, 'use_enthalpy_cl'      , 'val'=>'.false.');
+add_default($nl, 'use_enthalpy_theoretical'  , 'val'=>'.false.');
+add_default($nl, 'use_global_cpterms_dme'    , 'val'=>'.true.');
 
 
 # Some complexity to unpack.
