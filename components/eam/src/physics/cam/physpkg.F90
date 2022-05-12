@@ -1822,26 +1822,24 @@ if (l_ac_energy_chk) then
     if ( dycore_is('LR') .or. dycore_is('SE')) call set_dry_to_wet(state)    ! Physics had dry, dynamics wants moist
 
 
-#if 0
-!cpdry terms
+
+!!!!!!!!!!!!!!!!!!!!! CODE related to EFLX
+
+    if (use_enthalpy_cpdry) then
     state%cpterme(:ncol) =          cpair * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
     state%cptermp(:ncol) = 1000.0 * cpair * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
                            1000.0 * cpair * state%t(:ncol,pver) * cam_out%precc(:ncol)
-#else
-! cp* terms
-!    state%cpterme(:ncol) =          cpwv * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
-!    state%cpterme(:ncol) =          cpliq * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
-!    state%cptermp(:ncol) = 1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
-!                           1000.0 * cpice * state%t(:ncol,pver) * cam_out%precc(:ncol) 
-
-!173656
+    elseif(use_enthalpy_theoretical) then
+    state%cpterme(:ncol) =          cpwv * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
+    state%cpterme(:ncol) =          cpliq * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
+    state%cptermp(:ncol) = 1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
+                           1000.0 * cpice * state%t(:ncol,pver) * cam_out%precc(:ncol) 
+    elseif(use_enthalpy_cl) then
     state%cpterme(:ncol) =          cpliq * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
     state%cptermp(:ncol) = 1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
                            1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precc(:ncol)
-#endif
+    endif
 
-
-!current te is in te_cur, but we need a new def of TE, based on init values
 #if 0
 !!!! debug
     !qini(:ncol,1:71)=state%q(:ncol,1:71,1)
@@ -1854,48 +1852,55 @@ if (l_ac_energy_chk) then
     qdryini(i,1:72)  = 1.0 - qini(i,1:72) - cldliqini(i,1:72) - cldiceini(i,1:72) &
                      - snowini(i,1:72) - rainini(i,1:72)
     enddo
-
 !compare cflx with mass of dq vapor
     qvmass(:ncol) = 0.0
-!    (qini(:ncol,72) - state%q(:ncol,72,1))*state%pdel(:ncol,72)/gravit
     do k=1,pver
     qvmass(:ncol) = qvmass(:ncol) + (qini(:ncol,k) - state%q(:ncol,k,1))*state%pdel(:ncol,k)/gravit 
     enddo
 #endif
 
+    !current TE is in state%te_cur, but to mimic cpstar mechanism for DME adjust,
+    !before we implement it for all phys_updates, we need TE based on cpstar^ini here,
+    !if cpstar mechanism is on. If we dont use cpstar, we will use te_cur instead of te_before_pw.
+    if(use_cpstar) then
     call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
                                    ke(:ncol),se(:ncol),wv(:ncol),wl(:ncol),&
                                    wi(:ncol),wr(:ncol),ws(:ncol),te_before_pw(:ncol),tw(:ncol), &
                                    ncol, &
                                    qini=qini,cldliqini=cldliqini,cldiceini=cldiceini,&
                                    rainini=rainini,snowini=snowini,qdryini=qdryini)
+    endif
 
-!compute PW term
-!save dp, ps, q first
-!did mot save pint -- seems to not be used?
+    !compute energy of PW (DME adjust) term
+    !save dp, ps, q first
+    !did mot save pint -- seems to not be used?
     state%oldq = state%q
     state%oldpdel = state%pdel
     state%oldps = state%ps
 
-!no WL version
-    !call dme_adjust(state, qini, ztodt)
-!WL version
-    call dme_adjust_wl(state, qini, cldliqini, cldiceini, rainini, snowini, ztodt)
+    if(use_waterloading) then
+      !WL version
+      call dme_adjust_wl(state, qini, cldliqini, cldiceini, rainini, snowini, ztodt)
+    else
+      !no WL version
+      call dme_adjust(state, qini, ztodt)
+    endif
 
-
-!compute energy after PW, te with PW is in te_after_pw
-    !call eam_energy_helper(....te_after_pw)
+    !compute energy after PW, TE with PW is in te_after_pw
+    !if cpstar is on, this version should use cpstar, but it does not need to use qini and other init tracer values
     call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
                                    ke(:ncol),se(:ncol),wv(:ncol),wl(:ncol),&
                                    wi(:ncol),wr(:ncol),ws(:ncol),te_after_pw(:ncol),tw(:ncol), &
                                    ncol)
+     
+    !if we use cpstar, then it makes sense to redefine te_cur here, so that energy of 
+    !PW and fixer are measured in the same way
+    if (use_cpstar) then
+      state%te_cur(:ncol) = te_before_pw(:ncol)
+    endif
 
-!define pw
-!this is version when we use cpdry for everything
-!    state%pw(:ncol) = state%te_cur(:ncol) - te_after_pw(:ncol) 
-!this is version when we use cpstar
-    state%pw(:ncol) = te_before_pw(:ncol) - te_after_pw(:ncol) 
-    state%te_cur(:ncol) = te_before_pw(:ncol)
+    !finally, compute DME adjust energy
+    state%pw(:ncol) = state%te_cur(:ncol) - te_after_pw(:ncol) 
 
 #if 0
 !!!!!!!! debug
@@ -1909,14 +1914,17 @@ if (l_ac_energy_chk) then
                                cam_in%cflx(i,1)*ztodt/qvmass(i)
 #endif
 
-!pw has to match cp terms, and it does
-!pw ~= (cptermp - cpterme)*ztodt
+    !units and dt:
+    !for cpdry, PW has to match cp terms, and it does
+    !pw ~= (cptermp - cpterme)*ztodt
 
-!define cp term for simplicity
+    !define total cp term for simplicity
     cpterm(:ncol) = state%cptermp(:ncol)*ztodt - state%cpterme(:ncol)*ztodt
+
+    !delta is for using a local fixer after transfer of enthalpies
     deltat(:ncol) = cpterm(:ncol) - state%pw(:ncol) 
 
-
+!debug around local fixer, ignore for now
 #if 0
     do ic=1,ncol
 !what we want, small local fixer
@@ -1936,7 +1944,6 @@ if (l_ac_energy_chk) then
              state%T(ic,:)+small_ttend(ic,:),&
              state%q(ic,:,:),state%ps(ic),state%pdel(ic,:),state%phis(ic), &
                                    keloc,seloc,wvloc,wlloc,wiloc,wrloc,wsloc,teloc2,twloc)
-
 !this one gets close results
 !print *, 'ic, deltat,teloc2-teloc1',deltat(ic), teloc2-teloc1
 !this one gets error of 1e-9 or less
@@ -1948,55 +1955,31 @@ if (l_ac_energy_chk) then
 #endif 
 
 
-!now we can reset all variables
+    !now we can reset all variables after DME adjust
     state%q = state%oldq
     state%pdel = state%oldpdel
     state%ps = state%oldps
 
-!TEMP check how fixer looks like without PW in it.
-! that is fixer for dycore only
-!    state%te_cur(:ncol) = state%te_cur(:ncol) - state%pw(:ncol)
-
-!TEMP and then compare with removal of CP terms and small_tend
+    !check how fixer looks like without PW in it.
+    ! that is, when fixer is for dycore only
 #if 0
-!remove cp terms from fixer
+    state%te_cur(:ncol) = state%te_cur(:ncol) - state%pw(:ncol)
+#endif
+
+    !remove cp terms from fixer to mimic enthalpy transfers
     if(use_global_cpterms_dme)then
-    !take CP term out of te_cur
-    state%te_cur(:ncol) = state%te_cur(:ncol) - state%cptermp(:ncol)*ztodt &
+      !take CP term out of te_cur
+      state%te_cur(:ncol) = state%te_cur(:ncol) - state%cptermp(:ncol)*ztodt &
                                               + state%cpterme(:ncol)*ztodt
     endif
-#endif
+
+!ignore
 #if 0
-
 !LOCAL fixer
-     
-    !with this line run 142445 is bad, fixer too big
-!with PW local fixer it works, id 143336     
-!now remove cp terms locally
-!    tend%dtdt(:ncol,1:pver) = tend%dtdt(:ncol,1:pver) + small_ttend(:ncol,1:pver)/ztodt 
-
-!expriment with sign
     tend%dtdt(:ncol,1:pver) = tend%dtdt(:ncol,1:pver) - small_ttend(:ncol,1:pver)/ztodt 
 #endif
 
-! rescale T
-#if 0
-   1  Q         Specific humidity                       wet
-   2  CLDLIQ    Grid box averaged cloud liquid amount   wet
-   3  CLDICE    Grid box averaged cloud ice amount      wet
-   4  NUMLIQ    Grid box averaged cloud liquid number   wet
-   5  NUMICE    Grid box averaged cloud ice number      wet
-   6  RAINQM    Grid box averaged rain amount           wet
-   7  SNOWQM    Grid box averaged snow amount           wet
-   8  NUMRAI    Grid box averaged rain number           wet
-   9  NUMSNO    Grid box averaged snow number
-   call cnst_get_ind('CLDICE', icldice, abrtf=.false.)
-   call cnst_get_ind('CLDLIQ', icldliq, abrtf=.false.)
-   call cnst_get_ind('RAINQM', irain, abrtf=.false.)
-   call cnst_get_ind('SNOWQM', isnow, abrtf=.false.)
-#endif
-
-
+!ignore
 !rescale TTEND with cpstar
 #if 0
     do ic=1,ncol
@@ -2008,21 +1991,14 @@ if (l_ac_energy_chk) then
     enddo
 #endif
 
+
+!!!!!!!!!!!!!! end of EFLX work
+
+
+
+
+
     call pbuf_set_field(pbuf, teout_idx, state%te_cur, (/1,itim_old/),(/pcols,1/)) 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     ! Scale dry mass and energy (does nothing if dycore is EUL or SLD)
     tmp_q     (:ncol,:pver) = state%q(:ncol,:pver,1)
