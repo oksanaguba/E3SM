@@ -62,6 +62,7 @@ module physpkg
   integer ::  cldiceini_idx      = 0 
   integer ::  rainini_idx        = 0 
   integer ::  snowini_idx        = 0 
+  integer ::  qdryini_idx        = 0 
   integer ::  static_ener_ac_idx = 0
   integer ::  water_vap_ac_idx   = 0
 
@@ -204,6 +205,7 @@ subroutine phys_register
     call pbuf_add_field('CLDICEINI', 'physpkg', dtype_r8, (/pcols,pver/), cldiceini_idx)
     call pbuf_add_field('RAININI', 'physpkg', dtype_r8, (/pcols,pver/), rainini_idx)
     call pbuf_add_field('SNOWINI', 'physpkg', dtype_r8, (/pcols,pver/), snowini_idx)
+    call pbuf_add_field('QDRYINI', 'physpkg', dtype_r8, (/pcols,pver/), qdryini_idx)
     call pbuf_add_field('static_ener_ac', 'global', dtype_r8, (/pcols/), static_ener_ac_idx)
     call pbuf_add_field('water_vap_ac',   'global', dtype_r8, (/pcols/), water_vap_ac_idx)
 
@@ -1512,6 +1514,7 @@ subroutine tphysac (ztodt,   cam_in,  &
     real(r8), pointer, dimension(:,:) :: cldiceini
     real(r8), pointer, dimension(:,:) :: rainini
     real(r8), pointer, dimension(:,:) :: snowini
+    real(r8), pointer, dimension(:,:) :: qdryini
     real(r8), pointer, dimension(:,:) :: dtcore
     real(r8), pointer, dimension(:,:) :: ast     ! relative humidity cloud fraction 
 
@@ -1534,7 +1537,8 @@ subroutine tphysac (ztodt,   cam_in,  &
 
 !ogdef
     real(r8) :: ke(pcols), se(pcols), wv(pcols), wl(pcols), wi(pcols), te(pcols),&
-                tw(pcols), wr(pcols), ws(pcols), cpterm(pcols),te_after_pw(pcols),deltat(pcols) 
+                tw(pcols), wr(pcols), ws(pcols), cpterm(pcols), &
+                te_before_pw(pcols), te_after_pw(pcols), deltat(pcols) 
 
     real(r8) :: small_ttend(pcols,pver)
 
@@ -1582,8 +1586,9 @@ subroutine tphysac (ztodt,   cam_in,  &
     call pbuf_get_field(pbuf, qini_idx, qini)
     call pbuf_get_field(pbuf, cldliqini_idx, cldliqini)
     call pbuf_get_field(pbuf, cldiceini_idx, cldiceini)
-    call pbuf_get_field(pbuf, rainini_idx, snowini)
-    call pbuf_get_field(pbuf, snowini_idx, rainini)
+    call pbuf_get_field(pbuf, rainini_idx, rainini)
+    call pbuf_get_field(pbuf, snowini_idx, snowini)
+    call pbuf_get_field(pbuf, qdryini_idx, qdryini)
 
     ifld = pbuf_get_index('CLD')
     call pbuf_get_field(pbuf, ifld, cld, start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
@@ -1811,26 +1816,53 @@ if (l_ac_energy_chk) then
     if ( dycore_is('LR') .or. dycore_is('SE')) call set_dry_to_wet(state)    ! Physics had dry, dynamics wants moist
 
 
-#if 0 
+#if 0
 !cpdry terms
     state%cpterme(:ncol) =          cpair * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
     state%cptermp(:ncol) = 1000.0 * cpair * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
                            1000.0 * cpair * state%t(:ncol,pver) * cam_out%precc(:ncol)
 #else
 ! cp* terms
-    state%cpterme(:ncol) =          cpwv * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
-!    state%cpterme(:ncol) =          cpliq * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
-    state%cptermp(:ncol) = 1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
-                           1000.0 * cpice * state%t(:ncol,pver) * cam_out%precc(:ncol) 
-
-!173656
+!    state%cpterme(:ncol) =          cpwv * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
 !    state%cpterme(:ncol) =          cpliq * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
 !    state%cptermp(:ncol) = 1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
-!                           1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precc(:ncol)
+!                           1000.0 * cpice * state%t(:ncol,pver) * cam_out%precc(:ncol) 
+
+!173656
+    state%cpterme(:ncol) =          cpliq * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
+    state%cptermp(:ncol) = 1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
+                           1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precc(:ncol)
 #endif
 
 
-!current te is in te_cur
+!current te is in te_cur, but we need a new def of TE, based on init values
+#if 0
+!!!! debug
+    !qini(:ncol,1:71)=state%q(:ncol,1:71,1)
+    !qini(:ncol,72)  =state%q(:ncol,72  ,1) + 0.02
+    cldliqini(:ncol,1:72)  =state%q(:ncol,1:72,icldliq)
+    cldiceini(:ncol,1:72)  =state%q(:ncol,1:72,icldice)
+    snowini(:ncol,1:72)  =state%q(:ncol,1:72,isnow)
+    rainini(:ncol,1:72)  =state%q(:ncol,1:72,irain)
+    do i=1,ncol
+    qdryini(i,1:72)  = 1.0 - qini(i,1:72) - cldliqini(i,1:72) - cldiceini(i,1:72) &
+                     - snowini(i,1:72) - rainini(i,1:72)
+    enddo
+
+!compare cflx with mass of dq vapor
+    qvmass(:ncol) = 0.0
+!    (qini(:ncol,72) - state%q(:ncol,72,1))*state%pdel(:ncol,72)/gravit
+    do k=1,pver
+    qvmass(:ncol) = qvmass(:ncol) + (qini(:ncol,k) - state%q(:ncol,k,1))*state%pdel(:ncol,k)/gravit 
+    enddo
+#endif
+
+    call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
+                                   ke(:ncol),se(:ncol),wv(:ncol),wl(:ncol),&
+                                   wi(:ncol),wr(:ncol),ws(:ncol),te_before_pw(:ncol),tw(:ncol), &
+                                   ncol, &
+                                   qini=qini,cldliqini=cldliqini,cldiceini=cldiceini,&
+                                   rainini=rainini,snowini=snowini,qdryini=qdryini)
 
 !compute PW term
 !save dp, ps, q first
@@ -1844,19 +1876,6 @@ if (l_ac_energy_chk) then
 !WL version
     call dme_adjust_wl(state, qini, cldliqini, cldiceini, rainini, snowini, ztodt)
 
-!!!! debug
-!    qini(:ncol,1:71)=state%q(:ncol,1:71,1)
-!    qini(:ncol,72)  =state%q(:ncol,72  ,1) + 0.02
-!    cldliqini(:ncol,1:72)  =state%q(:ncol,1:72,icldliq)
-!    cldiceini(:ncol,1:72)  =state%q(:ncol,1:72,icldice)
-!    snowini(:ncol,1:72)  =state%q(:ncol,1:72,isnow)
-!    rainini(:ncol,1:72)  =state%q(:ncol,1:72,irain)
-!    qvmass(:ncol) = 0.02*state%pdel(:ncol,72)/gravit
-
-!i=1
-!print *, 'Q before', state%q(i,72,1)
-!    call dme_adjust_wl(state, qini, cldliqini, cldiceini, rainini, snowini, ztodt)
-!print *, 'Q after', state%q(i,72,1)
 
 !compute energy after PW, te with PW is in te_after_pw
     !call eam_energy_helper(....te_after_pw)
@@ -1866,15 +1885,23 @@ if (l_ac_energy_chk) then
                                    ncol)
 
 !define pw
-    state%pw(:ncol) = state%te_cur(:ncol) - te_after_pw(:ncol) 
+!this is version when we use cpdry for everything
+!    state%pw(:ncol) = state%te_cur(:ncol) - te_after_pw(:ncol) 
+!this is version when we use cpstar
+    state%pw(:ncol) = te_before_pw(:ncol) - te_after_pw(:ncol) 
+    state%te_cur(:ncol) = te_before_pw(:ncol)
 
+#if 0
 !!!!!!!! debug
 !now compare PW and 0.02*... number
-!   i=1
+   i=1
 !      print *, 'PW, enthalpy', state%pw(i), cpwv*state%t(i,pver)*qvmass(i), &
 !                               cpwv*state%t(i,pver)*qvmass(i)/state%pw(i)
-   
-
+      print *, 'PW, enthalpy', state%pw(i), state%cpterme(i)*ztodt, &
+                               state%cpterme(i)*ztodt/state%pw(i)  
+      print *, 'QVmass, cflx', qvmass(i), cam_in%cflx(i,1)*ztodt, &
+                               cam_in%cflx(i,1)*ztodt/qvmass(i)
+#endif
 
 !pw has to match cp terms, and it does
 !pw ~= (cptermp - cpterme)*ztodt
@@ -2197,6 +2224,7 @@ subroutine tphysbc (ztodt,               &
     real(r8), pointer, dimension(:,:) :: cldiceini
     real(r8), pointer, dimension(:,:) :: rainini
     real(r8), pointer, dimension(:,:) :: snowini
+    real(r8), pointer, dimension(:,:) :: qdryini
     real(r8), pointer, dimension(:,:) :: dtcore
 
     real(r8), pointer, dimension(:,:,:) :: fracis  ! fraction of transported species that are insoluble
@@ -2361,6 +2389,7 @@ subroutine tphysbc (ztodt,               &
     call pbuf_get_field(pbuf, cldiceini_idx, cldiceini)
     call pbuf_get_field(pbuf, rainini_idx, rainini)
     call pbuf_get_field(pbuf, snowini_idx, snowini)
+    call pbuf_get_field(pbuf, qdryini_idx, qdryini)
 
     ifld   =  pbuf_get_index('DTCORE')
     call pbuf_get_field(pbuf, ifld, dtcore, start=(/1,1,itim_old/), kount=(/pcols,pver,1/) )
@@ -2476,11 +2505,20 @@ if (l_bc_energy_fix) then
     ! Save state for convective tendency calculations.
     call diag_conv_tend_ini(state, pbuf)
 
-    qini     (:ncol,:pver) = state%q(:ncol,:pver,       1)
+    qini     (:ncol,:pver) = state%q(:ncol,:pver,      1)
     cldliqini(:ncol,:pver) = state%q(:ncol,:pver,icldliq)
     cldiceini(:ncol,:pver) = state%q(:ncol,:pver,icldice)
     rainini(:ncol,:pver) = state%q(:ncol,:pver,irain)
     snowini(:ncol,:pver) = state%q(:ncol,:pver,isnow)
+  
+    do i=1,ncol
+    do k=1,pver
+
+    qdryini(i,k) = 1.0 - state%q(i,k,       1) - state%q(i,k,icldliq) &
+                               - state%q(i,k,icldice)  - state%q(i,k,irain)   &
+                               - state%q(i,k,isnow)
+    enddo
+    enddo
 
 
     call outfld('TEOUT', teout       , pcols, lchnk   )
