@@ -38,7 +38,7 @@ module check_energy
   use time_manager,    only: is_first_step
   use cam_logfile,     only: iulog
   use cam_abortutils,  only: endrun 
-  use phys_control,    only: ieflx_opt
+  use phys_control,    only: ieflx_opt, use_cpstar, use_waterloading
 
   implicit none
   private
@@ -1252,6 +1252,7 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
        teloc = 0.0; psterm = 0.0
        do k = 1, pver
 ! ADD CPSTAR here too
+!right now this code is not used, could be used in local fixers
           teloc(k) = 0.5_r8*(u(k)**2 + v(k)**2)*pdel(k)/gravit &
                    + t(k)*cpair*pdel(k)/gravit &
                    + (latvap+latice)*q(k,1       )*pdel(k)/gravit
@@ -1261,41 +1262,31 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
        psterm = phis*ps/gravit
     endif
 
-
     do k = 1, pver
        ke = ke + 0.5_r8*(u(k)**2 + v(k)**2)*pdel(k)/gravit
-#if 0
-       se = se +         t(k)*cpair*pdel(k)/gravit
-#else
 
-!print *, 'CP constants, cpdry, cpwv, cpliq, cpice',cpair, cpwv, cpliq, cpice
-!print *, 'indices, ', icldliq, icldice, irain, isnow
+       if (.not.use_cpstar) then
+         se = se +         t(k)*cpair*pdel(k)/gravit
+       else
 
-if (present(qini))then
-
-!works
-!print *, "OG and in ini fields code here"
-
-       cpstar = cpair*qdryini(k) + cpwv*qini(k) + cpliq*( cldliqini(k) + rainini(k) ) + &
-                                           cpice*( cldiceini(k) + snowini(k) )
-
-else
-
-       qdry = 1.0_r8 - q(k,1) - q(k,icldliq) - q(k,icldice) - q(k,irain) - q(k,isnow)
-       cpstar = cpair*qdry + cpwv*q(k,1) + cpliq*( q(k,icldliq) + q(k,irain) ) + &
+         if (present(qini))then
+           !cpstar based on qini etc  
+           cpstar = cpair*qdryini(k) + cpwv*qini(k) + cpliq*( cldliqini(k) + rainini(k) ) + &
+                    cpice*( cldiceini(k) + snowini(k) )
+         else
+           !cpstar based on current q
+           qdry = 1.0_r8 - q(k,1) - q(k,icldliq) - q(k,icldice) - q(k,irain) - q(k,isnow)
+           cpstar = cpair*qdry + cpwv*q(k,1) + cpliq*( q(k,icldliq) + q(k,irain) ) + &
                                            cpice*( q(k,icldice) + q(k,isnow) )
-endif
+         endif
+         se = se +         t(k)*cpstar*pdel(k)/gravit
 
-       se = se +         t(k)*cpstar*pdel(k)/gravit
+       endif
 
-#endif
        wv = wv + q(k,1      )*pdel(k)/gravit
     end do
 
-!debug
-!#if 0
     se = se + phis*ps/gravit
-!#endif
 
     do k = 1, pver
        wl = wl + q(k,icldliq)*pdel(k)/gravit
@@ -1309,13 +1300,7 @@ endif
 
     ! Compute vertical integrals of frozen static energy and total water.
 
-!debug
-#if 1
     te = se + ke + (latvap+latice)*wv + latice*( wl + wr )
-#else
-    te = se
-#endif
-
     tw = wv + wl + wi + wr + ws
 
   end subroutine energy_helper_eam_def_column
@@ -1460,16 +1445,11 @@ endif
     ! constituents, momentum, and total energy
     do k = 1, pver
 
-!!!       ! adjusment factor is just change in water vapor
-#if 0
-       fdq(:ncol) = 1._r8 + state%q(:ncol,k,1) - qini(:ncol,k)    
-#else
        fdq(:ncol) = 1._r8 + state%q(:ncol,k,1) - qini(:ncol,k)    &
                   + state%q(:ncol,k,icldliq) - cldliqini(:ncol,k) &
                   + state%q(:ncol,k,icldice) - cldiceini(:ncol,k) &
                   + state%q(:ncol,k,irain) - rainini(:ncol,k)     &
                   + state%q(:ncol,k,isnow) - snowini(:ncol,k)
-#endif
        ! adjust constituents to conserve mass in each layer
        do m = 1, pcnst
           state%q(:ncol,k,m) = state%q(:ncol,k,m) / fdq(:ncol)
