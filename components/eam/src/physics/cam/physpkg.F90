@@ -1867,8 +1867,8 @@ if (l_ac_energy_chk) then
                            + state%pdel(:ncol,k)*(state%q(:ncol,k,isnow) - snowini(:ncol,k))/gravit
     enddo
 
-    state%liqflx(:ncol) = cam_out%precl(:ncol)+cam_out%precc(:ncol)-cam_out%precsc(:ncol)-cam_out%precsl(:ncol)
-    state%iceflx(:ncol) =                                           cam_out%precsc(:ncol)+cam_out%precsl(:ncol)
+    state%liqflx(:ncol) = 1000.0*(cam_out%precl(:ncol)+cam_out%precc(:ncol)-cam_out%precsc(:ncol)-cam_out%precsl(:ncol))
+    state%iceflx(:ncol) = 1000.0*(                                          cam_out%precsc(:ncol)+cam_out%precsl(:ncol))
 
 
 #if 0
