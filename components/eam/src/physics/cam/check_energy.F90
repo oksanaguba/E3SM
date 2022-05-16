@@ -465,9 +465,9 @@ end subroutine check_energy_get_integrals
     integer :: ncol                      ! number of active columns
     integer :: lchnk                     ! chunk index
 
-    real(r8) :: te(pcols,begchunk:endchunk,6)   
+    real(r8) :: te(pcols,begchunk:endchunk,12)   
                                          ! total energy of input/output states (copy)
-    real(r8) :: te_glob(6)               ! global means of total energy
+    real(r8) :: te_glob(12)               ! global means of total energy
     real(r8), pointer :: teout(:)
 !-----------------------------------------------------------------------
 
@@ -489,11 +489,18 @@ end subroutine check_energy_get_integrals
        te(:ncol,lchnk,4) = state(lchnk)%cptermp(:ncol)
        te(:ncol,lchnk,5) = state(lchnk)%cpterme(:ncol)
        te(:ncol,lchnk,6) = state(lchnk)%pw(:ncol)
+
+       te(:ncol,lchnk,7) = state(lchnk)%qflx(:ncol)
+       te(:ncol,lchnk,8) = state(lchnk)%liqflx(:ncol)
+       te(:ncol,lchnk,9) = state(lchnk)%iceflx(:ncol)
+       te(:ncol,lchnk,10) = state(lchnk)%dvapor(:ncol)
+       te(:ncol,lchnk,11) = state(lchnk)%dliquid(:ncol)
+       te(:ncol,lchnk,12) = state(lchnk)%dice(:ncol)
     end do
 
     ! Compute global means of input and output energies and of
     ! surface pressure for heating rate (assume uniform ptop)
-    call gmean(te, te_glob, 6)
+    call gmean(te, te_glob, 12)
 
     if (begchunk .le. endchunk) then
        teinp_glob = te_glob(1)
@@ -509,6 +516,10 @@ end subroutine check_energy_get_integrals
           write(iulog,'(1x,a9,1x,i8,4(1x,e25.17))') "nstep, te", nstep, teinp_glob, teout_glob, heat_glob, psurf_glob
           write(iulog,'(1x,a13,1x,i8,2(1x,e25.17))') "nstep, pw, cp", nstep, te_glob(6), (te_glob(4)-te_glob(5))*dtime
           write(iulog,'(1x,a15,1x,i8,2(1x,e25.17))') "nstep, cpp, cpe", nstep, te_glob(4)*dtime, te_glob(5)*dtime
+
+          write(iulog,'(1x,a19,1x,i8,2(1x,e25.17))') "nstep, qflx, dqv/dt", nstep,   te_glob(7), te_glob(10)/dtime
+          write(iulog,'(1x,a20,1x,i8,2(1x,e25.17))') "nstep, liqflx, dql/dt", nstep, te_glob(8), te_glob(11)/dtime
+          write(iulog,'(1x,a20,1x,i8,2(1x,e25.17))') "nstep, iceflx, dqi/dt", nstep, te_glob(9), te_glob(12)/dtime
        end if
     else
        heat_glob = 0._r8

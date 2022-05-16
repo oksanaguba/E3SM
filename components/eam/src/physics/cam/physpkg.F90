@@ -1824,21 +1824,52 @@ if (l_ac_energy_chk) then
 
 
 !!!!!!!!!!!!!!!!!!!!! CODE related to EFLX
+!      cam_out%precc (i) = prec_dp(i)  + prec_sh(i)
+!      cam_out%precl (i) = prec_sed(i) + prec_pcw(i)
+!      cam_out%precsc(i) = snow_dp(i)  + snow_sh(i)
+!      cam_out%precsl(i) = snow_sed(i) + snow_pcw(i)
+!  263 PRECL                            m/s                 1 A  Large-scale (stable) precipitation rate (liq + ice)
+!  264 PRECC                            m/s                 1 A  Convective precipitation rate (liq + ice)
+!  265 PRECT                            m/s                 1 A  Total (convective and large-scale) precipitation rate (liq + ice)
+!  269 PRECSL                           m/s                 1 A  Large-scale (stable) snow rate (water equivalent)
+!  270 PRECSC                           m/s                 1 A  Convective snow rate (water equivalent)
+
 
     if (use_enthalpy_cpdry) then
     state%cpterme(:ncol) =          cpair * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
     state%cptermp(:ncol) = 1000.0 * cpair * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
                            1000.0 * cpair * state%t(:ncol,pver) * cam_out%precc(:ncol)
+
     elseif(use_enthalpy_theoretical) then
     state%cpterme(:ncol) =          cpwv * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
-    state%cpterme(:ncol) =          cpliq * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
-    state%cptermp(:ncol) = 1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
-                           1000.0 * cpice * state%t(:ncol,pver) * cam_out%precc(:ncol) 
+    state%cptermp(:ncol) = &
+    1000.0*cpliq*state%t(:ncol,pver)*(cam_out%precl(:ncol)+cam_out%precc(:ncol)-cam_out%precsc(:ncol)-cam_out%precsl(:ncol))+&
+    1000.0*cpice*state%t(:ncol,pver)*(                                          cam_out%precsc(:ncol)+cam_out%precsl(:ncol))
+
     elseif(use_enthalpy_cl) then
     state%cpterme(:ncol) =          cpliq * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
     state%cptermp(:ncol) = 1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
                            1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precc(:ncol)
     endif
+
+    !collect all deltas and fluxes for glob mean
+    state%qflx(:ncol) = cam_in%cflx(:ncol,1)
+    state%dvapor(:ncol) = 0.0
+    state%dliquid(:ncol) = 0.0
+    state%dice(:ncol) = 0.0
+    do k=1,pver
+      state%dvapor(:ncol)  = state%dvapor(:ncol) + state%pdel(:ncol,k)*(state%q(:ncol,k,1) - qini(:ncol,k))/gravit
+      state%dliquid(:ncol) = state%dliquid(:ncol) &
+                           + state%pdel(:ncol,k)*(state%q(:ncol,k,icldliq) - cldliqini(:ncol,k))/gravit &
+                           + state%pdel(:ncol,k)*(state%q(:ncol,k,irain) - rainini(:ncol,k))/gravit
+      state%dice(:ncol)    = state%dice(:ncol) &
+                           + state%pdel(:ncol,k)*(state%q(:ncol,k,icldice) - cldiceini(:ncol,k))/gravit &
+                           + state%pdel(:ncol,k)*(state%q(:ncol,k,isnow) - snowini(:ncol,k))/gravit
+    enddo
+
+    state%liqflx(:ncol) = cam_out%precl(:ncol)+cam_out%precc(:ncol)-cam_out%precsc(:ncol)-cam_out%precsl(:ncol)
+    state%iceflx(:ncol) =                                           cam_out%precsc(:ncol)+cam_out%precsl(:ncol)
+
 
 #if 0
 !!!! debug

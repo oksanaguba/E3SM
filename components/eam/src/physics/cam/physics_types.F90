@@ -107,6 +107,7 @@ module physics_types
           te_cur,  &! vertically integrated total (kinetic + static) energy of current state
           tw_ini,  &! vertically integrated total water of initial state
           cpterme, cptermp, pw, &
+          dvapor, dliquid, dice, qflx, liqflx, iceflx, &
           tw_cur    ! vertically integrated total water of new state
      integer :: count ! count of values with significant energy or water imbalances
      integer, dimension(:),allocatable           :: &
@@ -1280,6 +1281,12 @@ end subroutine physics_ptend_copy
        state_out%te_cur(i) = state_in%te_cur(i) 
        state_out%cptermp(i) = state_in%cptermp(i) 
        state_out%cpterme(i) = state_in%cpterme(i) 
+       state_out%dvapor(i) = state_in%dvapor(i) 
+       state_out%dliquid(i) = state_in%dliquid(i) 
+       state_out%dice(i) = state_in%dice(i) 
+       state_out%qflx(i) = state_in%qflx(i) 
+       state_out%liqflx(i) = state_in%liqflx(i) 
+       state_out%iceflx(i) = state_in%iceflx(i) 
        state_out%pw(i) = state_in%pw(i) 
        state_out%tw_ini(i) = state_in%tw_ini(i) 
        state_out%tw_cur(i) = state_in%tw_cur(i) 
@@ -1633,6 +1640,20 @@ subroutine physics_state_alloc(state,lchnk,psetcols)
   allocate(state%cpterme(psetcols), stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%cpe')
 
+  allocate(state%dvapor(psetcols), stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation')
+  allocate(state%dliquid(psetcols), stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation')
+  allocate(state%dice(psetcols), stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation')
+  allocate(state%qflx(psetcols), stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation')
+  allocate(state%liqflx(psetcols), stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation')
+  allocate(state%iceflx(psetcols), stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation')
+
+
   allocate(state%pw(psetcols), stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%cpe')
 
@@ -1693,6 +1714,13 @@ subroutine physics_state_alloc(state,lchnk,psetcols)
 
   state%cpterme(:) = 0.0
   state%cptermp(:) = 0.0
+
+  state%dvapor(:) = 0.0
+  state%dliquid(:) = 0.0
+  state%dice(:) = 0.0
+  state%qflx(:) = 0.0
+  state%liqflx(:) = 0.0
+  state%iceflx(:) = 0.0
   state%pw(:) = 0.0
 
 end subroutine physics_state_alloc
@@ -1816,6 +1844,22 @@ subroutine physics_state_dealloc(state)
   if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%cpterme')
   deallocate(state%cptermp, stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%cptermp')
+
+  deallocate(state%dvapor, stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation')
+  deallocate(state%dliquid, stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation')
+  deallocate(state%dice, stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation')
+  deallocate(state%qflx, stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation')
+  deallocate(state%liqflx, stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation')
+  deallocate(state%iceflx, stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation')
+
+
+
   deallocate(state%pw, stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%cptermp')
 
