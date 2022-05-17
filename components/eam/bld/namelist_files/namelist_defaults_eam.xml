@@ -1699,6 +1699,10 @@ with se_tstep, dt_remap_factor, dt_tracer_factor set to -1
 <!-- this var=true removes enthalpies/eflx from dme -->
 <use_global_cpterms_dme phys="default"> .true.      </use_global_cpterms_dme>
 
+<!-- this var=true removes PW from fixer, resetting energy -->
+<dycore_fixer_only phys="default"> .false.      </dycore_fixer_only>
+
+
 <clubb_C14 phys="default"> 2.5D0      </clubb_C14>
 <clubb_tk1 phys="default"> 268.15D0   </clubb_tk1>
 <dust_emis_fact phys="default"> 1.50D0     </dust_emis_fact>

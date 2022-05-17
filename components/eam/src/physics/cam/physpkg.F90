@@ -31,7 +31,8 @@ module physpkg
   use cam_control_mod,  only: ideal_phys, adiabatic
   use phys_control,     only: phys_do_flux_avg, phys_getopts, waccmx_is, &
                               use_waterloading, use_cpstar, use_enthalpy_cpdry, &
-                              use_enthalpy_cl, use_enthalpy_theoretical, use_global_cpterms_dme
+                              use_enthalpy_cl, use_enthalpy_theoretical, use_global_cpterms_dme, &
+                              dycore_fixer_only
   use zm_conv,          only: do_zmconv_dcape_ull => trigdcape_ull, &
                               do_zmconv_dcape_only => trig_dcape_only
   use scamMod,          only: single_column, scm_crm_mode
@@ -1993,9 +1994,9 @@ if (l_ac_energy_chk) then
 
     !check how fixer looks like without PW in it.
     ! that is, when fixer is for dycore only
-#if 0
-    state%te_cur(:ncol) = state%te_cur(:ncol) - state%pw(:ncol)
-#endif
+    if(dycore_fixer_only)then
+      state%te_cur(:ncol) = state%te_cur(:ncol) - state%pw(:ncol)
+    endif
 
     !remove cp terms from fixer to mimic enthalpy transfers
     if(use_global_cpterms_dme)then
@@ -3158,6 +3159,7 @@ subroutine print_wl_cpstar_info()
   if (masterproc) write(iulog,*) 'use_enthalpy_cl = ', use_enthalpy_cl
   if (masterproc) write(iulog,*) 'use_enthalpy_theoretical = ', use_enthalpy_theoretical
   if (masterproc) write(iulog,*) 'use_global_cpterms_dme = ', use_global_cpterms_dme
+  if (masterproc) write(iulog,*) 'dycore_fixer_only = ', dycore_fixer_only
 
   if ((use_cpstar).and.(.not. use_waterloading)) then
     call endrun ('PHYS init error:  use_cpstar=true requires use_waterloading=true')

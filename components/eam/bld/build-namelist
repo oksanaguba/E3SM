@@ -3854,6 +3854,7 @@ add_default($nl, 'use_enthalpy_cpdry'   , 'val'=>'.true.');
 add_default($nl, 'use_enthalpy_cl'      , 'val'=>'.false.');
 add_default($nl, 'use_enthalpy_theoretical'  , 'val'=>'.false.');
 add_default($nl, 'use_global_cpterms_dme'    , 'val'=>'.true.');
+add_default($nl, 'dycore_fixer_only'    , 'val'=>'.false.');
 
 
 # Some complexity to unpack.

@@ -1060,6 +1060,12 @@ Default: set by build-namelist.
 Default: set by build-namelist.
 </entry>
 
+<entry id="dycore_fixer_only" type="logical" category="fixers"
+       group="phys_ctl_nl" valid_values="" >
+Default: set by build-namelist.
+</entry>
+
+
 
 
 
