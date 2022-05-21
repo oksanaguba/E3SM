@@ -7,14 +7,14 @@ module physics_types
 
   use shr_kind_mod, only: r8 => shr_kind_r8
   use ppgrid,       only: pcols, pver, psubcols
-  use constituents, only: pcnst, qmin, cnst_name, icldliq, icldice
+  use constituents, only: pcnst, qmin, cnst_name, icldliq, icldice, irain, isnow
   use geopotential, only: geopotential_t
   use physconst,    only: zvir, gravit, cpair, rair, cpairv, rairv
   use dycore,       only: dycore_is
   use phys_grid,    only: get_ncols_p, get_rlon_all_p, get_rlat_all_p, get_gcol_all_p
   use cam_logfile,  only: iulog
   use cam_abortutils,   only: endrun
-  use phys_control, only: waccmx_is, use_mass_borrower
+  use phys_control, only: waccmx_is, use_mass_borrower, use_waterloading
   use shr_const_mod,only: shr_const_rwv
   use perf_mod,     only: t_startf, t_stopf
 
@@ -1426,9 +1426,17 @@ subroutine set_state_pdry (state,pdeld_calc)
   state%pintdry(:ncol,1) = state%pint(:ncol,1)
 
   if (do_pdeld_calc)  then
+    if(use_waterloading)then
+     do k = 1, pver
+        state%pdeldry(:ncol,k) = state%pdel(:ncol,k)*&
+           (1._r8-state%q(:ncol,k,1)-state%q(:ncol,k,icldliq)-state%q(:ncol,k,icldice)&
+                 -state%q(:ncol,k,irain)-state%q(:ncol,k,isnow))
+     end do
+    else
      do k = 1, pver
         state%pdeldry(:ncol,k) = state%pdel(:ncol,k)*(1._r8-state%q(:ncol,k,1))
      end do
+    endif
   endif
   do k = 1, pver
      state%pintdry(:ncol,k+1) = state%pintdry(:ncol,k)+state%pdeldry(:ncol,k)
