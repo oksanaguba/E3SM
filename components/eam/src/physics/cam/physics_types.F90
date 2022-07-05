@@ -106,7 +106,7 @@ module physics_types
           te_ini,  &! vertically integrated total (kinetic + static) energy of initial state
           te_cur,  &! vertically integrated total (kinetic + static) energy of current state
           tw_ini,  &! vertically integrated total water of initial state
-          cpterme, cptermp, pw, &
+          cpterme, cptermp, pw, pwvapor, &
           dvapor, dliquid, dice, qflx, liqflx, iceflx, &
           tw_cur    ! vertically integrated total water of new state
      integer :: count ! count of values with significant energy or water imbalances
@@ -514,6 +514,10 @@ contains
          varname="state%cptermp",    msg=msg)
     call shr_assert_in_domain(state%pw(:ncol),      is_nan=.false., &
          varname="state%pw",    msg=msg)
+    call shr_assert_in_domain(state%pwvapor(:ncol),      is_nan=.false., &
+         varname="state%pwvapor",    msg=msg)
+
+
     call shr_assert_in_domain(state%oldps(:ncol),          is_nan=.false., &
          varname="state%ps",        msg=msg)
     call shr_assert_in_domain(state%oldpdel(:ncol,:),      is_nan=.false., &
@@ -604,6 +608,9 @@ contains
          varname="state%cptermp",    msg=msg)
     call shr_assert_in_domain(state%pw(:ncol),     lt=posinf_r8, gt=neginf_r8, &
          varname="state%pw",    msg=msg)
+    call shr_assert_in_domain(state%pwvapor(:ncol),     lt=posinf_r8, gt=neginf_r8, &
+         varname="state%pwvapor",    msg=msg)
+
     call shr_assert_in_domain(state%oldps(:ncol),          lt=posinf_r8, gt=0._r8, &
          varname="state%ps",        msg=msg)
     call shr_assert_in_domain(state%oldpdel(:ncol,:),      lt=posinf_r8, gt=neginf_r8, &
@@ -1288,6 +1295,7 @@ end subroutine physics_ptend_copy
        state_out%liqflx(i) = state_in%liqflx(i) 
        state_out%iceflx(i) = state_in%iceflx(i) 
        state_out%pw(i) = state_in%pw(i) 
+       state_out%pwvapor(i) = state_in%pwvapor(i) 
        state_out%tw_ini(i) = state_in%tw_ini(i) 
        state_out%tw_cur(i) = state_in%tw_cur(i) 
     end do
@@ -1665,6 +1673,8 @@ subroutine physics_state_alloc(state,lchnk,psetcols)
   allocate(state%pw(psetcols), stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%cpe')
 
+  allocate(state%pwvapor(psetcols), stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%cpe')
 
 
   allocate(state%tw_ini(psetcols), stat=ierr)
@@ -1730,6 +1740,7 @@ subroutine physics_state_alloc(state,lchnk,psetcols)
   state%liqflx(:) = 0.0
   state%iceflx(:) = 0.0
   state%pw(:) = 0.0
+  state%pwvapor(:) = 0.0
 
 end subroutine physics_state_alloc
 
@@ -1869,6 +1880,8 @@ subroutine physics_state_dealloc(state)
 
 
   deallocate(state%pw, stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%cptermp')
+  deallocate(state%pwvapor, stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%cptermp')
 
 

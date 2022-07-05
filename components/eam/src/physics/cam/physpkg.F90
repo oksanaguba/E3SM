@@ -1848,9 +1848,9 @@ if (l_ac_energy_chk) then
     1000.0*cpice*state%t(:ncol,pver)*(                                          cam_out%precsc(:ncol)+cam_out%precsl(:ncol))
 
     elseif(use_enthalpy_cl) then
-    state%cpterme(:ncol) =          cpliq * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
-    state%cptermp(:ncol) = 1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
-                           1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precc(:ncol)
+    state%cpterme(:ncol) =          cpwv * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
+    state%cptermp(:ncol) = 1000.0 * cpwv * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
+                           1000.0 * cpwv * state%t(:ncol,pver) * cam_out%precc(:ncol)
     endif
 
     !collect all deltas and fluxes for glob mean
@@ -1901,6 +1901,7 @@ if (l_ac_energy_chk) then
                                    ncol, &
                                    qini=qini,cldliqini=cldliqini,cldiceini=cldiceini,&
                                    rainini=rainini,snowini=snowini,qdryini=qdryini)
+    state%te_cur(:ncol) = te_before_pw(:ncol)
     endif
 
     !compute energy of PW (DME adjust) term
@@ -1909,6 +1910,27 @@ if (l_ac_energy_chk) then
     state%oldq = state%q
     state%oldpdel = state%pdel
     state%oldps = state%ps
+
+
+
+    !compute PW of loading only vapor
+    call dme_adjust(state, qini, ztodt)
+
+    !compute energy after PW, TE with PW is in te_after_pw
+    !if cpstar is on, this version should use cpstar, but it does not need to use qini and other init tracer values
+    call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
+                                   ke(:ncol),se(:ncol),wv(:ncol),wl(:ncol),&
+                                   wi(:ncol),wr(:ncol),ws(:ncol),te_after_pw(:ncol),tw(:ncol), &
+                                   ncol)
+
+    !compute DME adjust energy vapor only
+    state%pwvapor(:ncol) = state%te_cur(:ncol) - te_after_pw(:ncol)
+    !now we can reset all variables after DME adjust
+    state%q = state%oldq
+    state%pdel = state%oldpdel
+    state%ps = state%oldps
+
+
 
     if(use_waterloading) then
       !WL version
@@ -1925,12 +1947,6 @@ if (l_ac_energy_chk) then
                                    wi(:ncol),wr(:ncol),ws(:ncol),te_after_pw(:ncol),tw(:ncol), &
                                    ncol)
      
-    !if we use cpstar, then it makes sense to redefine te_cur here, so that energy of 
-    !PW and fixer are measured in the same way
-    if (use_cpstar) then
-      state%te_cur(:ncol) = te_before_pw(:ncol)
-    endif
-
     !finally, compute DME adjust energy
     state%pw(:ncol) = state%te_cur(:ncol) - te_after_pw(:ncol) 
 
