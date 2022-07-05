@@ -1848,9 +1848,9 @@ if (l_ac_energy_chk) then
     1000.0*cpice*state%t(:ncol,pver)*(                                          cam_out%precsc(:ncol)+cam_out%precsl(:ncol))
 
     elseif(use_enthalpy_cl) then
-    state%cpterme(:ncol) =          cpwv * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
-    state%cptermp(:ncol) = 1000.0 * cpwv * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
-                           1000.0 * cpwv * state%t(:ncol,pver) * cam_out%precc(:ncol)
+    state%cpterme(:ncol) =          cpliq * state%t(:ncol,pver) * cam_in%cflx(:ncol,1)
+    state%cptermp(:ncol) = 1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
+                           1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precc(:ncol)
     endif
 
     !collect all deltas and fluxes for glob mean
