@@ -30,7 +30,7 @@ module physpkg
 
   use cam_control_mod,  only: ideal_phys, adiabatic
   use phys_control,     only: phys_do_flux_avg, phys_getopts, waccmx_is, &
-                              use_waterloading, use_cpstar, use_enthalpy_cpdry, &
+                              use_waterloading, use_cpstar, use_enthalpy_cpdry, use_enthalpy_cpwv, &
                               use_enthalpy_cl, use_enthalpy_theoretical, use_global_cpterms_dme, &
                               dycore_fixer_only
   use zm_conv,          only: do_zmconv_dcape_ull => trigdcape_ull, &
@@ -1851,6 +1851,11 @@ if (l_ac_energy_chk) then
     state%cpterme(:ncol) =          cpliq * state%t(:ncol,pver) * cam_in%cflx(:ncol,1)
     state%cptermp(:ncol) = 1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
                            1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precc(:ncol)
+
+    elseif(use_enthalpy_cpwv) then
+    state%cpterme(:ncol) =          cpwv * state%t(:ncol,pver) * cam_in%cflx(:ncol,1)
+    state%cptermp(:ncol) = 1000.0 * cpwv * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
+                           1000.0 * cpwv * state%t(:ncol,pver) * cam_out%precc(:ncol)
     endif
 
     !collect all deltas and fluxes for glob mean
@@ -3173,6 +3178,7 @@ subroutine print_wl_cpstar_info()
   if (masterproc) write(iulog,*) 'use_cpstar = ', use_cpstar
   if (masterproc) write(iulog,*) 'use_enthalpy_cpdry = ', use_enthalpy_cpdry
   if (masterproc) write(iulog,*) 'use_enthalpy_cl = ', use_enthalpy_cl
+  if (masterproc) write(iulog,*) 'use_enthalpy_cpwv = ', use_enthalpy_cpwv
   if (masterproc) write(iulog,*) 'use_enthalpy_theoretical = ', use_enthalpy_theoretical
   if (masterproc) write(iulog,*) 'use_global_cpterms_dme = ', use_global_cpterms_dme
   if (masterproc) write(iulog,*) 'dycore_fixer_only = ', dycore_fixer_only
@@ -3181,15 +3187,19 @@ subroutine print_wl_cpstar_info()
     call endrun ('PHYS init error:  use_cpstar=true requires use_waterloading=true')
   endif
 
-  if ((use_enthalpy_cpdry).and.(use_enthalpy_cl.or.use_enthalpy_theoretical)) then
+  if ((use_enthalpy_cpdry).and.(use_enthalpy_cl.or.use_enthalpy_theoretical.or.use_enthalpy_cpwv)) then
     call endrun ('PHYS init error:  use_enthalpy* -- only one should be set to true')
   endif
 
-  if ((use_enthalpy_cl).and.(use_enthalpy_cpdry.or.use_enthalpy_theoretical)) then
+  if ((use_enthalpy_cl).and.(use_enthalpy_cpdry.or.use_enthalpy_theoretical.or.use_enthalpy_cpwv)) then
     call endrun ('PHYS init error:  use_enthalpy* -- only one should be set to true')
   endif
 
-  if ((use_enthalpy_theoretical).and.(use_enthalpy_cl.or.use_enthalpy_cpdry)) then
+  if ((use_enthalpy_theoretical).and.(use_enthalpy_cl.or.use_enthalpy_cpdry.or.use_enthalpy_cpwv)) then
+    call endrun ('PHYS init error:  use_enthalpy* -- only one should be set to true')
+  endif
+
+  if ((use_enthalpy_cpwv).and.(use_enthalpy_cl.or.use_enthalpy_cpdry.or.use_enthalpy_theoretical)) then
     call endrun ('PHYS init error:  use_enthalpy* -- only one should be set to true')
   endif
 

@@ -1050,6 +1050,11 @@ Default: set by build-namelist.
 Default: set by build-namelist.
 </entry>
 
+<entry id="use_enthalpy_cpwv" type="logical" category="fixers"
+       group="phys_ctl_nl" valid_values="" >
+Default: set by build-namelist.
+</entry>
+
 <entry id="use_enthalpy_theoretical" type="logical" category="fixers"
        group="phys_ctl_nl" valid_values="" >
 Default: set by build-namelist.

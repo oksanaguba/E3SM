@@ -151,6 +151,7 @@ logical, public, protected :: use_waterloading         = .false.
 logical, public, protected :: use_cpstar               = .false.
 logical, public, protected :: use_enthalpy_cpdry       = .false.
 logical, public, protected :: use_enthalpy_cl          = .false.
+logical, public, protected :: use_enthalpy_cpwv        = .false.
 logical, public, protected :: use_enthalpy_theoretical = .false.
 logical, public, protected :: use_global_cpterms_dme   = .false.
 logical, public, protected :: dycore_fixer_only        = .false.
@@ -214,7 +215,7 @@ subroutine phys_ctl_readnl(nlfile)
       print_fixer_message, & 
       use_hetfrz_classnuc, use_gw_oro, use_gw_front, use_gw_convect, &
       use_gw_energy_fix, &
-      use_waterloading, use_cpstar, use_enthalpy_cpdry, use_enthalpy_cl, &
+      use_waterloading, use_cpstar, use_enthalpy_cpdry, use_enthalpy_cl, use_enthalpy_cpwv, &
       use_enthalpy_theoretical, use_global_cpterms_dme, dycore_fixer_only, &
       cld_macmic_num_steps, micro_do_icesupersat, &
       fix_g1_err_ndrop, ssalt_tuning, resus_fix, convproc_do_aer, &
@@ -293,6 +294,7 @@ subroutine phys_ctl_readnl(nlfile)
    call mpibcast(use_cpstar,                      1 , mpilog,  0, mpicom)
    call mpibcast(use_enthalpy_cpdry,              1 , mpilog,  0, mpicom)
    call mpibcast(use_enthalpy_cl,                 1 , mpilog,  0, mpicom)
+   call mpibcast(use_enthalpy_cpwv,               1 , mpilog,  0, mpicom)
    call mpibcast(use_enthalpy_theoretical,        1 , mpilog,  0, mpicom)
    call mpibcast(use_global_cpterms_dme,          1 , mpilog,  0, mpicom)
    call mpibcast(dycore_fixer_only,               1 , mpilog,  0, mpicom)
