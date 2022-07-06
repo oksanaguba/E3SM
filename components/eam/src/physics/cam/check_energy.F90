@@ -280,9 +280,16 @@ end subroutine check_energy_get_integrals
     lchnk = state%lchnk
     ncol  = state%ncol
 
+    if(use_cpstar) then
+    call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
+                                   ke,se,wv,wl,wi,wr,ws,te,tw, &
+                                   ncol, &
+                                   state%cpstar)
+    else
     call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
                                    ke,se,wv,wl,wi,wr,ws,te,tw, &
                                    ncol)
+    endif
 
     state%te_ini(:ncol) = te(:ncol)
     state%tw_ini(:ncol) = tw(:ncol)
@@ -1141,6 +1148,7 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
   subroutine energy_helper_eam_def(u,v,T,q,ps,pdel,phis, &
                                    ke,se,wv,wl,wi,wr,ws,te,tw, &     
                                    ncol, &
+                                   cpstar, &
                                    qini,cldliqini,cldiceini,rainini,snowini,qdryini, &
                                    teloc,psterm)
 
@@ -1161,6 +1169,7 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
     real(r8),            intent(in   ), optional :: snowini(pcols,pver)    ! initial specific humidity
     real(r8),            intent(in   ), optional :: qdryini(pcols,pver)    ! initial specific humidity
 
+    real(r8),            intent(in   ), optional :: cpstar(pcols,pver)
 
     real(r8), intent(inout) :: ke(ncol)     ! vertical integral of kinetic energy
     real(r8), intent(inout) :: se(ncol)     ! vertical integral of static energy
@@ -1181,7 +1190,21 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
 
     if (icldliq > 1  .and.  icldice > 1 .and. irain > 1 .and. isnow > 1) then
 
-       if(present(qini))then
+       if(present(cpstar))then
+
+!use cpstar
+
+!print *, "OG we use cpstar"
+       do i = 1, ncol
+          call energy_helper_eam_def_column(u(i,:),v(i,:),T(i,:),q(i,1:pver,1:pcnst),&
+                                   ps(i),pdel(i,:),phis(i), &
+                                   ke(i),se(i),wv(i),wl(i),wi(i),wr(i),ws(i),te(i),tw(i), &
+                                   cpstar=cpstar(i,:))
+       enddo
+
+       elseif(present(qini))then
+
+!use QINI
 
 !print *, "OG we use new def of energy with init fields"
        do i = 1, ncol
@@ -1189,10 +1212,11 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
                                    ps(i),pdel(i,:),phis(i), &
                                    ke(i),se(i),wv(i),wl(i),wi(i),wr(i),ws(i),te(i),tw(i), &
                                    qini=qini(i,:),cldliqini=cldliqini(i,:),cldiceini=cldiceini(i,:),&
-                                   rainini=rainini(i,:),snowini=snowini(i,:),qdryini=qdryini(i,:) )                             
+                                   rainini=rainini(i,:),snowini=snowini(i,:),qdryini=qdryini(i,:) )
        enddo
-
        else
+
+!use cpdry
 
        do i = 1, ncol
           call energy_helper_eam_def_column(u(i,:),v(i,:),T(i,:),q(i,1:pver,1:pcnst),&
@@ -1216,6 +1240,7 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
 
   subroutine energy_helper_eam_def_column(u,v,T,q,ps,pdel,phis, &
                                    ke,se,wv,wl,wi,wr,ws,te,tw, &
+                                   cpstar, &
                                    qini,cldliqini,cldiceini,rainini,snowini,qdryini, &
                                    teloc,psterm)
 
@@ -1234,6 +1259,7 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
     real(r8),            intent(in   ), optional :: rainini(pver)    ! initial specific humidity
     real(r8),            intent(in   ), optional :: snowini(pver)    ! initial specific humidity
     real(r8),            intent(in   ), optional :: qdryini(pver)    ! initial specific humidity
+    real(r8),            intent(in   ), optional :: cpstar(pver)    ! initial specific humidity
 
     real(r8), intent(inout) :: ke     ! vertical integral of kinetic energy
     real(r8), intent(inout) :: se     ! vertical integral of static energy
@@ -1249,7 +1275,7 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
     real(r8), intent(inout), optional :: psterm
 
     integer :: i,k
-    real(r8) :: cpstar, qdry
+    real(r8) :: cpstar_loc, qdry
 
     ! Compute vertical integrals of dry static energy and water (vapor, liquid, ice)
     ke = 0._r8
@@ -1282,17 +1308,23 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
          se = se +         t(k)*cpair*pdel(k)/gravit
        else
 
-         if (present(qini))then
+         if(present(cpstar))then
+           cpstar_loc = cpstar(k)
+         elseif (present(qini))then
            !cpstar based on qini etc  
-           cpstar = cpair*qdryini(k) + cpwv*qini(k) + cpliq*( cldliqini(k) + rainini(k) ) + &
-                    cpice*( cldiceini(k) + snowini(k) )
+           cpstar_loc = cpair*qdryini(k) + cpwv*qini(k) + cpliq*( cldliqini(k) + rainini(k) ) + &
+                        cpice*( cldiceini(k) + snowini(k) )
+#if 0
+!do not use such option
          else
            !cpstar based on current q
            qdry = 1.0_r8 - q(k,1) - q(k,icldliq) - q(k,icldice) - q(k,irain) - q(k,isnow)
-           cpstar = cpair*qdry + cpwv*q(k,1) + cpliq*( q(k,icldliq) + q(k,irain) ) + &
+           cpstar_loc = cpair*qdry + cpwv*q(k,1) + cpliq*( q(k,icldliq) + q(k,irain) ) + &
                                            cpice*( q(k,icldice) + q(k,isnow) )
+#endif
          endif
-         se = se +         t(k)*cpstar*pdel(k)/gravit
+
+         se = se +         t(k)*cpstar_loc*pdel(k)/gravit
 
        endif
 

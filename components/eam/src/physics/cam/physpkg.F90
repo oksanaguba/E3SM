@@ -2527,6 +2527,29 @@ subroutine tphysbc (ztodt,               &
     !===================================================
     ! Global mean total energy fixer
     !===================================================
+
+    qini     (:ncol,:pver) = state%q(:ncol,:pver,      1)
+    cldliqini(:ncol,:pver) = state%q(:ncol,:pver,icldliq)
+    cldiceini(:ncol,:pver) = state%q(:ncol,:pver,icldice)
+    rainini(:ncol,:pver) = state%q(:ncol,:pver,irain)
+    snowini(:ncol,:pver) = state%q(:ncol,:pver,isnow)
+
+    do i=1,ncol
+    do k=1,pver
+
+    qdryini(i,k) = 1.0 - state%q(i,k,       1) - state%q(i,k,icldliq) &
+                               - state%q(i,k,icldice)  - state%q(i,k,irain)   &
+                               - state%q(i,k,isnow)
+
+    !with updated *ini, update cpstar, too
+    !do it before dycore energy fixer
+    state%cpstar(i,k) = cpair*qdryini(i,k) + cpwv*qini(i,k) + cpliq*( cldliqini(i,k) + rainini(i,k) ) + &
+                        cpice*( cldiceini(i,k) + snowini(i,k) ) 
+    
+    enddo
+    enddo
+
+
 if (l_bc_energy_fix) then
 
     call t_startf('energy_fixer')
@@ -2539,22 +2562,6 @@ if (l_bc_energy_fix) then
     end if
     ! Save state for convective tendency calculations.
     call diag_conv_tend_ini(state, pbuf)
-
-    qini     (:ncol,:pver) = state%q(:ncol,:pver,      1)
-    cldliqini(:ncol,:pver) = state%q(:ncol,:pver,icldliq)
-    cldiceini(:ncol,:pver) = state%q(:ncol,:pver,icldice)
-    rainini(:ncol,:pver) = state%q(:ncol,:pver,irain)
-    snowini(:ncol,:pver) = state%q(:ncol,:pver,isnow)
-  
-    do i=1,ncol
-    do k=1,pver
-
-    qdryini(i,k) = 1.0 - state%q(i,k,       1) - state%q(i,k,icldliq) &
-                               - state%q(i,k,icldice)  - state%q(i,k,irain)   &
-                               - state%q(i,k,isnow)
-    enddo
-    enddo
-
 
     call outfld('TEOUT', teout       , pcols, lchnk   )
     call outfld('TEINP', state%te_ini, pcols, lchnk   )

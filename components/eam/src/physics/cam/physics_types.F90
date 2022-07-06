@@ -14,7 +14,7 @@ module physics_types
   use phys_grid,    only: get_ncols_p, get_rlon_all_p, get_rlat_all_p, get_gcol_all_p
   use cam_logfile,  only: iulog
   use cam_abortutils,   only: endrun
-  use phys_control, only: waccmx_is, use_mass_borrower, use_waterloading
+  use phys_control, only: waccmx_is, use_mass_borrower, use_waterloading, use_cpstar
   use shr_const_mod,only: shr_const_rwv
   use perf_mod,     only: t_startf, t_stopf
 
@@ -89,6 +89,7 @@ module physics_types
           lnpmid,  &! ln(pmid)
           lnpmiddry,&! log midpoint pressure dry (Pa) 
           exner,   &! inverse exner function w.r.t. surface pressure (ps/p)^(R/cp)
+          cpstar,  &
           zm        ! geopotential height above surface at midpoints (m)
 
      real(r8), dimension(:,:,:),allocatable      :: &
@@ -241,6 +242,7 @@ contains
     real(r8) :: zvirv(state%psetcols,pver)  ! Local zvir array pointer
 
     real(r8) :: rairv_loc(state%psetcols,pver)
+    real(r8) :: cpstar_loc(state%psetcols)
 
     ! PERGRO limits cldliq/ice for macro/microphysics:
     character(len=24), parameter :: pergro_cldlim_names(4) = &
@@ -375,13 +377,26 @@ contains
     ! Update dry static energy(moved from above for WACCM-X so updating after cpairv_loc update)
     !-------------------------------------------------------------------------------------------
     if(ptend%ls) then
+
+if(.not. use_cpstar) then
+
        do k = ptend%top_level, ptend%bot_level
           if (present(tend)) &
                tend%dtdt(:ncol,k) = tend%dtdt(:ncol,k) + ptend%s(:ncol,k)/cpair
-! we first assume that dS is really dEn, En=enthalpy=c_p*T, then 
-! dT = dEn/c_p, so, state%t += ds/c_p.
           state%t(:ncol,k) = state%t(:ncol,k) + ptend%s(:ncol,k)/cpair * dt
        end do
+
+else
+       do k = ptend%top_level, ptend%bot_level
+
+          cpstar_loc = state%cpstar(:ncol,k)
+
+          if (present(tend)) &
+               tend%dtdt(:ncol,k) = tend%dtdt(:ncol,k) + ptend%s(:ncol,k)/cpstar_loc
+          state%t(:ncol,k) = state%t(:ncol,k) + ptend%s(:ncol,k)/cpstar_loc * dt
+       end do
+endif
+
     end if
 
     if (ptend%ls .or. ptend%lq(1)) then
@@ -517,6 +532,8 @@ contains
     call shr_assert_in_domain(state%pwvapor(:ncol),      is_nan=.false., &
          varname="state%pwvapor",    msg=msg)
 
+    call shr_assert_in_domain(state%cpstar(:ncol,:),      is_nan=.false., &
+         varname="state%cpstar",    msg=msg)
 
     call shr_assert_in_domain(state%oldps(:ncol),          is_nan=.false., &
          varname="state%ps",        msg=msg)
@@ -610,6 +627,9 @@ contains
          varname="state%pw",    msg=msg)
     call shr_assert_in_domain(state%pwvapor(:ncol),     lt=posinf_r8, gt=neginf_r8, &
          varname="state%pwvapor",    msg=msg)
+
+    call shr_assert_in_domain(state%cpstar(:ncol,:),     lt=posinf_r8, gt=neginf_r8, &
+         varname="state%cpstar",    msg=msg)
 
     call shr_assert_in_domain(state%oldps(:ncol),          lt=posinf_r8, gt=0._r8, &
          varname="state%ps",        msg=msg)
@@ -1309,7 +1329,8 @@ end subroutine physics_ptend_copy
           state_out%omega(i,k)     = state_in%omega(i,k) 
           state_out%pmid(i,k)      = state_in%pmid(i,k) 
           state_out%pdel(i,k)      = state_in%pdel(i,k) 
-          state_out%oldpdel(i,k)      = state_in%oldpdel(i,k) 
+          state_out%oldpdel(i,k)   = state_in%oldpdel(i,k) 
+          state_out%cpstar(i,k)    = state_in%cpstar(i,k) 
           state_out%rpdel(i,k)     = state_in%rpdel(i,k) 
           state_out%lnpmid(i,k)    = state_in%lnpmid(i,k) 
           state_out%exner(i,k)     = state_in%exner(i,k) 
@@ -1598,6 +1619,9 @@ subroutine physics_state_alloc(state,lchnk,psetcols)
   allocate(state%oldpdel(psetcols,pver), stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%pdel')
 
+  allocate(state%cpstar(psetcols,pver), stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%cpstar')
+
  
   allocate(state%pdeldry(psetcols,pver), stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%pdeldry')
@@ -1709,6 +1733,7 @@ subroutine physics_state_alloc(state,lchnk,psetcols)
   state%pmiddry(:,:) = inf
   state%pdel(:,:) = inf
   state%oldpdel(:,:) = 0.0
+  state%cpstar(:,:) = cpair
   state%pdeldry(:,:) = inf
   state%rpdel(:,:) = inf
   state%rpdeldry(:,:) = inf
@@ -1807,6 +1832,8 @@ subroutine physics_state_dealloc(state)
   deallocate(state%oldpdel, stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%pdel')
 
+  deallocate(state%cpstar, stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%cpstar')
 
   deallocate(state%pdeldry, stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%pdeldry')
