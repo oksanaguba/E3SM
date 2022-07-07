@@ -53,6 +53,7 @@ module check_energy
   public :: check_energy_get_integrals ! get energy integrals computed in check_energy_gmean
   public :: check_energy_init      ! initialization of module
   public :: check_energy_timestep_init  ! timestep initialization of energy integrals and cumulative boundary fluxes
+  public :: check_energy_first_step
   public :: check_energy_chng      ! check changes in integrals against cumulative boundary fluxes
   public :: check_energy_gmean     ! global means of physics input and output total energy
   public :: check_energy_fix       ! add global mean energy difference as a heating
@@ -275,21 +276,42 @@ end subroutine check_energy_get_integrals
     integer  i,k                                   ! column, level indices
     real(r8) :: wr(state%ncol)                     ! vertical integral of rain
     real(r8) :: ws(state%ncol)                     ! vertical integral of snow
+
+    real(r8) :: qdryini
 !-----------------------------------------------------------------------
 
     lchnk = state%lchnk
     ncol  = state%ncol
 
-    if(use_cpstar) then
+!    qini     (:ncol,:pver) = state%q(:ncol,:pver,      1)
+!    cldliqini(:ncol,:pver) = state%q(:ncol,:pver,icldliq)
+!    cldiceini(:ncol,:pver) = state%q(:ncol,:pver,icldice)
+!    rainini(:ncol,:pver) = state%q(:ncol,:pver,irain)
+!    snowini(:ncol,:pver) = state%q(:ncol,:pver,isnow)
+
+    do i=1,ncol
+    do k=1,pver
+
+    qdryini = 1.0 - state%q(i,k,       1) - state%q(i,k,icldliq) &
+                  - state%q(i,k,icldice)  - state%q(i,k,irain)   &
+                  - state%q(i,k,isnow)
+
+    ! a lot of infrastructure for the energy fixer is called before qini* values are init-ed in tphysbc
+    !therefore, init cpstar here (this will be called in dp_coupling layer). not the best solution overall.
+
+    !do it before dycore energy fixer
+    state%cpstar(i,k) = cpair*qdryini + cpwv*state%q(i,k,1) + cpliq*( state%q(i,k,icldliq) + state%q(i,k,irain) ) + &
+                        cpice*( state%q(i,k,icldice) + state%q(i,k,isnow) ) 
+
+    enddo
+    enddo
+
+
+
     call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
                                    ke,se,wv,wl,wi,wr,ws,te,tw, &
                                    ncol, &
                                    state%cpstar)
-    else
-    call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
-                                   ke,se,wv,wl,wi,wr,ws,te,tw, &
-                                   ncol)
-    endif
 
     state%te_ini(:ncol) = te(:ncol)
     state%tw_ini(:ncol) = tw(:ncol)
@@ -310,6 +332,26 @@ end subroutine check_energy_get_integrals
     end if
 
   end subroutine check_energy_timestep_init
+
+  subroutine check_energy_first_step(state, tend, pbuf, col_type)
+    use physics_buffer, only : physics_buffer_desc, pbuf_set_field
+    type(physics_state),   intent(inout)    :: state
+    type(physics_tend ),   intent(inout)    :: tend
+    type(physics_buffer_desc), pointer      :: pbuf(:)
+    integer, optional                       :: col_type  ! Flag inidicating whether using grid or subcolumns
+
+    integer ncol 
+
+    ncol  = state%ncol
+
+! initialize physics buffer
+    if (is_first_step()) then
+       state%te_ini(:ncol) = 0._r8
+       call pbuf_set_field(pbuf, teout_idx, state%te_ini, col_type=col_type)
+    end if
+
+  end subroutine check_energy_first_step
+
 
 !===============================================================================
 
@@ -374,7 +416,8 @@ end subroutine check_energy_get_integrals
 
     call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
                                    ke,se,wv,wl,wi,wr,ws,te,tw, &
-                                   ncol)
+                                   ncol, &
+                                   cpstar=state%cpstar)
 
     ! compute expected values and tendencies
     do i = 1, ncol

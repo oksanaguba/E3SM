@@ -1899,26 +1899,32 @@ if (l_ac_energy_chk) then
     !current TE is in state%te_cur, but to mimic cpstar mechanism for DME adjust,
     !before we implement it for all phys_updates, we need TE based on cpstar^ini here,
     !if cpstar mechanism is on. If we dont use cpstar, we will use te_cur instead of te_before_pw.
-    if(use_cpstar) then
+
+!    if(use_cpstar) then
+!    call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
+!                                   ke(:ncol),se(:ncol),wv(:ncol),wl(:ncol),&
+!                                   wi(:ncol),wr(:ncol),ws(:ncol),te_before_pw(:ncol),tw(:ncol), &
+!                                   ncol, &
+!                                   qini=qini,cldliqini=cldliqini,cldiceini=cldiceini,&
+!                                   rainini=rainini,snowini=snowini,qdryini=qdryini)
     call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
                                    ke(:ncol),se(:ncol),wv(:ncol),wl(:ncol),&
                                    wi(:ncol),wr(:ncol),ws(:ncol),te_before_pw(:ncol),tw(:ncol), &
                                    ncol, &
-                                   qini=qini,cldliqini=cldliqini,cldiceini=cldiceini,&
-                                   rainini=rainini,snowini=snowini,qdryini=qdryini)
-    state%te_cur(:ncol) = te_before_pw(:ncol)
-    endif
+                                   cpstar=state%cpstar(:ncol,:))
 
-    !compute energy of PW (DME adjust) term
+    state%te_cur(:ncol) = te_before_pw(:ncol)
+!    endif
+
+    !compute energy of PW (DME adjust) terms
+
     !save dp, ps, q first
     !did mot save pint -- seems to not be used?
     state%oldq = state%q
     state%oldpdel = state%pdel
     state%oldps = state%ps
 
-
-
-    !compute PW of loading only vapor
+    !first, compute PW of loading only vapor
     call dme_adjust(state, qini, ztodt)
 
     !compute energy after PW, TE with PW is in te_after_pw
@@ -1926,7 +1932,8 @@ if (l_ac_energy_chk) then
     call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
                                    ke(:ncol),se(:ncol),wv(:ncol),wl(:ncol),&
                                    wi(:ncol),wr(:ncol),ws(:ncol),te_after_pw(:ncol),tw(:ncol), &
-                                   ncol)
+                                   ncol, &
+                                   cpstar=state%cpstar(:ncol,:))
 
     !compute DME adjust energy vapor only
     state%pwvapor(:ncol) = state%te_cur(:ncol) - te_after_pw(:ncol)
@@ -1950,7 +1957,8 @@ if (l_ac_energy_chk) then
     call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
                                    ke(:ncol),se(:ncol),wv(:ncol),wl(:ncol),&
                                    wi(:ncol),wr(:ncol),ws(:ncol),te_after_pw(:ncol),tw(:ncol), &
-                                   ncol)
+                                   ncol, &
+                                   cpstar=state%cpstar(:ncol,:))
      
     !finally, compute DME adjust energy
     state%pw(:ncol) = state%te_cur(:ncol) - te_after_pw(:ncol) 
@@ -2439,6 +2447,33 @@ subroutine tphysbc (ztodt,               &
     tend %dvdt(:ncol,:pver)  = 0._r8
 
 !!== KZ_WCON
+
+
+
+
+    qini     (:ncol,:pver) = state%q(:ncol,:pver,      1)
+    cldliqini(:ncol,:pver) = state%q(:ncol,:pver,icldliq)
+    cldiceini(:ncol,:pver) = state%q(:ncol,:pver,icldice)
+    rainini(:ncol,:pver) = state%q(:ncol,:pver,irain)
+    snowini(:ncol,:pver) = state%q(:ncol,:pver,isnow)
+
+    do i=1,ncol
+    do k=1,pver
+
+    qdryini(i,k) = 1.0 - state%q(i,k,       1) - state%q(i,k,icldliq) &
+                               - state%q(i,k,icldice)  - state%q(i,k,irain)   &
+                               - state%q(i,k,isnow)
+
+    !with updated *ini, update cpstar, too
+    !do it before dycore energy fixer
+
+!update cpstar in dp_coupling instead
+!    state%cpstar(i,k) = cpair*qdryini(i,k) + cpwv*qini(i,k) + cpliq*( cldliqini(i,k) + rainini(i,k) ) + &
+!                        cpice*( cldiceini(i,k) + snowini(i,k) )
+
+    enddo
+    enddo
+
     call check_qflx (state, tend, "PHYBC01", nstep, ztodt, cam_in%cflx(:,1))
     call check_water(state, tend, "PHYBC01", nstep, ztodt)
 
@@ -2528,36 +2563,16 @@ subroutine tphysbc (ztodt,               &
     ! Global mean total energy fixer
     !===================================================
 
-    qini     (:ncol,:pver) = state%q(:ncol,:pver,      1)
-    cldliqini(:ncol,:pver) = state%q(:ncol,:pver,icldliq)
-    cldiceini(:ncol,:pver) = state%q(:ncol,:pver,icldice)
-    rainini(:ncol,:pver) = state%q(:ncol,:pver,irain)
-    snowini(:ncol,:pver) = state%q(:ncol,:pver,isnow)
-
-    do i=1,ncol
-    do k=1,pver
-
-    qdryini(i,k) = 1.0 - state%q(i,k,       1) - state%q(i,k,icldliq) &
-                               - state%q(i,k,icldice)  - state%q(i,k,irain)   &
-                               - state%q(i,k,isnow)
-
-    !with updated *ini, update cpstar, too
-    !do it before dycore energy fixer
-    state%cpstar(i,k) = cpair*qdryini(i,k) + cpwv*qini(i,k) + cpliq*( cldliqini(i,k) + rainini(i,k) ) + &
-                        cpice*( cldiceini(i,k) + snowini(i,k) ) 
-    
-    enddo
-    enddo
-
-
 if (l_bc_energy_fix) then
 
     call t_startf('energy_fixer')
 
     tini(:ncol,:pver) = state%t(:ncol,:pver)
     if (dycore_is('LR') .or. dycore_is('SE'))  then
+       !if(.not. is_first_step())then
        call check_energy_fix(state, ptend, nstep, flx_heat)
        call physics_update(state, ptend, ztodt, tend)
+       !endif
        call check_energy_chng(state, tend, "chkengyfix", nstep, ztodt, zero, zero, zero, flx_heat)
     end if
     ! Save state for convective tendency calculations.
