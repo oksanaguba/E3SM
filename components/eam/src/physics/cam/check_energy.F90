@@ -26,7 +26,7 @@ module check_energy
 !   2020-01  O. Guba Correct energy density function
 !
 !---------------------------------------------------------------------------------
-   use shr_infnan_mod,only: shr_infnan_isnan
+  use shr_infnan_mod,only: shr_infnan_isnan
   use shr_kind_mod,    only: r8 => shr_kind_r8
   use ppgrid,          only: pcols, pver, begchunk, endchunk
   use spmd_utils,      only: masterproc
@@ -312,17 +312,6 @@ end subroutine check_energy_get_integrals
                                    ke,se,wv,wl,wi,wr,ws,te,tw, &
                                    ncol, &
                                    state%cpstar)
-!typical value 2579760284.15863 
-!print *, 'te(:col)',te(:ncol)
-do i=1,ncol
-
-if( shr_infnan_isnan(te(i))) then
-print *, 'OGGGGGG te i is', te(i), i
-print *, "1st step?", is_first_step()
-endif
-
-enddo
-
 
     state%te_ini(:ncol) = te(:ncol)
     state%tw_ini(:ncol) = tw(:ncol)
@@ -540,30 +529,6 @@ enddo
        te(:ncol,lchnk,11) = state(lchnk)%dliquid(:ncol)
        te(:ncol,lchnk,12) = state(lchnk)%dice(:ncol)
        te(:ncol,lchnk,13) = state(lchnk)%pwvapor(:ncol)
-
-do i=1,ncol
-if( shr_infnan_isnan(teout(i))) print *, 'OGGGGGG gmean te i is', teout(i)
-enddo
-
-
-#if 0
-if (lchnk == begchunk)then
-print *,'teout', teout(1)
-       ! surface pressure for heating rate
-print *,'pint', state(lchnk)%pint(1,pver+1)
-print *,'cpp', state(lchnk)%cptermp(1)
-print *, 'cpe', state(lchnk)%cpterme(1)
-print *, 'pw', state(lchnk)%pw(1)
-
-print *,'qflx',  state(lchnk)%qflx(1)
-print *,'liqflx',  state(lchnk)%liqflx(1)
-print *,'iceflx',  state(lchnk)%iceflx(1)
-print *,'dvapor',  state(lchnk)%dvapor(1)
-print *,'dliq',  state(lchnk)%dliquid(1)
-print *,'dice',  state(lchnk)%dice(1)
-print *,'pwva',  state(lchnk)%pwvapor(1)
-endif
-#endif
 
     end do
 

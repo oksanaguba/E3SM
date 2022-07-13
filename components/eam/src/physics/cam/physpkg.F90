@@ -12,8 +12,7 @@ module physpkg
   ! July 2015   B. Singh       Added code for unified convective transport
   !-----------------------------------------------------------------------
 
-  use shr_infnan_mod,only: shr_infnan_isnan
-
+  use shr_infnan_mod,   only: shr_infnan_isnan
   use shr_kind_mod,     only: i8 => shr_kind_i8, r8 => shr_kind_r8
   use spmd_utils,       only: masterproc
   use physconst,        only: latvap, latice, rh2o, cpair, cpwv, cpliq, cpice, gravit
@@ -1877,66 +1876,13 @@ if (l_ac_energy_chk) then
     state%liqflx(:ncol) = 1000.0*(cam_out%precl(:ncol)+cam_out%precc(:ncol)-cam_out%precsc(:ncol)-cam_out%precsl(:ncol))
     state%iceflx(:ncol) = 1000.0*(                                          cam_out%precsc(:ncol)+cam_out%precsl(:ncol))
 
-
-do i=1,ncol
-if( shr_infnan_isnan(state%te_cur(i))) then
-print *, 'LABEL 1 FAIL'
-endif
-enddo
-
-#if 0
-!!!! debug
-    !qini(:ncol,1:71)=state%q(:ncol,1:71,1)
-    !qini(:ncol,72)  =state%q(:ncol,72  ,1) + 0.02
-    cldliqini(:ncol,1:72)  =state%q(:ncol,1:72,icldliq)
-    cldiceini(:ncol,1:72)  =state%q(:ncol,1:72,icldice)
-    snowini(:ncol,1:72)  =state%q(:ncol,1:72,isnow)
-    rainini(:ncol,1:72)  =state%q(:ncol,1:72,irain)
-    do i=1,ncol
-    qdryini(i,1:72)  = 1.0 - qini(i,1:72) - cldliqini(i,1:72) - cldiceini(i,1:72) &
-                     - snowini(i,1:72) - rainini(i,1:72)
-    enddo
-!compare cflx with mass of dq vapor
-    qvmass(:ncol) = 0.0
-    do k=1,pver
-    qvmass(:ncol) = qvmass(:ncol) + (qini(:ncol,k) - state%q(:ncol,k,1))*state%pdel(:ncol,k)/gravit 
-    enddo
-#endif
-
-    !current TE is in state%te_cur, but to mimic cpstar mechanism for DME adjust,
-    !before we implement it for all phys_updates, we need TE based on cpstar^ini here,
-    !if cpstar mechanism is on. If we dont use cpstar, we will use te_cur instead of te_before_pw.
-
-!    if(use_cpstar) then
-!    call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
-!                                   ke(:ncol),se(:ncol),wv(:ncol),wl(:ncol),&
-!                                   wi(:ncol),wr(:ncol),ws(:ncol),te_before_pw(:ncol),tw(:ncol), &
-!                                   ncol, &
-!                                   qini=qini,cldliqini=cldliqini,cldiceini=cldiceini,&
-!                                   rainini=rainini,snowini=snowini,qdryini=qdryini)
     call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
                                    ke(:ncol),se(:ncol),wv(:ncol),wl(:ncol),&
                                    wi(:ncol),wr(:ncol),ws(:ncol),te_before_pw(:ncol),tw(:ncol), &
                                    ncol, &
                                    cpstar=state%cpstar(:ncol,:))
 
-!do i=1,ncol
-!if( any(shr_infnan_isnan(state%cpstar(i,:)))) then
-!print *, 'LABEL cpstar 2 FAIL'
-!endif
-!enddo
-
-
     state%te_cur(:ncol) = te_before_pw(:ncol)
-
-do i=1,ncol
-if( shr_infnan_isnan(state%te_cur(i))) then
-print *, 'LABEL 2 FAIL'
-print *, 'cpstar', state%cpstar(:ncol,:)
-endif
-enddo
-
-!    endif
 
     !compute energy of PW (DME adjust) terms
 
@@ -1957,19 +1903,12 @@ enddo
                                    ncol, &
                                    cpstar=state%cpstar(:ncol,:))
 
-do i=1,ncol
-if( shr_infnan_isnan(te_after_pw(i))) then
-print *, 'LABEL 3 FAIL'
-endif
-enddo
-
     !compute DME adjust energy vapor only
     state%pwvapor(:ncol) = state%te_cur(:ncol) - te_after_pw(:ncol)
     !now we can reset all variables after DME adjust
     state%q = state%oldq
     state%pdel = state%oldpdel
     state%ps = state%oldps
-
 
 
     if(use_waterloading) then
@@ -1990,18 +1929,6 @@ enddo
      
     !finally, compute DME adjust energy
     state%pw(:ncol) = state%te_cur(:ncol) - te_after_pw(:ncol) 
-
-#if 0
-!!!!!!!! debug
-!now compare PW and 0.02*... number
-   i=1
-!      print *, 'PW, enthalpy', state%pw(i), cpwv*state%t(i,pver)*qvmass(i), &
-!                               cpwv*state%t(i,pver)*qvmass(i)/state%pw(i)
-      print *, 'PW, enthalpy', state%pw(i), state%cpterme(i)*ztodt, &
-                               state%cpterme(i)*ztodt/state%pw(i)  
-      print *, 'QVmass, cflx', qvmass(i), cam_in%cflx(i,1)*ztodt, &
-                               cam_in%cflx(i,1)*ztodt/qvmass(i)
-#endif
 
     !units and dt:
     !for cpdry, PW has to match cp terms, and it does
