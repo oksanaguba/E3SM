@@ -2617,6 +2617,8 @@ if (l_dry_adj) then
     ptend%q(:ncol,:,1) = (ptend%q(:ncol,:,1) - state%q(:ncol,:,1))/ztodt
     call physics_update(state, ptend, ztodt, tend)
 
+    call check_energy_chng(state, tend, "daadadj", nstep, ztodt, zero, zero, zero, zero)
+
     call t_stopf('dry_adjustment')
 
 end if
