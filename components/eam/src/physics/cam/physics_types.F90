@@ -619,18 +619,20 @@ endif
     call shr_assert_in_domain(state%te_cur(:ncol),      lt=posinf_r8, gt=neginf_r8, &
          varname="state%te_cur",    msg=msg)
 
+!not sure which criteria to use here
     call shr_assert_in_domain(state%cpterme(:ncol),     lt=posinf_r8, gt=neginf_r8, &
          varname="state%cpterme",    msg=msg)
     call shr_assert_in_domain(state%cptermp(:ncol),     lt=posinf_r8, gt=neginf_r8, &
          varname="state%cptermp",    msg=msg)
-    call shr_assert_in_domain(state%pw(:ncol),     lt=posinf_r8, gt=neginf_r8, &
+    call shr_assert_in_domain(state%pw(:ncol),          lt=posinf_r8, gt=neginf_r8, &
          varname="state%pw",    msg=msg)
     call shr_assert_in_domain(state%pwvapor(:ncol),     lt=posinf_r8, gt=neginf_r8, &
          varname="state%pwvapor",    msg=msg)
 
-    call shr_assert_in_domain(state%cpstar(:ncol,:),     lt=posinf_r8, gt=neginf_r8, &
+    call shr_assert_in_domain(state%cpstar(:ncol,:),    lt=posinf_r8, gt=neginf_r8, &
          varname="state%cpstar",    msg=msg)
 
+!set them where ps and pdel are set
     call shr_assert_in_domain(state%oldps(:ncol),          lt=posinf_r8, gt=0._r8, &
          varname="state%ps",        msg=msg)
     call shr_assert_in_domain(state%oldpdel(:ncol,:),      lt=posinf_r8, gt=neginf_r8, &

@@ -12,6 +12,7 @@ module physpkg
   ! July 2015   B. Singh       Added code for unified convective transport
   !-----------------------------------------------------------------------
 
+  use shr_infnan_mod,only: shr_infnan_isnan
 
   use shr_kind_mod,     only: i8 => shr_kind_i8, r8 => shr_kind_r8
   use spmd_utils,       only: masterproc
@@ -1877,6 +1878,12 @@ if (l_ac_energy_chk) then
     state%iceflx(:ncol) = 1000.0*(                                          cam_out%precsc(:ncol)+cam_out%precsl(:ncol))
 
 
+do i=1,ncol
+if( shr_infnan_isnan(state%te_cur(i))) then
+print *, 'LABEL 1 FAIL'
+endif
+enddo
+
 #if 0
 !!!! debug
     !qini(:ncol,1:71)=state%q(:ncol,1:71,1)
@@ -1913,7 +1920,22 @@ if (l_ac_energy_chk) then
                                    ncol, &
                                    cpstar=state%cpstar(:ncol,:))
 
+!do i=1,ncol
+!if( any(shr_infnan_isnan(state%cpstar(i,:)))) then
+!print *, 'LABEL cpstar 2 FAIL'
+!endif
+!enddo
+
+
     state%te_cur(:ncol) = te_before_pw(:ncol)
+
+do i=1,ncol
+if( shr_infnan_isnan(state%te_cur(i))) then
+print *, 'LABEL 2 FAIL'
+print *, 'cpstar', state%cpstar(:ncol,:)
+endif
+enddo
+
 !    endif
 
     !compute energy of PW (DME adjust) terms
@@ -1934,6 +1956,12 @@ if (l_ac_energy_chk) then
                                    wi(:ncol),wr(:ncol),ws(:ncol),te_after_pw(:ncol),tw(:ncol), &
                                    ncol, &
                                    cpstar=state%cpstar(:ncol,:))
+
+do i=1,ncol
+if( shr_infnan_isnan(te_after_pw(i))) then
+print *, 'LABEL 3 FAIL'
+endif
+enddo
 
     !compute DME adjust energy vapor only
     state%pwvapor(:ncol) = state%te_cur(:ncol) - te_after_pw(:ncol)

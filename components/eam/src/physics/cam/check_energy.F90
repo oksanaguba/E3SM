@@ -26,6 +26,7 @@ module check_energy
 !   2020-01  O. Guba Correct energy density function
 !
 !---------------------------------------------------------------------------------
+   use shr_infnan_mod,only: shr_infnan_isnan
   use shr_kind_mod,    only: r8 => shr_kind_r8
   use ppgrid,          only: pcols, pver, begchunk, endchunk
   use spmd_utils,      only: masterproc
@@ -53,7 +54,6 @@ module check_energy
   public :: check_energy_get_integrals ! get energy integrals computed in check_energy_gmean
   public :: check_energy_init      ! initialization of module
   public :: check_energy_timestep_init  ! timestep initialization of energy integrals and cumulative boundary fluxes
-  public :: check_energy_first_step
   public :: check_energy_chng      ! check changes in integrals against cumulative boundary fluxes
   public :: check_energy_gmean     ! global means of physics input and output total energy
   public :: check_energy_fix       ! add global mean energy difference as a heating
@@ -312,6 +312,17 @@ end subroutine check_energy_get_integrals
                                    ke,se,wv,wl,wi,wr,ws,te,tw, &
                                    ncol, &
                                    state%cpstar)
+!typical value 2579760284.15863 
+!print *, 'te(:col)',te(:ncol)
+do i=1,ncol
+
+if( shr_infnan_isnan(te(i))) then
+print *, 'OGGGGGG te i is', te(i), i
+print *, "1st step?", is_first_step()
+endif
+
+enddo
+
 
     state%te_ini(:ncol) = te(:ncol)
     state%tw_ini(:ncol) = tw(:ncol)
@@ -332,25 +343,6 @@ end subroutine check_energy_get_integrals
     end if
 
   end subroutine check_energy_timestep_init
-
-  subroutine check_energy_first_step(state, tend, pbuf, col_type)
-    use physics_buffer, only : physics_buffer_desc, pbuf_set_field
-    type(physics_state),   intent(inout)    :: state
-    type(physics_tend ),   intent(inout)    :: tend
-    type(physics_buffer_desc), pointer      :: pbuf(:)
-    integer, optional                       :: col_type  ! Flag inidicating whether using grid or subcolumns
-
-    integer ncol 
-
-    ncol  = state%ncol
-
-! initialize physics buffer
-    if (is_first_step()) then
-       state%te_ini(:ncol) = 0._r8
-       call pbuf_set_field(pbuf, teout_idx, state%te_ini, col_type=col_type)
-    end if
-
-  end subroutine check_energy_first_step
 
 
 !===============================================================================
@@ -519,6 +511,7 @@ end subroutine check_energy_get_integrals
                                          ! total energy of input/output states (copy)
     real(r8) :: te_glob(13)               ! global means of total energy
     real(r8), pointer :: teout(:)
+    integer :: i
 !-----------------------------------------------------------------------
 
     ! Copy total energy out of input and output states
@@ -532,7 +525,7 @@ end subroutine check_energy_get_integrals
        ! output energy
        call pbuf_get_field(pbuf_get_chunk(pbuf2d,lchnk),teout_idx, teout)
 
-       te(:ncol,lchnk,2) = teout(1:ncol)
+       te(:ncol,lchnk,2) = teout(:ncol)
        ! surface pressure for heating rate
        te(:ncol,lchnk,3) = state(lchnk)%pint(:ncol,pver+1)
 
@@ -547,6 +540,31 @@ end subroutine check_energy_get_integrals
        te(:ncol,lchnk,11) = state(lchnk)%dliquid(:ncol)
        te(:ncol,lchnk,12) = state(lchnk)%dice(:ncol)
        te(:ncol,lchnk,13) = state(lchnk)%pwvapor(:ncol)
+
+do i=1,ncol
+if( shr_infnan_isnan(teout(i))) print *, 'OGGGGGG gmean te i is', teout(i)
+enddo
+
+
+#if 0
+if (lchnk == begchunk)then
+print *,'teout', teout(1)
+       ! surface pressure for heating rate
+print *,'pint', state(lchnk)%pint(1,pver+1)
+print *,'cpp', state(lchnk)%cptermp(1)
+print *, 'cpe', state(lchnk)%cpterme(1)
+print *, 'pw', state(lchnk)%pw(1)
+
+print *,'qflx',  state(lchnk)%qflx(1)
+print *,'liqflx',  state(lchnk)%liqflx(1)
+print *,'iceflx',  state(lchnk)%iceflx(1)
+print *,'dvapor',  state(lchnk)%dvapor(1)
+print *,'dliq',  state(lchnk)%dliquid(1)
+print *,'dice',  state(lchnk)%dice(1)
+print *,'pwva',  state(lchnk)%pwvapor(1)
+endif
+#endif
+
     end do
 
     ! Compute global means of input and output energies and of
@@ -1319,6 +1337,9 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
 
     integer :: i,k
     real(r8) :: cpstar_loc, qdry
+
+    !default value, if not cpstar or computing cpstar from qini
+    cpstar_loc = cpair
 
     ! Compute vertical integrals of dry static energy and water (vapor, liquid, ice)
     ke = 0._r8

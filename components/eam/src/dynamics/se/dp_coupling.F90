@@ -176,6 +176,9 @@ CONTAINS
           ioff = idmb2(1)
           phys_state(lchnk)%ps(icol)   = ps_tmp(ioff,ie)
           phys_state(lchnk)%phis(icol) = zs_tmp(ioff,ie)
+
+          phys_state(lchnk)%oldps(icol)   = ps_tmp(ioff,ie)
+
           do ilyr = 1,pver
             phys_state(lchnk)%t(icol,ilyr)     = T_tmp(ioff,ilyr,ie)	   
             phys_state(lchnk)%u(icol,ilyr)     = uv_tmp(ioff,1,ilyr,ie)
@@ -190,6 +193,7 @@ CONTAINS
           do m = 1,pcnst
             do ilyr = 1,pver
               phys_state(lchnk)%q(icol,ilyr,m) = q_tmp(ioff,ilyr,m,ie)
+              phys_state(lchnk)%oldq(icol,ilyr,m) = q_tmp(ioff,ilyr,m,ie)
             end do ! ilyr
           end do ! m
         end do ! icol
@@ -254,6 +258,9 @@ CONTAINS
         do icol = 1,ncols
           phys_state(lchnk)%ps  (icol) = cbuffer(cpter(icol,0))
           phys_state(lchnk)%phis(icol) = cbuffer(cpter(icol,0)+1)
+
+          phys_state(lchnk)%oldps  (icol) = cbuffer(cpter(icol,0))
+
           do ilyr = 1,pver
             phys_state(lchnk)%t    (icol,ilyr) = cbuffer(cpter(icol,ilyr))
             phys_state(lchnk)%u    (icol,ilyr) = cbuffer(cpter(icol,ilyr)+1)
@@ -265,6 +272,7 @@ CONTAINS
              end if
              do m = 1,pcnst
                 phys_state(lchnk)%q(icol,ilyr,m) = cbuffer(cpter(icol,ilyr)+tsize-pcnst-1+m)
+                phys_state(lchnk)%oldq(icol,ilyr,m) = cbuffer(cpter(icol,ilyr)+tsize-pcnst-1+m)
              end do ! m
           end do ! ilyr
         end do ! icol
@@ -551,6 +559,9 @@ CONTAINS
         do i = 1,ncol
           phys_state(lchnk)%pdel (i,k)  = phys_state(lchnk)%pint(i,k+1) &
                                          -phys_state(lchnk)%pint(i,k)
+
+          phys_state(lchnk)%oldpdel (i,k) = phys_state(lchnk)%pdel (i,k) 
+
           phys_state(lchnk)%rpdel(i,k)  = 1._r8/phys_state(lchnk)%pdel(i,k)
           phys_state(lchnk)%exner (i,k) = (phys_state(lchnk)%pint(i,pver+1) &
                                           /phys_state(lchnk)%pmid(i,k))**cappa
