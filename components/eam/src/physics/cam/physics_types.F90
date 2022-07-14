@@ -209,7 +209,7 @@ contains
 
   end subroutine physics_type_alloc
 !===============================================================================
-  subroutine physics_update_main(state, ptend, dt, tend)
+  subroutine physics_update_main(state, ptend, dt, tend, isinterface)
 !-----------------------------------------------------------------------
 ! Update the state and or tendency structure with the parameterization tendencies
 !-----------------------------------------------------------------------
@@ -229,6 +229,7 @@ contains
 
     type(physics_tend ), intent(inout), optional  :: tend  ! Physics tendencies over timestep
                     ! This is usually only needed by calls from physpkg.
+    logical, intent(in) :: isinterface
 !
 !---------------------------Local storage-------------------------------
     integer :: i,k,m                               ! column,level,constituent indices
@@ -254,7 +255,10 @@ contains
 
     ! Whether to do validation of state on each call.
     logical :: state_debug_checks
+    logical :: use_cpdry
 
+    use_cpdry = .true.
+   
     !-----------------------------------------------------------------------
 
     ! The column radiation model does not update the state
@@ -378,24 +382,26 @@ contains
     !-------------------------------------------------------------------------------------------
     if(ptend%ls) then
 
-if(.not. use_cpstar) then
+       use_cpdry = ( (.not.isinterface) .or. (.not. use_cpstar))
+
+       !do k = ptend%top_level, ptend%bot_level
+       !   if (present(tend)) &
+       !        tend%dtdt(:ncol,k) = tend%dtdt(:ncol,k) + ptend%s(:ncol,k)/cpair
+       !   state%t(:ncol,k) = state%t(:ncol,k) + ptend%s(:ncol,k)/cpair * dt
+       !end do
 
        do k = ptend%top_level, ptend%bot_level
-          if (present(tend)) &
-               tend%dtdt(:ncol,k) = tend%dtdt(:ncol,k) + ptend%s(:ncol,k)/cpair
-          state%t(:ncol,k) = state%t(:ncol,k) + ptend%s(:ncol,k)/cpair * dt
-       end do
 
-else
-       do k = ptend%top_level, ptend%bot_level
-
-          cpstar_loc = state%cpstar(:ncol,k)
+          if(use_cpdry) then
+             cpstar_loc(:ncol) = cpair
+          else
+             cpstar_loc(:ncol) = state%cpstar(:ncol,k)
+          endif
 
           if (present(tend)) &
-               tend%dtdt(:ncol,k) = tend%dtdt(:ncol,k) + ptend%s(:ncol,k)/cpstar_loc
-          state%t(:ncol,k) = state%t(:ncol,k) + ptend%s(:ncol,k)/cpstar_loc * dt
+               tend%dtdt(:ncol,k) = tend%dtdt(:ncol,k) + ptend%s(:ncol,k)/cpstar_loc(:ncol)
+          state%t(:ncol,k) = state%t(:ncol,k) + ptend%s(:ncol,k)/cpstar_loc(:ncol) * dt
        end do
-endif
 
     end if
 
@@ -408,6 +414,7 @@ endif
                           state%zi    , state%zm      ,&
                           ncol)
 
+!keep SE defibed via cpdry. It is used in physics and should remain 'dry'.
        do k = ptend%top_level, ptend%bot_level
           state%s(:ncol,k) = state%t(:ncol,k  )*cpair &
                            + gravit*state%zm(:ncol,k) + state%phis(:ncol)

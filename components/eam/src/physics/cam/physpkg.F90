@@ -1186,6 +1186,7 @@ subroutine phys_run1_adiabatic_or_ideal(ztodt, phys_state, phys_tend,  pbuf2d)
 
        if (dycore_is('LR') .or. dycore_is('SE') ) then
           call check_energy_fix(phys_state(c), ptend(c), nstep, flx_heat)
+          !not ready for cpstar
           call physics_update(phys_state(c), ptend(c), ztodt, phys_tend(c))
           call check_energy_chng(phys_state(c), phys_tend(c), "chkengyfix", nstep, ztodt, &
                zero, zero, zero, flx_heat)
@@ -1654,25 +1655,25 @@ if (l_tracer_aero) then
     ! Test tracers
 
     call tracers_timestep_tend(state, ptend, cam_in%cflx, cam_in%landfrac, ztodt)      
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
     call check_tracers_chng(state, tracerint, "tracers_timestep_tend", nstep, ztodt,   &
          cam_in%cflx)
 
     call aoa_tracers_timestep_tend(state, ptend, cam_in%cflx, cam_in%landfrac, ztodt)      
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
     call check_tracers_chng(state, tracerint, "aoa_tracers_timestep_tend", nstep, ztodt,   &
          cam_in%cflx)
     
     ! add tendency from aircraft emissions
     call co2_cycle_set_ptend(state, pbuf, ptend)
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
 
     ! Chemistry calculation
     if (chem_is_active()) then
        call chem_timestep_tend(state, ptend, cam_in, cam_out, ztodt, &
             pbuf,  fh2o, fsds)
 
-       call physics_update(state, ptend, ztodt, tend)
+       call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
        call check_energy_chng(state, tend, "chem", nstep, ztodt, fh2o, zero, zero, zero)
        call check_tracers_chng(state, tracerint, "chem_timestep_tend", nstep, ztodt, &
             cam_in%cflx)
@@ -1694,7 +1695,7 @@ end if ! l_tracer_aero
        call clubb_surface ( state, ptend, ztodt, cam_in, surfric, obklen)
        
        ! Update surface flux constituents 
-       call physics_update(state, ptend, ztodt, tend)
+       call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
 
     else
     if (l_vdiff) then
@@ -1712,7 +1713,7 @@ end if ! l_tracer_aero
        call mspd_intr (ztodt    ,state    ,ptend)
     endif
 
-       call physics_update(state, ptend, ztodt, tend)
+       call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
        call t_stopf ('vertical_diffusion_tend')
     
     end if ! l_vdiff
@@ -1725,7 +1726,7 @@ if (l_rayleigh) then
     !===================================================
     call t_startf('rayleigh_friction')
     call rayleigh_friction_tend( ztodt, state, ptend)
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
     call t_stopf('rayleigh_friction')
 
     if (do_clubb_sgs) then
@@ -1744,7 +1745,7 @@ if (l_tracer_aero) then
     !  aerosol dry deposition processes
     call t_startf('aero_drydep')
     call aero_model_drydep( state, pbuf, obklen, surfric, cam_in, ztodt, cam_out, ptend )
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
     call t_stopf('aero_drydep')
 
     !---------------------------------------------------------------------------------
@@ -1762,14 +1763,14 @@ if (l_gw_drag) then
 
     call gw_tend(state, sgh, pbuf, ztodt, ptend, cam_in)
 
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
     ! Check energy integrals
     call check_energy_chng(state, tend, "gwdrag", nstep, ztodt, zero, zero, zero, zero)
     call t_stopf('gw_tend')
 
     ! QBO relaxation
     call qbo_relax(state, pbuf, ptend)
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
     ! Check energy integrals
     call check_energy_chng(state, tend, "qborelax", nstep, ztodt, zero, zero, zero, zero)
 
@@ -1788,7 +1789,7 @@ if (l_gw_drag) then
        call ionos_intr(state, ptend, pbuf, ztodt)
     endif
 
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
     ! Check energy integrals
     call check_energy_chng(state, tend, "iondrag", nstep, ztodt, zero, zero, zero, zero)
     call t_stopf  ( 'iondrag' )
@@ -1800,7 +1801,7 @@ end if ! l_gw_drag
     !===================================================
     if((Nudge_Model).and.(Nudge_ON)) then
       call nudging_timestep_tend(state,ptend)
-      call physics_update(state,ptend,ztodt,tend)
+      call physics_update(state,ptend,ztodt,tend, isinterface=.true.)
     endif
 
 if (l_ac_energy_chk) then
@@ -2526,7 +2527,7 @@ if (l_bc_energy_fix) then
     if (dycore_is('LR') .or. dycore_is('SE'))  then
        !if(.not. is_first_step())then
        call check_energy_fix(state, ptend, nstep, flx_heat)
-       call physics_update(state, ptend, ztodt, tend)
+       call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
        !endif
        call check_energy_chng(state, tend, "chkengyfix", nstep, ztodt, zero, zero, zero, flx_heat)
     end if
@@ -2570,9 +2571,9 @@ if (l_dry_adj) then
          ptend%s, ptend%q(1,1,1))
     ptend%s(:ncol,:)   = (ptend%s(:ncol,:)   - state%t(:ncol,:)  )/ztodt * cpair
     ptend%q(:ncol,:,1) = (ptend%q(:ncol,:,1) - state%q(:ncol,:,1))/ztodt
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
 
-    call check_energy_chng(state, tend, "daadadj", nstep, ztodt, zero, zero, zero, zero)
+    call check_energy_chng(state, tend, "dadadj", nstep, ztodt, zero, zero, zero, zero)
 
     call t_stopf('dry_adjustment')
 
@@ -2596,7 +2597,7 @@ end if
          dsubcld, jt, maxg, ideep, lengath) 
     call t_stopf('convect_deep_tend')
 
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
 
     call pbuf_get_field(pbuf, prec_dp_idx, prec_dp )
     call pbuf_get_field(pbuf, snow_dp_idx, snow_dp )
@@ -2628,7 +2629,7 @@ end if
          state      , ptend  ,  pbuf   , sh_e_ed_ratio   , sgh, sgh30, cam_in) 
     call t_stopf ('convect_shallow_tend')
 
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
 
     flx_cnd(:ncol) = prec_sh(:ncol) + rliq2(:ncol)
     call check_energy_chng(state, tend, "convect_shallow", nstep, ztodt, zero, flx_cnd, snow_sh, zero)
@@ -2665,7 +2666,7 @@ end if
             cmfmc,   cmfmc2, &
             cam_in%ts,      cam_in%sst,        zdu)
 
-       call physics_update(state, ptend, ztodt, tend)
+       call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
        call check_energy_chng(state, tend, "cldwat_tend", nstep, ztodt, zero, prec_str(:ncol), snow_str(:ncol), zero)
 
        call t_stopf('stratiform_tend')
@@ -2696,7 +2697,7 @@ end if
 
             call physics_ptend_scale(ptend, 1._r8/cld_macmic_num_steps, ncol)
 
-            call physics_update(state, ptend, ztodt, tend)
+            call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
             call check_energy_chng(state, tend, "mp_aero_tend", nstep, ztodt, zero, zero, zero, zero)      
 
           endif
@@ -2729,7 +2730,7 @@ end if
              ! ptend down by the number of substeps, then applying it for
              ! the full time (ztodt).
              call physics_ptend_scale(ptend, 1._r8/cld_macmic_num_steps, ncol)          
-             call physics_update(state, ptend, ztodt, tend)
+             call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
              call check_energy_chng(state, tend, "macrop_tend", nstep, ztodt, &
                   zero, flx_cnd/cld_macmic_num_steps, &
                   det_ice/cld_macmic_num_steps, flx_heat/cld_macmic_num_steps)
@@ -2772,7 +2773,7 @@ end if
                 call physics_ptend_scale(ptend, 1._r8/cld_macmic_num_steps, ncol)
                 !    Update physics tendencies and copy state to state_eq, because that is 
                 !      input for microphysics              
-                call physics_update(state, ptend, ztodt, tend)
+                call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
                 call check_energy_chng(state, tend, "clubb_tend", nstep, ztodt, &
                      cam_in%cflx(:,1)/cld_macmic_num_steps, flx_cnd/cld_macmic_num_steps, &
                      det_ice/cld_macmic_num_steps, flx_heat/cld_macmic_num_steps)
@@ -2825,7 +2826,7 @@ end if
              ! (see above note for macrophysics).
              call physics_ptend_scale(ptend_sc, 1._r8/cld_macmic_num_steps, ncol)
 
-             call physics_update (state_sc, ptend_sc, ztodt, tend_sc)
+             call physics_update (state_sc, ptend_sc, ztodt, tend_sc, isinterface=.true.)
              call check_energy_chng(state_sc, tend_sc, "microp_tend_subcol", &
                   nstep, ztodt, zero_sc, prec_str_sc(:ncol)/cld_macmic_num_steps, &
                   snow_str_sc(:ncol)/cld_macmic_num_steps, zero_sc)
@@ -2846,7 +2847,7 @@ end if
           ! (see above note for macrophysics).
           call physics_ptend_scale(ptend, 1._r8/cld_macmic_num_steps, ncol)
 
-          call physics_update (state, ptend, ztodt, tend)
+          call physics_update (state, ptend, ztodt, tend, isinterface=.true.)
           call check_energy_chng(state, tend, "microp_tend", nstep, ztodt, &
                zero, prec_str(:ncol)/cld_macmic_num_steps, &
                snow_str(:ncol)/cld_macmic_num_steps, zero)
@@ -2898,13 +2899,13 @@ end if
                 sh_e_ed_ratio, mu, md, du, eu, ed, dp, dsubcld,    &
                 jt, maxg, ideep, lengath, species_class,           &
                 cam_out, pbuf, ptend )                               ! outputs
-         call physics_update(state, ptend, ztodt, tend)
+         call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
 
          ! deep convective aerosol transport
          call convect_deep_tend_2( state, ptend, ztodt, pbuf, &
                 mu, eu, du, md, ed, dp, dsubcld, jt, maxg,    &
                 ideep, lengath, species_class )
-         call physics_update(state, ptend, ztodt, tend)
+         call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
 
          ! check tracer integrals
          call check_tracers_chng(state, tracerint, "cmfmca", nstep, ztodt,  zero_tracers)
@@ -2959,7 +2960,7 @@ if (l_rad) then
     do i=1,ncol
        tend%flx_net(i) = net_flx(i)
     end do
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
     call check_energy_chng(state, tend, "radheat", nstep, ztodt, zero, zero, zero, net_flx)
 
     call t_stopf('radiation')
