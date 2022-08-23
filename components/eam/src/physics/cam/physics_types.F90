@@ -255,10 +255,13 @@ contains
 
     ! Whether to do validation of state on each call.
     logical :: state_debug_checks
-    logical :: use_cpdry
+    logical :: use_cpdry_loc
 
-    use_cpdry = .true.
-   
+    ncol = state%ncol
+
+    use_cpdry_loc = .true.
+    cpstar_loc(:ncol) = cpair
+ 
     !-----------------------------------------------------------------------
 
     ! The column radiation model does not update the state
@@ -291,8 +294,6 @@ contains
 
     !-----------------------------------------------------------------------
     call phys_getopts(state_debug_checks_out=state_debug_checks)
-
-    ncol = state%ncol
 
     ! Update u,v fields
     if(ptend%lu) then
@@ -382,7 +383,8 @@ contains
     !-------------------------------------------------------------------------------------------
     if(ptend%ls) then
 
-       use_cpdry = ( (.not.isinterface) .or. (.not. use_cpstar))
+       !use_cpstar=true and only for interface calls
+       use_cpdry_loc = .not. ( isinterface .and. use_cpstar)
 
        !do k = ptend%top_level, ptend%bot_level
        !   if (present(tend)) &
@@ -392,9 +394,7 @@ contains
 
        do k = ptend%top_level, ptend%bot_level
 
-          if(use_cpdry) then
-             cpstar_loc(:ncol) = cpair
-          else
+          if(.not. use_cpdry_loc) then
              cpstar_loc(:ncol) = state%cpstar(:ncol,k)
           endif
 
@@ -414,7 +414,7 @@ contains
                           state%zi    , state%zm      ,&
                           ncol)
 
-!keep SE defibed via cpdry. It is used in physics and should remain 'dry'.
+!keep SE defined via cpdry. It is used in physics and should remain 'dry'.
        do k = ptend%top_level, ptend%bot_level
           state%s(:ncol,k) = state%t(:ncol,k  )*cpair &
                            + gravit*state%zm(:ncol,k) + state%phis(:ncol)

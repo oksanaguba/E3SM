@@ -1881,9 +1881,22 @@ if (l_ac_energy_chk) then
                                    ke(:ncol),se(:ncol),wv(:ncol),wl(:ncol),&
                                    wi(:ncol),wr(:ncol),ws(:ncol),te_before_pw(:ncol),tw(:ncol), &
                                    ncol, &
-                                   cpstar=state%cpstar(:ncol,:))
+                                   cpstar=state%cpstar)
+
+do ic=1,ncol
+if(abs(te_before_pw(ic))>1e28)then
+print *, 'te_before_pw ', te_before_pw(ic), ic
+print *, 'te_cur ', state%te_cur(ic)
+print *, 'cpstar', state%cpstar(ic,:)
+print *, 'ps',state%ps(ic)
+print *, 'pdel',state%pdel(ic,:)
+endif
+enddo
+
 
     state%te_cur(:ncol) = te_before_pw(:ncol)
+
+!print *, 'te before', te_before_pw(1)
 
     !compute energy of PW (DME adjust) terms
 
@@ -1903,6 +1916,9 @@ if (l_ac_energy_chk) then
                                    wi(:ncol),wr(:ncol),ws(:ncol),te_after_pw(:ncol),tw(:ncol), &
                                    ncol, &
                                    cpstar=state%cpstar(:ncol,:))
+
+!print *, 'cpstar', state%cpstar(1,1)
+!print *, 'te after', te_after_pw(1)
 
     !compute DME adjust energy vapor only
     state%pwvapor(:ncol) = state%te_cur(:ncol) - te_after_pw(:ncol)
@@ -1930,6 +1946,15 @@ if (l_ac_energy_chk) then
      
     !finally, compute DME adjust energy
     state%pw(:ncol) = state%te_cur(:ncol) - te_after_pw(:ncol) 
+
+do ic=1,ncol
+if(abs(state%pw(ic))>1e12)then
+print *, 'state%pw(i) ', state%pw(ic), ic
+print *, 'te_cur ', state%te_cur(ic) 
+print *, 'te_after ', te_after_pw(ic)
+print *, 'cpstar', state%cpstar(ic,:)
+endif
+enddo
 
     !units and dt:
     !for cpdry, PW has to match cp terms, and it does
