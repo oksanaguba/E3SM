@@ -1219,8 +1219,7 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
        if(present(cpstar))then
 
 !use cpstar
-
-print *, "OG we use cpstar in energy_helper_eam_def"
+!print *, "OG we use cpstar in energy_helper_eam_def"
        do i = 1, ncol
           call energy_helper_eam_def_column(u(i,:),v(i,:),T(i,:),q(i,1:pver,1:pcnst),&
                                    ps(i),pdel(i,:),phis(i), &
@@ -1354,14 +1353,6 @@ print *, "OG we use cpstar in energy_helper_eam_def"
          endif
 
          se = se +         t(k)*cpstar_loc*pdel(k)/gravit
-if(abs(se)>1e28)then
-print *, 'se local ', se, k
-print *, 'pdel ', pdel(k)
-print *, 't ', t(k)
-print *, 'cpstar_loc', cpstar_loc
-print *, 'cpstar(k)', cpstar(k)
-print *, 'pr cp, pr qini',present(cpstar),present(qini)
-endif
        endif
 
        wv = wv + q(k,1      )*pdel(k)/gravit
@@ -1384,28 +1375,7 @@ endif
     te = se + ke + (latvap+latice)*wv + latice*( wl + wr )
     tw = wv + wl + wi + wr + ws
 
-
-!do ic=1,ncol
-if(abs(te)>1e28)then
-print *, 'te local ', te
-print *, 'se ', se
-print *, 'cpstar', cpstar(:)
-endif
-!enddo
-
   end subroutine energy_helper_eam_def_column
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
