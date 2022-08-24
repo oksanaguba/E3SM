@@ -1208,6 +1208,7 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
     real(r8), intent(inout) :: ws(ncol)     ! vertical integral of snow
 
 ! do not use in this version
+!why are these pcol variables?
     real(r8), intent(inout), optional :: teloc(pcols,pver) 
     real(r8), intent(inout), optional :: psterm(pcols) 
 

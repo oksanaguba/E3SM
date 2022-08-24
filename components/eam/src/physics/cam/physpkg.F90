@@ -1902,7 +1902,7 @@ if (l_ac_energy_chk) then
                                    ke(:ncol),se(:ncol),wv(:ncol),wl(:ncol),&
                                    wi(:ncol),wr(:ncol),ws(:ncol),te_after_pw(:ncol),tw(:ncol), &
                                    ncol, &
-                                   cpstar=state%cpstar(:ncol,:))
+                                   cpstar=state%cpstar)
 
     !compute DME adjust energy vapor only
     state%pwvapor(:ncol) = state%te_cur(:ncol) - te_after_pw(:ncol)
@@ -1926,7 +1926,7 @@ if (l_ac_energy_chk) then
                                    ke(:ncol),se(:ncol),wv(:ncol),wl(:ncol),&
                                    wi(:ncol),wr(:ncol),ws(:ncol),te_after_pw(:ncol),tw(:ncol), &
                                    ncol, &
-                                   cpstar=state%cpstar(:ncol,:))
+                                   cpstar=state%cpstar)
      
     !finally, compute DME adjust energy
     state%pw(:ncol) = state%te_cur(:ncol) - te_after_pw(:ncol) 
