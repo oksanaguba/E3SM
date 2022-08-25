@@ -554,7 +554,7 @@ end subroutine check_energy_get_integrals
           write(iulog,'(1x,a19,1x,i8,2(1x,e25.17))') "nstep, qflx, dqv/dt", nstep,   te_glob(7), te_glob(10)/dtime
           write(iulog,'(1x,a20,1x,i8,2(1x,e25.17))') "nstep, liqflx, dql/dt", nstep, te_glob(8), te_glob(11)/dtime
           write(iulog,'(1x,a20,1x,i8,2(1x,e25.17))') "nstep, iceflx, dqi/dt", nstep, te_glob(9), te_glob(12)/dtime
-          write(iulog,'(1x,a13,1x,i8,2(1x,e25.17))') "nstep, pw, pwvapor", nstep, te_glob(6), te_glob(13)
+          write(iulog,'(1x,a19,1x,i8,2(1x,e25.17))') "nstep, pw, pwvapor", nstep, te_glob(6), te_glob(13)
        end if
     else
        heat_glob = 0._r8
