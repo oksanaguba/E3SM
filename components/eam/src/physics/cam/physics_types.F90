@@ -1459,6 +1459,7 @@ subroutine set_state_pdry (state,pdeld_calc)
   
   ncol = state%ncol
 
+!nonhydro case here?
 
   state%psdry(:ncol) = state%pint(:ncol,1)
   state%pintdry(:ncol,1) = state%pint(:ncol,1)
