@@ -25,6 +25,7 @@ module dp_coupling
                             transpose_block_to_chunk, transpose_chunk_to_block,   &
                             chunk_to_block_send_pters, chunk_to_block_recv_pters, &
                             block_to_chunk_recv_pters, block_to_chunk_send_pters
+  use control_mod,    only: theta_hydrostatic_mode
   private
   public :: d_p_coupling, p_d_coupling
 

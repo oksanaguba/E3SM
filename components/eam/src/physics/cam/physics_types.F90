@@ -17,6 +17,7 @@ module physics_types
   use phys_control, only: waccmx_is, use_mass_borrower, use_waterloading, use_cpstar
   use shr_const_mod,only: shr_const_rwv
   use perf_mod,     only: t_startf, t_stopf
+  use control_mod,  only: theta_hydrostatic_mode
 
   implicit none
   private          ! Make default type private to the module
@@ -2176,7 +2177,7 @@ end subroutine physics_ptend_dealloc
     !https://acme-climate.atlassian.net/wiki/spaces/NGDNA/pages/2579530246/NH+surface+pressure
     !pint(nlevp) = pmid(nlev) + dp3d(nlev)/2
 
-    pint(pverp) = pmid(pver) + pimid(pver)/2
+    pint(pverp) = pmid(pver) + dp3d(pver)/2
 
     !prob using ps0 here is enough
     pint(1) = ptop
