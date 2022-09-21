@@ -57,6 +57,8 @@ module physics_types
   public physics_ptend_alloc   ! allocate individual components within tend
   public physics_ptend_dealloc ! deallocate individual components within tend
 
+  public pmid_to_pint_nh       ! using pnh on midlevels, compute pnh on interfaces
+
 !-------------------------------------------------------------------------------
   type physics_state
      integer                                     :: &
@@ -1450,6 +1452,15 @@ subroutine set_state_pdry (state,pdeld_calc)
   integer ncol
   integer i, k
   logical do_pdeld_calc
+  logical nonhydro
+  real(r8) :: pimid(pcols,pver), piint(pcols,pverp), dz(pcols,pverp)
+
+  nonhydro=.false.
+#ifdef MODEL_THETA_L
+  if(.not. theta_hydrostatic_mode) then
+    nonhydro = .true.
+  endif
+#endif
 
   if ( present(pdeld_calc) ) then
      do_pdeld_calc = pdeld_calc
@@ -1459,11 +1470,10 @@ subroutine set_state_pdry (state,pdeld_calc)
   
   ncol = state%ncol
 
-!nonhydro case here?
+!  !default
+!  if(.not. nonhydro) then
 
-  state%psdry(:ncol) = state%pint(:ncol,1)
-  state%pintdry(:ncol,1) = state%pint(:ncol,1)
-
+  !this code is used for NH and HY
   if (do_pdeld_calc)  then
     if(use_waterloading)then
      do k = 1, pver
@@ -1477,15 +1487,43 @@ subroutine set_state_pdry (state,pdeld_calc)
      end do
     endif
   endif
-  do k = 1, pver
-     state%pintdry(:ncol,k+1) = state%pintdry(:ncol,k)+state%pdeldry(:ncol,k)
-     state%pmiddry(:ncol,k) = (state%pintdry(:ncol,k+1)+state%pintdry(:ncol,k))/2._r8
-     state%psdry(:ncol) = state%psdry(:ncol) + state%pdeldry(:ncol,k)
-  end do
 
+  !this code will set HY vars
+  if(.not. nonhydro) then
+    state%psdry(:ncol) = state%pint(:ncol,1)
+    state%pintdry(:ncol,1) = state%pint(:ncol,1)
+    do k = 1, pver
+      state%pintdry(:ncol,k+1) = state%pintdry(:ncol,k)+state%pdeldry(:ncol,k)
+      state%pmiddry(:ncol,k) = (state%pintdry(:ncol,k+1)+state%pintdry(:ncol,k))/2._r8
+      state%psdry(:ncol) = state%psdry(:ncol) + state%pdeldry(:ncol,k)
+    end do
+  endif
+
+  if(nonhydro) then
+
+    dz(:ncol,1:nver) = state%zi(:ncol,1:pver) - state%zi(:ncol,2:pverp)
+    !use pdeldry from above to compute dry NH pressure from pnh_dry=R * T * rho_dry
+    !vars to set here: pmiddry, pintdry, psdry
+    !pmid has full NH pressure
+    !density = dp3d / dz / g 
+
+    do k = 1, pver
+      state%pmiddry(:ncol,k) = state%pmid(:ncol,k) &
+                             - rair * state%T(:ncol,k) * ( state%pdeldry(:ncol,k) / dz(:ncol,k) / gravit )
+    enddo
+
+    call pmid_to_pint_nh(state(lchnk)%pmiddry(i,1:pver),state(lchnk)%pintdry(i,1:pverp),&
+                         state(lchnk)%pdeldry(i,1:pver),state%pint(i,1))
+
+    state%psdry(:ncol) = state%pintdry(:ncol,pverp)
+
+  endif
+
+  !independent from NH or HY code
   state%rpdeldry(:ncol,:) = 1._r8/state%pdeldry(:ncol,:)
   state%lnpmiddry(:ncol,:) = log(state%pmiddry(:ncol,:))
   state%lnpintdry(:ncol,:) = log(state%pintdry(:ncol,:))
+
 
 end subroutine set_state_pdry 
 
@@ -2118,5 +2156,40 @@ subroutine physics_ptend_dealloc(ptend)
   if ( ierr /= 0 ) call endrun('physics_ptend_dealloc error: deallocation error for ptend%cflx_top')
 
 end subroutine physics_ptend_dealloc
+
+
+
+
+!computes p NH on interfaces from p NH on midpoints 
+!using homme interpolations/assumptions and p HY (dp3d)
+  subroutine pmid_to_pint_nh(pmid,pint,dp3d,ptop)
+
+    implicit none
+    real(r8), intent(inout), dimension(1:pverp) :: pint
+    real(r8), intent(in),    dimension(1:pver)  :: pmid
+    real(r8), intent(in),    dimension(1:pver)  :: dp3d
+    real(r8), intent(in)                        :: ptop
+
+    integer  :: k
+
+    !mu=1 at the surface approximation
+    !https://acme-climate.atlassian.net/wiki/spaces/NGDNA/pages/2579530246/NH+surface+pressure
+    !pint(nlevp) = pmid(nlev) + dp3d(nlev)/2
+
+    pint(pverp) = pmid(pver) + pimid(pver)/2
+
+    !prob using ps0 here is enough
+    pint(1) = ptop
+
+    !pnh_i(:,:,k)=(dp3d(:,:,k-1)*pnh(:,:,k)+dp3d(:,:,k)*pnh(:,:,k-1))/&
+    !          (dp3d(:,:,k-1)+dp3d(:,:,k))
+    do k=2,pver
+      pint(k) = (dp3d(k-1)*pmid(k)+dp3d(k)*pmid(k-1))/(dp3d(k-1)+dp3d(k))
+    enddo
+
+  end subroutine pmid_to_pint_nh
+
+
+
 
 end module physics_types

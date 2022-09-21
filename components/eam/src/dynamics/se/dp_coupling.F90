@@ -551,7 +551,7 @@ CONTAINS
     use spmd_utils,     only: masterproc
     use ppgrid,         only: pver
     use geopotential,   only: geopotential_t
-    use physics_types,  only: set_state_pdry, set_wet_to_dry
+    use physics_types,  only: set_state_pdry, set_wet_to_dry, pmid_to_pint_nh
     use check_energy,   only: check_energy_timestep_init
     use hycoef,         only: hyam, hybm, hyai, hybi, ps0
     use shr_vmath_mod,  only: shr_vmath_log
@@ -606,16 +606,10 @@ CONTAINS
         ! not k loop!
         do i = 1,ncol
 
-          !mu=1 at the surface approximation
-          !https://acme-climate.atlassian.net/wiki/spaces/NGDNA/pages/2579530246/NH+surface+pressure
-          !pint(nlevp) = pmid(nlev) + dp3d(nlev)/2
-          phys_state(lchnk)%pint(i,plevp) = phys_state(lchnk)%pmid(i,plev) + pimid(i,plev)/2
+          phys_state(lchnk)%pdel (i,1:pver) = piint(i,2:pverp) - piint(i,1:pver)
 
-          phys_state(lchnk)%pint(i,1) = piint(i,1)
-
-          do k=2,nlev
-            phys_state(lchnk)%pint(i,k) = (phys_state(lchnk)%pmid(i,k-1) + phys_state(lchnk)%pmid(i,k))/2
-          enddo
+          call pmid_to_pint_nh(phys_state(lchnk)%pmid(i,1:pver),phys_state(lchnk)%pint(i,1:pverp),&
+                               phys_state(lchnk)%pdel(i,1:pver),piint(i,1))
         enddo
         do k = 1,nlev
           !plevp is done below
@@ -629,18 +623,13 @@ CONTAINS
 
         do k = 1,nlev
           do i = 1,ncol
-            phys_state(lchnk)%pdel (i,k)  = piint(i,k+1) &
-                                           -piint(i,k)
-
             !repeated
             phys_state(lchnk)%oldpdel (i,k) = phys_state(lchnk)%pdel (i,k)
-            !repeated
             phys_state(lchnk)%rpdel(i,k)  = 1._r8/phys_state(lchnk)%pdel(i,k)
             phys_state(lchnk)%exner (i,k) = (phys_state(lchnk)%pint(i,pver+1) &
                                             /phys_state(lchnk)%pmid(i,k))**cappa
           end do
         end do
-
 
       else
 
@@ -716,6 +705,8 @@ CONTAINS
        !        back to wet. (in APE, all tracers are wet, so it is ok for now)  
        !
        ! Convert dry type constituents from moist to dry mixing ratio
+
+       ! for NH pressure option this call needs already computed geopotential
        call set_state_pdry(phys_state(lchnk)) ! First get dry pressure to use for this timestep
        call set_wet_to_dry(phys_state(lchnk)) ! Dynamics had moist, physics wants dry.
 
@@ -759,4 +750,5 @@ CONTAINS
   end subroutine derived_phys
   !=================================================================================================
   !=================================================================================================
+
 end module dp_coupling
