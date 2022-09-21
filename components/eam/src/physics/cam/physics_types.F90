@@ -6,7 +6,7 @@
 module physics_types
 
   use shr_kind_mod, only: r8 => shr_kind_r8
-  use ppgrid,       only: pcols, pver, psubcols
+  use ppgrid,       only: pcols, pver, pverp, psubcols
   use constituents, only: pcnst, qmin, cnst_name, icldliq, icldice, irain, isnow
   use geopotential, only: geopotential_t
   use physconst,    only: zvir, gravit, cpair, rair, cpairv, rairv
@@ -1502,7 +1502,7 @@ subroutine set_state_pdry (state,pdeld_calc)
 
   if(nonhydro) then
 
-    dz(:ncol,1:nver) = state%zi(:ncol,1:pver) - state%zi(:ncol,2:pverp)
+    dz(:ncol,1:pver) = state%zi(:ncol,1:pver) - state%zi(:ncol,2:pverp)
     !use pdeldry from above to compute dry NH pressure from pnh_dry=R * T * rho_dry
     !vars to set here: pmiddry, pintdry, psdry
     !pmid has full NH pressure
@@ -1513,8 +1513,8 @@ subroutine set_state_pdry (state,pdeld_calc)
                              - rair * state%T(:ncol,k) * ( state%pdeldry(:ncol,k) / dz(:ncol,k) / gravit )
     enddo
 
-    call pmid_to_pint_nh(state(lchnk)%pmiddry(i,1:pver),state(lchnk)%pintdry(i,1:pverp),&
-                         state(lchnk)%pdeldry(i,1:pver),state%pint(i,1))
+    call pmid_to_pint_nh(state%pmiddry(i,1:pver),state%pintdry(i,1:pverp),&
+                         state%pdeldry(i,1:pver),state%pint(i,1))
 
     state%psdry(:ncol) = state%pintdry(:ncol,pverp)
 
