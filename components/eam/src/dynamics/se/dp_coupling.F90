@@ -20,7 +20,7 @@ module dp_coupling
   use perf_mod,       only: t_startf, t_stopf, t_barrierf
   use parallel_mod,   only: par
   use scamMod,        only: single_column
-  use element_ops,    only: get_temperature
+  use element_ops,    only: get_temperature, get_nonhydro_pressure
   use phys_grid,      only: get_ncols_p, get_gcol_all_p, &
                             transpose_block_to_chunk, transpose_chunk_to_block,   &
                             chunk_to_block_send_pters, chunk_to_block_recv_pters, &
@@ -80,9 +80,9 @@ CONTAINS
     integer                  :: bpter(npsq,0:pver)        ! offsets into block buffer for packing 
     integer                  :: cpter(pcols,0:pver)       ! offsets into chunk buffer for unpacking 
     integer                  :: nphys, nphys_sq           ! physics grid parameters
-    real (kind=real_kind)    :: nlev_buffer1(np,np,nlev)  ! temp
-    real (kind=real_kind)    :: nlev_buffer2(np,np,nlev)  ! temp
-    real (kind=real_kind)    :: nlevp_buffer(np,np,nlevp) ! temp
+    real (kind=real_kind)    :: nlev_buffer1(np,np,pver)  ! temp
+    real (kind=real_kind)    :: nlev_buffer2(np,np,pver)  ! temp
+    real (kind=real_kind)    :: nlevp_buffer(np,np,pverp) ! temp
     ! Frontogenesis
     real (kind=real_kind), allocatable :: frontgf(:,:,:)  ! frontogenesis function
     real (kind=real_kind), allocatable :: frontga(:,:,:)  ! frontogenesis angle 
@@ -153,7 +153,7 @@ CONTAINS
 
           !version with pressure
           !subroutine get_nonhydro_pressure(elem,pnh,exner,hvcoord,nt)
-          get_nonhydro_pressure(elem(ie),nlev_buffer1,nlev_buffer2,hvcoord,tl_f)
+          call get_nonhydro_pressure(elem(ie),nlev_buffer1,nlev_buffer2,hvcoord,tl_f)
           call UniquePoints(elem(ie)%idxP,  nlev,nlev_buffer1,                     pnh_tmp(1:ncols,:,ie))
         end do
         call t_stopf('UniquePoints')
@@ -226,7 +226,6 @@ CONTAINS
 
             !using pnh does not need much
             phys_state(lchnk)%pmid(icol,ilyr) = pnh_tmp(ioff,ilyr,ie)
-            phys_state(lchnk)%pmiddry(icol,ilyr) = pnh_tmp(ioff,ilyr,ie)
           end do ! ilyr
           endif
 #endif
@@ -354,8 +353,8 @@ CONTAINS
           call outfld('PS&IC',elem(ie)%state%ps_v(:,:,tl_f),  ncol_d,ie)
           call outfld('U&IC', elem(ie)%state%V(:,:,1,:,tl_f), ncol_d,ie)
           call outfld('V&IC', elem(ie)%state%V(:,:,2,:,tl_f), ncol_d,ie)
-          call get_temperature(elem(ie),temperature,hvcoord,tl_f)
-          call outfld('T&IC',temperature,ncol_d,ie)
+          call get_temperature(elem(ie),nlev_buffer1,hvcoord,tl_f)
+          call outfld('T&IC',nlev_buffer1,ncol_d,ie)
           do m = 1,pcnst
             call outfld(trim(cnst_name(m))//'&IC',elem(ie)%state%Q(:,:,:,m), ncol_d,ie)
           end do ! m
