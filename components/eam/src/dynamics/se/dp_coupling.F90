@@ -91,7 +91,18 @@ CONTAINS
     ! Transpose buffers
     real (kind=real_kind), allocatable, dimension(:) :: bbuffer 
     real (kind=real_kind), allocatable, dimension(:) :: cbuffer
+    logical                  :: nonhydro
+    integer                  :: dummyind
     !---------------------------------------------------------------------------
+
+    nonhydro=.false.
+    dummyind = 0
+#ifdef MODEL_THETA_L
+    if(.not. theta_hydrostatic_mode) then
+      nonhydro = .true.
+      dummyind = 1
+    endif
+#endif
 
     nullify(pbuf_chnk)
     nullify(pbuf_frontgf)
@@ -180,7 +191,6 @@ CONTAINS
 
     call t_startf('dpcopy')
 
-!OG seems to be always true
     if (local_dp_map) then
 
       !$omp parallel do private (lchnk, ncols, pgcols, icol, idmb1, idmb2, idmb3, ie, ioff, ilyr, m, pbuf_chnk, pbuf_frontgf, pbuf_frontga)
@@ -215,8 +225,7 @@ CONTAINS
             end if
           end do ! ilyr
 
-#ifdef MODEL_THETA_L
-          if(.not. theta_hydrostatic_mode)then
+          if(nonhydro)then
           do ilyr = 1,pver
             !using phinh requires a lot of extra vars to call 
             !   call pnh_and_exner_from_eos(hvcoord,elem%state%vtheta_dp(:,:,:,nt),&
@@ -228,7 +237,6 @@ CONTAINS
             phys_state(lchnk)%pmid(icol,ilyr) = pnh_tmp(ioff,ilyr,ie)
           end do ! ilyr
           endif
-#endif
 
           do m = 1,pcnst
             do ilyr = 1,pver
@@ -241,7 +249,12 @@ CONTAINS
 
     else  ! .not. local_dp_map
 
+      if(nonhydro) then
+      tsize = 4 + pcnst + 1 ! 1 for pnh
+      else
       tsize = 4 + pcnst
+      endif
+
       if (use_gw_front) tsize = tsize + 2
 
       allocate(bbuffer(tsize*block_buf_nrecs))
@@ -266,9 +279,13 @@ CONTAINS
               bbuffer(bpter(icol,ilyr)+1) = uv_tmp(icol,1,ilyr,ie)
               bbuffer(bpter(icol,ilyr)+2) = uv_tmp(icol,2,ilyr,ie)
               bbuffer(bpter(icol,ilyr)+3) = om_tmp(icol,ilyr,ie)
+              !if in the loop!
+              if(nonhydro) then
+              bbuffer(bpter(icol,ilyr)+4) = pnh_tmp(icol,ilyr,ie)
+              endif
               if (use_gw_front) then
-                bbuffer(bpter(icol,ilyr)+4) = frontgf(icol,ilyr,ie)
-                bbuffer(bpter(icol,ilyr)+5) = frontga(icol,ilyr,ie)
+                bbuffer(bpter(icol,ilyr)+4+dummyind) = frontgf(icol,ilyr,ie)
+                bbuffer(bpter(icol,ilyr)+5+dummyind) = frontga(icol,ilyr,ie)
               end if
               do m = 1,pcnst
                 bbuffer(bpter(icol,ilyr)+tsize-pcnst-1+m) = q_tmp(icol,ilyr,m,ie)
@@ -306,9 +323,12 @@ CONTAINS
             phys_state(lchnk)%u    (icol,ilyr) = cbuffer(cpter(icol,ilyr)+1)
             phys_state(lchnk)%v    (icol,ilyr) = cbuffer(cpter(icol,ilyr)+2)
             phys_state(lchnk)%omega(icol,ilyr) = cbuffer(cpter(icol,ilyr)+3)
+            if(nonhydro)then
+            phys_state(lchnk)%pmid(icol,ilyr)  = cbuffer(cpter(icol,ilyr)+4)
+            endif
              if (use_gw_front) then
-                pbuf_frontgf(icol,ilyr) = cbuffer(cpter(icol,ilyr)+4)
-                pbuf_frontga(icol,ilyr) = cbuffer(cpter(icol,ilyr)+5)
+                pbuf_frontgf(icol,ilyr) = cbuffer(cpter(icol,ilyr)+4+dummyind)
+                pbuf_frontga(icol,ilyr) = cbuffer(cpter(icol,ilyr)+5+dummyind)
              end if
              do m = 1,pcnst
                 phys_state(lchnk)%q(icol,ilyr,m) = cbuffer(cpter(icol,ilyr)+tsize-pcnst-1+m)
@@ -336,6 +356,7 @@ CONTAINS
       do ilyr = 1,pver
         do icol = 1,ncols
           if (.not.single_column) then
+            !this is not an issue?
             phys_state(lchnk)%omega(icol,ilyr) = phys_state(lchnk)%omega(icol,ilyr) &
                                                 *phys_state(lchnk)%pmid(icol,ilyr)
           end if
@@ -606,10 +627,14 @@ CONTAINS
         ! not k loop!
         do i = 1,ncol
 
-          phys_state(lchnk)%pdel (i,1:pver) = piint(i,2:pverp) - piint(i,1:pver)
+          phys_state(lchnk)%pdel(i,1:pver) = piint(i,2:pverp) - piint(i,1:pver)
 
           call pmid_to_pint_nh(phys_state(lchnk)%pmid(i,1:pver),phys_state(lchnk)%pint(i,1:pverp),&
                                phys_state(lchnk)%pdel(i,1:pver),piint(i,1))
+          !ps needs to be overwritten, it was set before to hydro ps
+
+          phys_state(lchnk)%ps(i)    = phys_state(lchnk)%pint(i,pverp)
+          phys_state(lchnk)%oldps(i) = phys_state(lchnk)%pint(i,pverp)
         enddo
         do k = 1,nlev
           !plevp is done below
