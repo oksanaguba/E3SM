@@ -74,7 +74,8 @@ CONTAINS
 
    do i=1,ncol
           do k = 1, pverp
-            pint(k) = hyai(k)*ps0 + hybi(k)*state%ps(i)
+!!!!!!!!!!!
+            pint(k) = hyai(k)*ps0 + hybi(k)*state%pshy(i)
             lnpint(k) = log(pint(k))
           end do
           do k = 1, pver
@@ -99,7 +100,7 @@ CONTAINS
 !---- determine the brunt-vaisala frequency
 !
           do k = 2, pver
-            thx(k)=0.5_r8*(state%t(i,k)*(state%ps(i)/pmid(k))**cappa+state%t(i,k-1)*(state%ps(i)/pmid(k-1))**cappa)
+            thx(k)=0.5_r8*(state%t(i,k)*(state%pshy(i)/pmid(k))**cappa+state%t(i,k-1)*(state%pshy(i)/pmid(k-1))**cappa)
             tint(k)=0.5_r8*(state%t(i,k)+state%t(i,k-1))
             qint(k)=0.5_r8*(state%q(i,k,1)+state%q(i,k-1,1))
           end do
