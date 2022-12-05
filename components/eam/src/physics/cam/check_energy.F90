@@ -1343,7 +1343,7 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
            !cpstar based on qini etc  
            cpstar_loc = cpair*qdryini(k) + cpwv*qini(k) + cpliq*( cldliqini(k) + rainini(k) ) + &
                         cpice*( cldiceini(k) + snowini(k) )
-#if 0
+#if 1
 !do not use such option
          else
            !cpstar based on current q

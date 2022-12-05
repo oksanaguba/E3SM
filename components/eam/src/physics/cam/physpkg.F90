@@ -1901,8 +1901,7 @@ if (l_ac_energy_chk) then
     call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
                                    ke(:ncol),se(:ncol),wv(:ncol),wl(:ncol),&
                                    wi(:ncol),wr(:ncol),ws(:ncol),te_after_pw(:ncol),tw(:ncol), &
-                                   ncol, &
-                                   cpstar=state%cpstar)
+                                   ncol)
 
     !compute DME adjust energy vapor only
     state%pwvapor(:ncol) = state%te_cur(:ncol) - te_after_pw(:ncol)
@@ -1925,8 +1924,7 @@ if (l_ac_energy_chk) then
     call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
                                    ke(:ncol),se(:ncol),wv(:ncol),wl(:ncol),&
                                    wi(:ncol),wr(:ncol),ws(:ncol),te_after_pw(:ncol),tw(:ncol), &
-                                   ncol, &
-                                   cpstar=state%cpstar)
+                                   ncol)
      
     !finally, compute DME adjust energy
     state%pw(:ncol) = state%te_cur(:ncol) - te_after_pw(:ncol) 
