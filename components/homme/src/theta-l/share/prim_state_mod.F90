@@ -25,7 +25,7 @@ module prim_state_mod
   use viscosity_mod,    only: compute_zeta_C0
   use reduction_mod,    only: parallelmax,parallelmin,parallelmaxwithindex,parallelminwithindex
   use perf_mod,         only: t_startf, t_stopf
-  use physical_constants, only : p0,Cp,g,Rgas
+  use physical_constants, only : p0,Cp,gravit,Rgas
 
 implicit none
 private
@@ -80,6 +80,7 @@ contains
   subroutine prim_printstate(elem, tl,hybrid,hvcoord,nets,nete)
 
     use physical_constants,     only: dd_pi
+    use deep_atm_mod,           only: g_from_phi
 
     type(element_t),            intent(inout), target :: elem(:)
     type(TimeLevel_t),target,   intent(in) :: tl
@@ -240,8 +241,7 @@ contains
        do k=1,nlev
           dphi(:,:,k)=-(phi_i(:,:,k+1)-phi_i(:,:,k))
           w_over_dz(:,:,k)=&
-             g*max(elem(ie)%state%w_i(:,:,k,n0)/dphi(:,:,k),&
-             elem(ie)%state%w_i(:,:,k+1,n0)/dphi(:,:,k))
+             g_from_phi(phi_i(:,:,k))*max(elem(ie)%state%w_i(:,:,k,n0)/dphi(:,:,k),elem(ie)%state%w_i(:,:,k+1,n0)/dphi(:,:,k)) ! DA_CHANGE
        enddo
 
        ! surface pressure
@@ -368,7 +368,7 @@ contains
     thetasum_p= global_shared_sum(12)
 
 
-    scale=1/g                                  ! assume code is using Pa
+    scale=1/gravit                                  ! assume code is using Pa WARNING: not adapted to Deep Atmosphere
     if (hvcoord%ps0 <  2000 ) scale=100*scale  ! code is using mb
     ! after scaling, Energy is in J/m**2,  Mass kg/m**2
     ! so rate of changes are W/m**2
@@ -404,8 +404,8 @@ contains
        write(iulog,109) "mu    = ",mumin_local(1)," (",nint(mumin_local(2)),")",&
                                    mumax_local(1)," (",nint(mumax_local(2)),")"
 
-       write(iulog,109) "dz(m) = ",phimin_local(1)/g," (",nint(phimin_local(2)),")",&
-                                   phimax_local(1)/g," (",nint(phimax_local(2)),")",phisum_p/g
+       write(iulog,109) "dz(m) = ",phimin_local(1)/gravit," (",nint(phimin_local(2)),")",&
+                                   phimax_local(1)/gravit," (",nint(phimax_local(2)),")",phisum_p/gravit !DA_CHANGE
 
        write(iulog,109) "dp    = ",dpmin_local(1)," (",nint(dpmin_local(2)),")",&
                                    dpmax_local(1)," (",nint(dpmax_local(2)),")",dpsum_p

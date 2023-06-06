@@ -748,6 +748,7 @@ contains
     use prim_advection_mod,   only: prim_advec_init2
     use model_init_mod,       only: model_init2
     use time_mod,             only: timelevel_t, tstep, timelevel_init, nendstep, smooth, nsplit, TimeLevel_Qdp
+    use deep_atm_mod,         only: r_hat_from_phi
     use control_mod,          only: smooth_phis_numcycle
 
 #ifdef TRILINOS
@@ -775,6 +776,7 @@ contains
 
     real (kind=real_kind) :: dp
     real (kind=real_kind) :: ps(np,np)          ! surface pressure
+    real (kind=real_kind) :: r_hat(np,np)
 
     character(len=80)     :: fname
     character(len=8)      :: njusn
@@ -947,7 +949,8 @@ contains
     ! have access to hvcoord to compute dp3d:
     do ie=nets,nete
        do k=1,nlev
-          elem(ie)%state%dp3d(:,:,k,tl%n0)=&
+          r_hat = r_hat_from_phi((elem(ie)%state%phinh_i(:,:,k,tl%n0)+elem(ie)%state%phinh_i(:,:,k+1,tl%n0))/2)
+          elem(ie)%state%dp3d(:,:,k,tl%n0)=r_hat**2 * &
                ( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
                ( hvcoord%hybi(k+1) - hvcoord%hybi(k) )*elem(ie)%state%ps_v(:,:,tl%n0)
        enddo
@@ -1322,6 +1325,8 @@ contains
     use prim_state_mod,     only: prim_printstate
     use vertremap_mod,      only: vertical_remap
     use sl_advection,       only: sl_vertically_remap_tracers
+    use physical_constants, only: rearth, gravit
+    use deep_atm_mod,       only: r_hat_from_phi
 
     type(element_t),      intent(inout) :: elem(:)
     type(hybrid_t),       intent(in)    :: hybrid   ! distributed parallel structure (shared)
@@ -1333,6 +1338,7 @@ contains
     logical,              intent(in)    :: compute_diagnostics
 
     real(kind=real_kind) :: dt_q, dt_remap, dp(np,np,nlev)
+    real(kind=real_kind) :: r_hat(np,np)
     integer :: ie, q, k, n, n0_qdp, np1_qdp
     logical :: compute_diagnostics_it, apply_forcing
 
@@ -1404,10 +1410,11 @@ contains
                 ! Prescribed winds are evaluated on reference levels,
                 ! not floating levels, so don't remap, just update dp3d.
                 do ie = nets,nete
-                   elem(ie)%state%ps_v(:,:,tl%np1) = hvcoord%hyai(1)*hvcoord%ps0 + &
+                   elem(ie)%state%ps_v(:,:,tl%np1) =  hvcoord%hyai(1)*hvcoord%ps0 + &
                         sum(elem(ie)%state%dp3d(:,:,:,tl%np1),3)
                    do k=1,nlev
-                      dp(:,:,k) = (hvcoord%hyai(k+1) - hvcoord%hyai(k))*hvcoord%ps0 + &
+                      r_hat = r_hat_from_phi((elem(ie)%state%phinh_i(:,:,k,tl%np1)+elem(ie)%state%phinh_i(:,:,k+1,tl%np1))/2)  !DA_CHANGE
+                      dp(:,:,k) = r_hat**2 *(hvcoord%hyai(k+1) - hvcoord%hyai(k))*hvcoord%ps0 + &
                                   (hvcoord%hybi(k+1) - hvcoord%hybi(k))*elem(ie)%state%ps_v(:,:,tl%np1)
                    end do
                    elem(ie)%state%dp3d(:,:,:,tl%np1) = dp
@@ -1569,9 +1576,10 @@ contains
   !
   use control_mod,        only : use_moisture, dt_remap_factor
   use hybvcoord_mod,      only : hvcoord_t
+  use deep_atm_mod, only: r_hat_from_phi
 #ifdef MODEL_THETA_L
   use control_mod,        only : theta_hydrostatic_mode
-  use physical_constants, only : cp, g, kappa, Rgas, p0
+  use physical_constants, only : cp, gravit, kappa, Rgas, p0, rearth
   use element_ops,        only : get_temperature, get_r_star, get_hydro_pressure
   use eos,                only : pnh_and_exner_from_eos
 #ifdef HOMMEXX_BFB_TESTING
@@ -1600,6 +1608,7 @@ contains
   real (kind=real_kind)  :: rstarn1(np,np,nlev)
   real (kind=real_kind)  :: exner(np,np,nlev)
   real (kind=real_kind)  :: dpnh_dp_i(np,np,nlevp)
+  real (kind=real_kind)  :: r_hat(np,np)
 #endif
 
 #ifdef HOMMEXX_BFB_TESTING
@@ -1720,8 +1729,9 @@ contains
       if (adjust_ps) then
          ! compute new dp3d from adjusted ps()
          do k=1,nlev
-            dp_adj(:,:,k) = ( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
-                 ( hvcoord%hybi(k+1) - hvcoord%hybi(k))*ps(:,:)
+            r_hat = r_hat_from_phi((elem%state%phinh_i(:,:,k,np1_qdp)+elem%state%phinh_i(:,:,k+1,np1_qdp))/2) !DA_CHANGE
+            dp_adj(:,:,k) = r_hat**2 * (( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
+                 ( hvcoord%hybi(k+1) - hvcoord%hybi(k))*ps(:,:))
          enddo
       endif
       elem%state%dp3d(:,:,:,np1)=dp_adj(:,:,:)

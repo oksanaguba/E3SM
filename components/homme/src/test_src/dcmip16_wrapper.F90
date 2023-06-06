@@ -25,7 +25,8 @@ use kinds,                only: rl=>real_kind, iulog
 use parallel_mod,         only: abortmp,iam
 use element_ops,          only: set_state, set_state_i, set_elem_state, get_state, tests_finalize,&
      set_forcing_rayleigh_friction
-use physical_constants,   only: p0, g, Rgas, kappa, Cp, Rwater_vapor, pi=>dd_pi
+use physical_constants,   only: p0, g=>gravit, Rgas, kappa, Cp, Rwater_vapor, pi=>dd_pi
+use deep_atm_mod,         only: atm_is_deep
 use reduction_mod,        only: parallelmax, parallelmin
 use terminator,           only: initial_value_terminator, tendency_terminator
 use time_mod,             only: time_at, TimeLevel_t
@@ -80,7 +81,7 @@ subroutine dcmip2016_test1(elem,hybrid,hvcoord,nets,nete)
   integer,            intent(in)            :: nets,nete                ! start, end element index
 
   integer,  parameter :: use_zcoords  = 0                               ! use vertical pressure coordinates
-  integer,  parameter :: is_deep      = 0                               ! use shallow atmosphere approximation
+  logical,  parameter :: is_deep      = atm_is_deep                             ! use shallow atmosphere approximation
   integer,  parameter :: pertt        = 0                               ! use exponential perturbation type
   real(rl), parameter :: dcmip_X      = 1.0_rl                          ! full scale planet
   integer :: moist                                                      ! use moist version
@@ -136,7 +137,7 @@ subroutine dcmip2016_test1(elem,hybrid,hvcoord,nets,nete)
 
         ! initialize tracer chemistry
         call initial_value_terminator( lat*rad2dg, lon*rad2dg, q(i,j,k,4), q(i,j,k,5) )
-        call set_tracers(q(i,j,k,1:6),6,dp(i,j,k),i,j,k,lat,lon,elem(ie))
+        call set_tracers(q(i,j,k,1:6),6,dp(i,j,k),z(i,j,k),i,j,k,lat,lon,elem(ie))
 
         min_thetav =  min( min_thetav,   thetav(i,j,k) )
         max_thetav =  max( max_thetav,   thetav(i,j,k) )
@@ -238,7 +239,7 @@ subroutine dcmip2016_test2(elem,hybrid,hvcoord,nets,nete)
         q(2)=0
         q(3)=0
 
-        call set_tracers(q(:),3,dp(i,j,k),i,j,k,lat,lon,elem(ie))
+        call set_tracers(q(:),3,dp(i,j,k),z(i,j,k),i,j,k,lat,lon,elem(ie))
      enddo; enddo; enddo;
 
     call set_elem_state(u,v,w,w_i,T,ps,phis,p,dp,z,z_i,g,elem(ie),1,nt,ntQ=1)
@@ -344,7 +345,7 @@ subroutine dcmip2016_test3(elem,hybrid,hvcoord,nets,nete)
         q   (i,j,k,2)= 0 ! no initial clouds
         q   (i,j,k,3)= 0 ! no initial rain
 
-        call set_tracers(q(i,j,k,:),3,dp(i,j,k),i,j,k,lat,lon,elem(ie))
+        call set_tracers(q(i,j,k,:),3,dp(i,j,k),z(i,j,k),i,j,k,lat,lon,elem(ie))
 
       enddo; enddo
     enddo

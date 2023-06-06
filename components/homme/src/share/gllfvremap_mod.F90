@@ -556,7 +556,8 @@ contains
   subroutine gfr_dyn_to_fv_phys_topo_data_elem(ie, elem, square, augment_variance, g, p)
     ! Element-level impl of gfr_dyn_to_fv_phys_topo_data.
 
-    use physical_constants, only: grav => g
+    use physical_constants, only: gravit
+    use deep_atm_mod, only: z_from_phi
 
     integer, intent(in) :: ie
     type (element_t), intent(in) :: elem(:)
@@ -578,7 +579,7 @@ contains
        do k = 1,nf2
           ! Integrate (phis_gll - phis_fv)^2 over FV subcell (i,j). Do this
           ! using gfr_g2f_scalar; thus, only one entry out of nf^2 is used.
-          wg(:,:,1) = ((elem(ie)%state%phis - phispg(k))/grav)**2
+          wg(:,:,1) = (z_from_phi(elem(ie)%state%phis) - z_from_phi(phispg(k)))**2 ! DA_CHANGE
           call gfr_g2f_scalar(ie, elem(ie)%metdet, wg(:,:,:1), wf(:,1:1))
           ! Use just entry (i,j).
           wf(k,2) = max(zero, wf(k,1))

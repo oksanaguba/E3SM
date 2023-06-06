@@ -54,7 +54,7 @@
 SUBROUTINE DCMIP2016_PHYSICS(test, u, v, p, theta, qv, qc, qr, rho, &
                              dt, z, zi, lat, nz, precl, pbl_type, prec_type)
 
-  use physical_constants,   only:  g, Rgas, Cp,Rwater_vapor, rearth0, omega0,dd_pi
+  use physical_constants,   only:  g=>gravit, Rgas, Cp,Rwater_vapor, rearth0, omega0,dd_pi
 
   IMPLICIT NONE
 

@@ -13,7 +13,7 @@ module held_suarez_mod
   use hybrid_mod,             only: hybrid_t
   use hybvcoord_mod,          only: hvcoord_t
   use kinds,                  only: real_kind, iulog
-  use physical_constants,     only: p0, kappa,g, dd_pi, Rgas
+  use physical_constants,     only: p0, kappa,g=>gravit, dd_pi, Rgas
   use physics_mod,            only: prim_condense
   use time_mod,               only: secpday
 #ifndef HOMME_WITHOUT_PIOLIBRARY

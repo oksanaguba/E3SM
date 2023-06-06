@@ -9,7 +9,7 @@ SUBROUTINE test1_conv_advection_deformation (time,lon,lat,p,z,zcoords,u,v,w,t,ph
 !-----------------------------------------------------------------------
 
   ! Use physical constants consistent with HOMME
-  use physical_constants, only: a=>rearth0, Rd => Rgas, g, cp, pi=>dd_pi, p0
+  use physical_constants, only: a=>rearth0, Rd => Rgas, g=>gravit, cp, pi=>dd_pi, p0
 
   real(8), intent(in)     :: time       ! simulation time (s)
 	real(8), intent(in)     :: lon        ! Longitude (radians)

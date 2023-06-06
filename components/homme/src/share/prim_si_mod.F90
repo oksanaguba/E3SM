@@ -567,7 +567,7 @@ subroutine geopotential_t(                                 &
   subroutine prim_set_mass(elem, tl,hybrid,hvcoord,nets,nete)
   use kinds, only : real_kind
   use control_mod, only : initial_total_mass
-  use physical_constants, only : g
+  use physical_constants, only : gravit
   use element_mod, only : element_t
   use time_mod, only : timelevel_t 
   use hybvcoord_mod, only : hvcoord_t 
@@ -592,7 +592,7 @@ subroutine geopotential_t(                                 &
   nm1=tl%nm1
   np1=tl%np1
   
-  scale=1/g                                  ! assume code is using Pa
+  scale=1/gravit                                  ! assume code is using Pa Warning: not adapted to Deep Atmosphere
   if (hvcoord%ps0 <  2000 ) scale=100*scale  ! code is using mb
   ! after scaling, Energy is in J/m**2,  Mass kg/m**2
   
