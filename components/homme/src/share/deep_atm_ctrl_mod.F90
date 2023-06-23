@@ -18,25 +18,25 @@ interface r_hat_from_phi
          module procedure r_hat_from_phi_rank_ijk
          module procedure r_hat_from_phi_rank_ij 
          module procedure r_hat_from_phi_rank_k
-         module procedure r_hat_from_phi
+         module procedure r_hat_from_phi_no_rank
 end interface
 interface z_from_phi
          module procedure z_from_phi_rank_ijk
          module procedure z_from_phi_rank_ij
          module procedure z_from_phi_rank_k
-         module procedure z_from_phi
+         module procedure z_from_phi_no_rank
 end interface
 interface g_from_phi
          module procedure g_from_phi_rank_ijk
          module procedure g_from_phi_rank_ij
          module procedure g_from_phi_rank_k
-         module procedure g_from_phi
+         module procedure g_from_phi_no_rank
 end interface
 interface phi_from_z
          module procedure phi_from_z_rank_ijk
          module procedure phi_from_z_rank_ij
          module procedure phi_from_z_rank_k
-         module procedure phi_from_z
+         module procedure phi_from_z_no_rank
 end interface
 
 
@@ -60,11 +60,11 @@ function r_hat_from_phi_rank_k(phi, k) result(r_hat)
   real(kind=real_kind)           :: r_hat(k)
   r_hat = elementwise_k(phi, k, "r_hat_from_phi_scalar")
 end function r_hat_from_phi_rank_k
-function r_hat_from_phi(phi) result(r_hat)
+function r_hat_from_phi_no_rank(phi) result(r_hat)
   real(kind=real_kind), intent(in) :: phi
-  real(kind=real_kind)           :: r_hat
+  real(kind=real_kind)           ::   r_hat
   r_hat =  r_hat_from_phi_scalar(phi)
-end function r_hat_from_phi
+end function r_hat_from_phi_no_rank
 function z_from_phi_rank_ijk(phi, k) result(z)
   integer,              intent(in) :: k
   real(kind=real_kind), intent(in) :: phi(np,np,k)
@@ -82,11 +82,11 @@ function z_from_phi_rank_k(phi, k) result(z)
   real(kind=real_kind)           :: z(k)
   z = elementwise_k(phi, k, "z_from_phi_scalar")
 end function z_from_phi_rank_k
-function z_from_phi(phi) result(z)
+function z_from_phi_no_rank(phi) result(z)
   real(kind=real_kind), intent(in) :: phi
   real(kind=real_kind)           :: z
   z =  z_from_phi_scalar(phi)
-end function z_from_phi
+end function z_from_phi_no_rank
 function phi_from_z_rank_ijk(z, k) result(phi)
   integer,              intent(in) :: k
   real(kind=real_kind), intent(in) :: z(np,np,k)
@@ -104,11 +104,11 @@ function phi_from_z_rank_k(z, k) result(phi)
   real(kind=real_kind)           :: phi(k)
   phi = elementwise_k(z, k, "phi_from_z_scalar")
 end function phi_from_z_rank_k
-function phi_from_z(z) result(phi)
+function phi_from_z_no_rank(z) result(phi)
   real(kind=real_kind), intent(in) :: z
   real(kind=real_kind)           :: phi
   phi =  phi_from_z_scalar(z)
-end function phi_from_z
+end function phi_from_z_no_rank
 function g_from_phi_rank_ijk(phi, k) result(g)
   integer,              intent(in) :: k
   real(kind=real_kind), intent(in) :: phi(np,np,k)
@@ -126,11 +126,11 @@ function g_from_phi_rank_k(phi, k) result(g)
   real(kind=real_kind)           :: g(k)
   g = elementwise_k(phi, k, "g_from_phi_scalar")
 end function g_from_phi_rank_k
-function g_from_phi(phi) result(g)
+function g_from_phi_no_rank(phi) result(g)
   real(kind=real_kind), intent(in) :: phi
   real(kind=real_kind)           :: g
   g =  g_from_phi_scalar(phi)
-end function g_from_phi
+end function g_from_phi_no_rank
 function dispatch(inval, funcname) result(outval)
   real(kind=real_kind), intent(in) :: inval
   character(*), intent(in) :: funcname
@@ -194,7 +194,7 @@ function g_from_z_scalar(z) result(g)
   real(kind=real_kind), intent(in) :: z
   real(kind=real_kind)             :: g
   if (atm_is_deep .and. .not. gravity_is_const) then
-    g = gravit / r_hat_from_phi_scalar(phi_from_z_scalar(z))**2
+    g = gravit / ((rearth + z)/rearth)**2
   else
     g = gravit
   end if

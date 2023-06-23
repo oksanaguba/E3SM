@@ -1095,6 +1095,7 @@ contains
 
   real (kind=real_kind) :: recip_r_hat(np,np,nlev)
   real (kind=real_kind) :: recip_r_hat_vec(np,np,2,nlev)
+  real (kind=real_kind) :: recip_r_hat_i_vec(np,np,2,nlevp)
   real (kind=real_kind) :: recip_r_hat_i(np,np,nlevp)
   real (kind=real_kind) :: fcos(np, np)
   real (kind=real_kind) :: w_deep_metric_term(np,np,nlevp)
@@ -1191,6 +1192,8 @@ contains
         elem(ie)%state%w_i(:,:,:,n0)=0   
      endif
      recip_r_hat_i = 1.0_real_kind/r_hat_from_phi(phi_i, nlevp) ! DA_CHANGE
+     recip_r_hat_i_vec(:,:,1,:) = recip_r_hat_i ! DA_CHANGE
+     recip_r_hat_i_vec(:,:,1,:) = recip_r_hat_i ! DA_CHANGE
 
      do k=1,nlev
         phi(:,:,k) = (phi_i(:,:,k)+phi_i(:,:,k+1))/2  ! for diagnostics
