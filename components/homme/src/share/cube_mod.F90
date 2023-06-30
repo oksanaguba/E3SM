@@ -774,7 +774,7 @@ contains
   subroutine coriolis_init_atomic(elem)
     use element_mod, only : element_t
     use physical_constants, only : omega
-    use deep_atm_mod, only: atm_is_deep
+    use control_mod, only: atm_is_deep
 
     type (element_t) :: elem
 

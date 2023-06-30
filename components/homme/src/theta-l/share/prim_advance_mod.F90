@@ -1025,7 +1025,8 @@ contains
 
  subroutine compute_andor_apply_rhs(np1,nm1,n0,dt2,elem,hvcoord,hybrid,&
        deriv,nets,nete,compute_diagnostics,eta_ave_w,scale1,scale2,scale3)
-  use deep_atm_mod, only: r_hat_from_phi, atm_is_deep, z_from_phi, g_from_phi
+  use deep_atm_mod, only: r_hat_from_phi, z_from_phi, g_from_phi
+  use control_mod, only: atm_is_deep
   ! ===================================
   ! compute the RHS, accumulate into u(np1) and apply DSS
   !

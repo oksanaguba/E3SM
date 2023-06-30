@@ -189,6 +189,7 @@ implicit none
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 ! boundary terms
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!  
+   r_hat = r_hat_from_phi(phi_i(:, :, 1))
    pnh_i(:,:,1) = hvcoord%hyai(1)*hvcoord%ps0  ! hydrostatic ptop    
    ! surface boundary condition pnh_i determined by w equation to enforce
    ! w b.c.  This is computed in the RHS calculation.  Here, we use
@@ -233,6 +234,7 @@ implicit none
 
   !_____________________________________________________________________
   subroutine phi_from_eos(hvcoord,phis,vtheta_dp,dp,phi_i)
+  use deep_atm_mod, only: r_hat_from_phi
 !
 ! Use Equation of State to compute geopotential
 !
@@ -260,6 +262,8 @@ implicit none
   real (kind=real_kind), intent(out) :: phi_i(np,np,nlevp)
  
   !   local
+  real (kind=real_kind) :: r_hat(np,np) ! pressure at cell centers 
+  real (kind=real_kind) :: dphi_guess(np,np) ! pressure at cell centers 
   real (kind=real_kind) :: p(np,np,nlev) ! pressure at cell centers 
   real (kind=real_kind) :: p_i(np,np,nlevp)  ! pressure on interfaces
 
@@ -304,7 +308,10 @@ implicit none
 #ifdef HOMMEXX_BFB_TESTING
      phi_i(:,:,k) = phi_i(:,:,k+1)+ (Rgas*vtheta_dp(:,:,k)*bfb_pow(p(:,:,k)/p0,(kappa-1)))/p0
 #else
-     phi_i(:,:,k) = phi_i(:,:,k+1)+(Rgas*vtheta_dp(:,:,k)*(p(:,:,k)/p0)**(kappa-1))/p0
+     r_hat = r_hat_from_phi(phi_i(:,:,k+1))
+     dphi_guess = (Rgas*vtheta_dp(:,:,k)*(p(:,:,k)/p0)**(kappa-1))/p0
+     r_hat = r_hat_from_phi(phi_i(:,:,k+1) + dphi_guess/r_hat**2)
+     phi_i(:,:,k) = phi_i(:,:,k+1)+dphi_guess/r_hat**2
 #endif
   enddo
   end subroutine

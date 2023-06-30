@@ -219,6 +219,8 @@ module control_mod
   real (kind=real_kind), public :: pertlim = 0          !pertibation to temperature [like CESM]
 #endif
 
+  logical, public :: atm_is_deep      = .true.        ! height of mountain range        (meters)
+  logical, public :: gravity_is_const      = .false.        ! height of mountain range        (meters)
   ! shallow water advection test paramters
   ! kmass = level index with density.  other levels contain test tracers
   integer, public  :: kmass  = -1

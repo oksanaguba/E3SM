@@ -39,7 +39,7 @@ contains
   use control_mod,    only: rsplit
   use hybrid_mod,     only: hybrid_t
   use physical_constants, only: gravit
-  use deep_atm_mod,       only: g_from_phi
+  use deep_atm_mod,       only: g_from_phi, r_hat_from_phi
 
   type (hybrid_t),  intent(in)    :: hybrid  ! distributed parallel structure (shared)
   type (element_t), intent(inout) :: elem(:)
@@ -49,6 +49,7 @@ contains
   integer :: ie,i,j,k,np1,nets,nete,np1_qdp
   integer :: q
 
+  real (kind=real_kind), dimension(np,np)  :: r_hat
   real (kind=real_kind), dimension(np,np,nlev)  :: dp,dp_star
   real (kind=real_kind), dimension(np,np,nlevp) :: phi_ref
   real (kind=real_kind), dimension(np,np,nlev,5)  :: ttmp
@@ -79,8 +80,9 @@ contains
      elem(ie)%state%ps_v(:,:,np1) = hvcoord%hyai(1)*hvcoord%ps0 + &
           sum(elem(ie)%state%dp3d(:,:,:,np1),3)
      do k=1,nlev
-        dp(:,:,k) = ( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
-             ( hvcoord%hybi(k+1) - hvcoord%hybi(k) )*elem(ie)%state%ps_v(:,:,np1)
+        r_hat = r_hat_from_phi((elem(ie)%state%phinh_i(:, :, k,np1)+elem(ie)%state%phinh_i(:, :, k+1,np1))/2) 
+        dp(:,:,k) = (( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
+              ( hvcoord%hybi(k+1) - hvcoord%hybi(k) )*elem(ie)%state%ps_v(:,:,np1))
         if (rsplit==0) then
            dp_star(:,:,k) = dp(:,:,k) + dt*(elem(ie)%derived%eta_dot_dpdn(:,:,k+1) -&
                 elem(ie)%derived%eta_dot_dpdn(:,:,k))
