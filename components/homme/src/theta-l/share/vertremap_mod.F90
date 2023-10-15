@@ -81,7 +81,7 @@ contains
           sum(elem(ie)%state%dp3d(:,:,:,np1),3)
      do k=1,nlev
         r_hat = r_hat_from_phi((elem(ie)%state%phinh_i(:, :, k,np1)+elem(ie)%state%phinh_i(:, :, k+1,np1))/2) 
-        dp(:,:,k) = r_hat**2 * (( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
+        dp(:,:,k) = (( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
               ( hvcoord%hybi(k+1) - hvcoord%hybi(k) )*elem(ie)%state%ps_v(:,:,np1))
         if (rsplit==0) then
            dp_star(:,:,k) = dp(:,:,k) + dt*(elem(ie)%derived%eta_dot_dpdn(:,:,k+1) -&
