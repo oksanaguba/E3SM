@@ -519,7 +519,7 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
   real(real_kind) :: r_hat, pdensity
 
   r_hat = r_hat_from_phi(phi_from_z(zm))
-  pdensity = r_hat**2 * dp
+  pdensity = dp
   ! set prognostic state variables at level midpoints
   elem%state%v   (i,j,1,k,n0:n1)   = u
   elem%state%v   (i,j,2,k,n0:n1)   = v
@@ -571,7 +571,7 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
 
   
   r_hat = r_hat_from_phi(phi_from_z(zm, nlev), nlev)
-  pdensity = r_hat**2 * dp
+  pdensity = dp
 
   do n=n0,n1
     ! set prognostic state variables at level midpoints
