@@ -1,0 +1,37 @@
+# CMake initial cache file for Linux 64bit RHEL7/CENTOS7
+# tested with stock gcc/gfortran and packages from EPEL:
+#    openmpi-devel 
+#    blas-devel
+#    lapack-devel
+#    netcdf-fortran-devel
+#
+#
+SET (CMAKE_Fortran_COMPILER mpif90 CACHE FILEPATH "")
+SET (CMAKE_C_COMPILER mpicc CACHE FILEPATH "")
+SET (CMAKE_CXX_COMPILER mpicc CACHE FILEPATH "")
+SET (NetCDF_C $ENV{NETCDF_C_PATH} CACHE FILEPATH "") 
+SET (NetCDF_C_LIBRARY $ENV{NETCDF_C_PATH}/lib/libnetcdf.so CACHE FILEPATH "")
+SET (NetCDF_C_INCLUDE_DIR $ENV{NETCDF_C_PATH}/include CACHE FILEPATH "")
+SET (NetCDF_Fortran $ENV{NETCDF_F_PATH} CACHE FILEPATH "") 
+
+SET (NetCDF_Fortran_PATH $ENV{NETCDF_F_PATH} CACHE FILEPATH "")
+SET (NetCDF_Fortran_LIBRARY $ENV{NETCDF_F_PATH}/lib/libnetcdff.so CACHE FILEPATH "")
+SET (NetCDF_Fortran_INCLUDE_DIR $ENV{NETCDF_F_PATH}/include CACHE FILEPATH "")
+SET (HDF5_C_LIBRARY $ENV{HDF5_PATH}/lib/libhdf5.so CACHE FILEPATH "")
+SET (HDF5_C_INCLUDE_DIR $ENV{HDF5_PATH}/include CACHE FILEPATH "")
+SET (HDF5_HL_LIBRARY $ENV{HDF5_PATH}/lib/libhdf5_hl.so CACHE FILEPATH "")
+SET (HDF5_HL_INCLUDE_DIR $ENV{HDF5_PATH}/include CACHE FILEPATH "")
+SET (PNETCDF_DIR $ENV{PNETCDF_PATH} CACHE FILEPATH "")
+
+
+
+
+
+
+SET (WITH_PNETCDF TRUE CACHE FILEPATH "")
+
+# hack until findnetcdf is updated to look for netcdf.mod
+#SET (ADD_Fortran_FLAGS $ENV{NETCDF_F_PATH}/include CACHE STRING "")
+
+SET (USE_QUEUING FALSE CACHE BOOL "")
+SET (HOMME_FIND_BLASLAPACK ON CACHE BOOL "")
