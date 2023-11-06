@@ -26,6 +26,7 @@ module prim_driver_base
   use reduction_mod,    only: reductionbuffer_ordered_1d_t, red_min, red_max, red_max_int, &
                               red_sum, red_sum_int, red_flops, initreductionbuffer, &
                               red_max_index, red_min_index
+  use physical_constants, only:rearth, gravit => g
 #if !defined(CAM) && !defined(SCREAM)
   use prim_restart_mod, only : initrestartfile
   use restart_io_mod ,  only : readrestart
@@ -1114,7 +1115,7 @@ contains
        ! compute HOMME test case forcing
        ! by calling it here, it mimics eam forcings computations in standalone
        ! homme.
-       call compute_test_forcing(elem,hybrid,hvcoord,tl%n0,n0_qdp,dt_remap,nets,nete,tl)
+!       call compute_test_forcing(elem,hybrid,hvcoord,tl%n0,n0_qdp,dt_remap,nets,nete,tl)
 #endif
 
        call applyCAMforcing_remap(elem,hvcoord,tl%n0,n0_qdp,dt_remap,nets,nete)
@@ -1176,7 +1177,12 @@ contains
         nete_in=nete
       endif
 
+!print *, 'phi before', elem(1)%state%phinh_i(1,1,:,tl%np1)
+
+
       call vertical_remap(hybrid,elem,hvcoord,dt_remap,tl%np1,np1_qdp,nets_in,nete_in)
+!print *, 'phi after', elem(1)%state%phinh_i(1,1,:,tl%np1)
+
     elseif(prim_step_type == 2) then
       ! This time stepping routine permits the vertical remap time
       ! step to be shorter than the tracer transport time step.
@@ -1347,7 +1353,7 @@ contains
 
 #if !defined(CAM) && !defined(SCREAM)
     ! Compute test forcing over tracer time step.
-    call compute_test_forcing(elem,hybrid,hvcoord,tl%n0,n0_qdp,dt_q,nets,nete,tl)
+!    call compute_test_forcing(elem,hybrid,hvcoord,tl%n0,n0_qdp,dt_q,nets,nete,tl)
 #endif
 
 #ifdef CAM
@@ -1574,6 +1580,7 @@ contains
   use physical_constants, only : cp, g, kappa, Rgas, p0
   use element_ops,        only : get_temperature, get_r_star, get_hydro_pressure
   use eos,                only : pnh_and_exner_from_eos
+  use eos,                only : pnh_and_exner_from_eos3
 #ifdef HOMMEXX_BFB_TESTING
   use bfb_mod,            only : bfb_pow
 #endif
@@ -1599,7 +1606,9 @@ contains
   real (kind=real_kind)  :: phi_n1(np,np,nlevp)
   real (kind=real_kind)  :: rstarn1(np,np,nlev)
   real (kind=real_kind)  :: exner(np,np,nlev)
-  real (kind=real_kind)  :: dpnh_dp_i(np,np,nlevp)
+  real (kind=real_kind)  :: p_exner(np,np,nlev)
+  real (kind=real_kind)  :: dphi(np,np,nlev)
+  real (kind=real_kind)  :: dpnh_dp_i(np,np,nlevp), rs(np,np), r1(np,np), r0, aa, bb
 #endif
 
 #ifdef HOMMEXX_BFB_TESTING
@@ -1612,6 +1621,9 @@ contains
   call t_startf("ApplyCAMForcing_tracers")
 
 #ifdef MODEL_THETA_L
+
+  r0=rearth
+
   if (dt_remap_factor==0) then
      adjust_ps=.true.   ! stay on reference levels for Eulerian case
   else
@@ -1641,8 +1653,15 @@ contains
 
    !one can set pprime=0 to hydro regime but it is not done in master
    !compute pnh, here only pnh is needed
-   call pnh_and_exner_from_eos(hvcoord,elem%state%vtheta_dp(:,:,:,np1),dp,&
-        elem%state%phinh_i(:,:,:,np1),pnh,exner,dpnh_dp_i)
+
+   dphi(:,:,1:nlev)=elem%state%phinh_i(:,:,2:nlevp,np1)-elem%state%phinh_i(:,:,1:nlev,np1)
+
+!   call pnh_and_exner_from_eos(hvcoord,elem%state%vtheta_dp(:,:,:,np1),dp,&
+!        elem%state%phinh_i(:,:,:,np1),pnh,exner,dpnh_dp_i,p_exner=p_exner)
+
+   call pnh_and_exner_from_eos3(hvcoord,elem%state%vtheta_dp(:,:,:,np1),dp,&
+        dphi,pnh,exner,dpnh_dp_i,elem%state%phis,'forcing',p_exner=p_exner)
+
    do k=1,nlev
       pprime(:,:,k) = pnh(:,:,k)-phydro(:,:,k)
    enddo
@@ -1651,7 +1670,7 @@ contains
 #endif
 
    if (adjustment) then 
-
+!stop
       ! hard adjust Q from physics.  negativity check done in physics
       do k=1,nlev
          do j=1,np
@@ -1686,6 +1705,10 @@ contains
       end do
 #endif
    else ! end of adjustment
+
+!standalone homme is here
+!stop
+!print *, elem%derived%FQ(:,:,:,:)
       ! apply forcing to Qdp
       elem%derived%FQps(:,:)=0
       do q=1,qsize
@@ -1712,6 +1735,9 @@ contains
 
       ! to conserve dry mass in the precese of Q1 forcing:
       ps(:,:) = ps(:,:) + dt*elem%derived%FQps(:,:)
+
+!print *, elem%derived%FQps(:,:)
+
    endif ! if adjustment
 
 
@@ -1746,10 +1772,13 @@ contains
          call get_hydro_pressure(phydro,elem%state%dp3d(:,:,:,np1),hvcoord)
       endif
       do k=1,nlev
+
+!da issue NEEDS REVISITING
          pnh(:,:,k)=phydro(:,:,k) + pprime(:,:,k)
 #ifdef HOMMEXX_BFB_TESTING
          exner(:,:,k)=bfb_pow(pnh(:,:,k)/p0,Rgas/Cp)
 #else
+!da issue
          exner(:,:,k)=(pnh(:,:,k)/p0)**(Rgas/Cp)
 #endif
       enddo
@@ -1758,24 +1787,39 @@ contains
    !update temperature
    call get_R_star(rstarn1,elem%state%Q(:,:,:,1))
    tn1(:,:,:) = tn1(:,:,:) + dt*elem%derived%FT(:,:,:)
-   
-   
+
    ! now we have tn1,dp,pnh - compute corresponding theta and phi:
    vthn1 =  (rstarn1(:,:,:)/Rgas)*tn1(:,:,:)*elem%state%dp3d(:,:,:,np1)/exner(:,:,:)
      
    phi_n1(:,:,nlevp)=elem%state%phinh_i(:,:,nlevp,np1)
+
+!da issue
    do k=nlev,1,-1
-      phi_n1(:,:,k)=phi_n1(:,:,k+1) + Rgas*vthn1(:,:,k)*exner(:,:,k)/pnh(:,:,k)
+      !phi_n1(:,:,k)=phi_n1(:,:,k+1) + Rgas*vthn1(:,:,k)*exner(:,:,k)/pnh(:,:,k)
+
+      !bottom rhat
+      rs = phi_n1(:,:,k+1)/gravit/r0 + 1.0
+     
+      !top rhat
+      r1=( rs**3.0 + 3.0*Rgas*vthn1(:,:,k)/p_exner(:,:,k)/gravit/r0 )**(1.0/3.0)
+
+      phi_n1(:,:,k)=gravit*r0*(r1-1.0)
+    
    enddo
    
    !finally, compute difference for FVTheta
    ! this method is using new dp, new exner, new-new r*, new t
    elem%derived%FVTheta(:,:,:) = &
         (vthn1 - elem%state%vtheta_dp(:,:,:,np1))/dt
-   
+ 
+!not zero
+!print *, elem%derived%FVTheta(:,:,1)
+  
    elem%derived%FPHI(:,:,:) = &
         (phi_n1 - elem%state%phinh_i(:,:,:,np1))/dt
    
+!print *, elem%derived%FPHI(1,1,:)
+!stop
 #endif
 
   call t_stopf("ApplyCAMForcing_tracers")
