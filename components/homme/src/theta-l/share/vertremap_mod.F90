@@ -80,7 +80,6 @@ contains
      elem(ie)%state%ps_v(:,:,np1) = hvcoord%hyai(1)*hvcoord%ps0 + &
           sum(elem(ie)%state%dp3d(:,:,:,np1),3)
      do k=1,nlev
-        r_hat = r_hat_from_phi((elem(ie)%state%phinh_i(:, :, k,np1)+elem(ie)%state%phinh_i(:, :, k+1,np1))/2) 
         dp(:,:,k) = (( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
               ( hvcoord%hybi(k+1) - hvcoord%hybi(k) )*elem(ie)%state%ps_v(:,:,np1))
         if (rsplit==0) then
@@ -108,7 +107,7 @@ contains
 
      if (rsplit>0) then
         ! remove hydrostatic phi befor remap
-        call phi_from_eos(hvcoord,elem(ie)%state%phis,elem(ie)%state%vtheta_dp(:,:,:,np1),dp_star,phi_ref)
+        call phi_from_eos(hvcoord,elem(ie)%state%phis, elem(ie)%state%ps_v(:,:,np1),elem(ie)%state%vtheta_dp(:,:,:,np1),dp_star,phi_ref)
         elem(ie)%state%phinh_i(:,:,:,np1)=&
              elem(ie)%state%phinh_i(:,:,:,np1) -phi_ref(:,:,:)
  
@@ -142,7 +141,7 @@ contains
         enddo
 
         ! depends on theta, so do this after updating theta:
-        call phi_from_eos(hvcoord,elem(ie)%state%phis,elem(ie)%state%vtheta_dp(:,:,:,np1),dp,phi_ref)
+        call phi_from_eos(hvcoord,elem(ie)%state%phis,elem(ie)%state%ps_v(:,:,np1),elem(ie)%state%vtheta_dp(:,:,:,np1),dp,phi_ref)
         elem(ie)%state%phinh_i(:,:,:,np1)=&
              elem(ie)%state%phinh_i(:,:,:,np1)+phi_ref(:,:,:)
 

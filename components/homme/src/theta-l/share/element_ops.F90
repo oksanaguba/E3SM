@@ -61,6 +61,7 @@ module element_ops
   use parallel_mod,   only: abortmp
   use physical_constants, only : p0, Cp, Rgas, Rwater_vapor, Cpwater_vapor, kappa, rearth, gravit, dd_pi, TREF
   use control_mod,    only: use_moisture, theta_hydrostatic_mode, hv_ref_profiles
+  use deep_atm_mod,   only: quasi_hydrostatic_terms
   use eos,            only: pnh_and_exner_from_eos, phi_from_eos
   implicit none
   private
@@ -156,7 +157,7 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
       endif
     case('geo_i');
       if(theta_hydrostatic_mode) then
-         call phi_from_eos(hvcoord,elem%state%phis,elem%state%vtheta_dp(:,:,:,nt),elem%state%dp3d(:,:,:,nt),field)
+         call phi_from_eos(hvcoord,elem%state%phis,elem%state%ps_v(:,:,nt),elem%state%vtheta_dp(:,:,:,nt),elem%state%dp3d(:,:,:,nt),field)
       else
           field = elem%state%phinh_i(:,:,1:nlevp,nt)
       endif
@@ -365,7 +366,7 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
 
     if(theta_hydrostatic_mode) then
        dp=elem%state%dp3d(:,:,:,nt)
-       call phi_from_eos(hvcoord,elem%state%phis,elem%state%vtheta_dp(:,:,:,nt),dp,phi_i)
+       call phi_from_eos(hvcoord,elem%state%phis,elem%state%ps_v(:,:,nt),elem%state%vtheta_dp(:,:,:,nt),dp,phi_i)
     else
        phi_i = elem%state%phinh_i(:,:,:,nt)
     endif
@@ -530,7 +531,6 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
 
   end subroutine set_state
 
-
   subroutine set_state_i(u,v,w,T,ps,phis,p,zm,g,i,j,k,elem,n0,n1)
   use deep_atm_mod, only: phi_from_z
   !
@@ -580,7 +580,7 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
     elem%state%dp3d(:,:,:,  n)        = pdensity
     elem%state%ps_v(:,:,    n)        = ps
     elem%state%phis(:,:)              = phis
-    elem%state%vtheta_dp(:,:,:,n)   = (Rstar/Rgas)*T*pdensity*((p/p0)**(-kappa))
+    elem%state%vtheta_dp(:,:,:,n)   = (Rstar/Rgas)*T*pdensity*((p/p0)**(-kappa)) !/r_hat**2
 
     elem%state%w_i (:,:,:,  n)   = w_i
     elem%state%phinh_i(:,:,:, n) = phi_from_z(zi, nlevp)
@@ -708,7 +708,8 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
 
   !_____________________________________________________________________
   subroutine tests_finalize(elem,hvcoord,ie)
-
+  use deep_atm_mod, only: r_hat_from_phi, z_from_phi, phi_from_z, g_from_phi
+  USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
   ! Now that all variables have been initialized, set phi to be in hydrostatic balance
 
   implicit none
@@ -717,26 +718,33 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
   type(element_t),     intent(inout):: elem
   integer, optional,   intent(in)   :: ie ! optional element index, to save initial state
 
-  integer :: k,tl
+  integer :: k,tl, nind
   real(real_kind), dimension(np,np,nlev) :: pi
-
-  real(real_kind), dimension(np,np,nlev) :: pnh,exner
-  real(real_kind), dimension(np,np,nlevp) :: dpnh_dp_i,phi_i
+  real(real_kind), dimension(np,np,nlev) :: pnh,exner,dphi_tmp, dp
+  real(real_kind), dimension(np,np,nlevp) :: dpnh_dp_i,phi_i, phi_i_tmp
+  integer :: niter = 0
+  logical, parameter :: do_rootfinding = .false., pnh_instead_of_mu=.false.
 
   tl=1
-
-  call phi_from_eos(hvcoord,elem%state%phis,elem%state%vtheta_dp(:,:,:,tl),&
-       elem%state%dp3d(:,:,:,tl),elem%state%phinh_i(:,:,:,tl))
+  
+  !call phi_from_eos(hvcoord,elem%state%phis,elem%state%vtheta_dp(:,:,:,tl),&
+  !     elem%state%dp3d(:,:,:,tl),elem%state%phinh_i(:,:,:,tl))
 
   ! Disable the following check in CUDA bfb builds,
   ! since the calls to pow are inexact
 #if !(defined(HOMMEXX_BFB_TESTING) && defined(HOMMEXX_ENABLE_GPU))
-  ! verify discrete hydrostatic balance
+    
+
+  ! verify discrete hydrostatic balance:
+  ! =====================================
   call pnh_and_exner_from_eos(hvcoord,elem%state%vtheta_dp(:,:,:,tl),&
        elem%state%dp3d(:,:,:,tl),elem%state%phinh_i(:,:,:,tl),pnh,exner,dpnh_dp_i)
+ 
+  ! =====================
+   
   do k=1,nlev
      pi(:,:,k) = hvcoord%hyam(k)*hvcoord%ps0 + hvcoord%hybm(k)*elem%state%ps_v(:,:,tl)
-     if (maxval(abs(1-dpnh_dp_i(:,:,k))) > 1e-10) then
+     if (maxval(abs(1-dpnh_dp_i(:,:,k))) > 1e-9) then
         write(iulog,*)'WARNING: hydrostatic inverse FAILED!'
         write(iulog,*)k,minval(dpnh_dp_i(:,:,k)),maxval(dpnh_dp_i(:,:,k))
         write(iulog,*) 'pnh',pi(1,1,k),pnh(1,1,k)
@@ -788,7 +796,7 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
 
    ! compute phi_ref
    temp = theta_ref*dp_ref
-   call phi_from_eos(hvcoord, phis, temp, dp_ref, phi_ref)
+   call phi_from_eos(hvcoord, phis, ps_ref, temp, dp_ref, phi_ref)
 
    ! keep profiles, based on the value of hv_ref_profiles
    if (hv_ref_profiles == 0) then

@@ -1,5 +1,5 @@
 module deep_atm_mod
-use physical_constants, only : rearth, gravit
+use physical_constants, only : rearth, gravit, omega
 use kinds, only: real_kind
 use dimensions_mod, only: np
 implicit none
@@ -9,7 +9,8 @@ save
 public :: r_hat_from_phi, &
           z_from_phi, &
           g_from_phi, &
-          phi_from_z
+          phi_from_z, &
+          quasi_hydrostatic_terms
 public :: atm_is_deep, gravity_is_const
 
 logical, parameter :: atm_is_deep=.true.
@@ -235,4 +236,13 @@ function g_from_phi_scalar(phi) result(g)
   g = g_from_z_scalar(z_from_phi_scalar(phi))
 end function g_from_phi_scalar
 
+
+function quasi_hydrostatic_terms(u_top, lat, phi_top) result(terms)
+  real(kind=real_kind), intent(in) :: u_top(np,np,2)
+  real(kind=real_kind), intent(in) :: lat(np,np)
+  real(kind=real_kind), intent(in) :: phi_top(np,np)
+  real(kind=real_kind) :: terms(np,np)
+  terms = - (u_top(:,:,1)**2 + u_top(:,:,2)**2)/(rearth + z_from_phi(phi_top)) - 2 * omega * cos(lat) * u_top(:,:,1) 
+
+end function quasi_hydrostatic_terms
 end module 

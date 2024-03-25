@@ -931,7 +931,7 @@ contains
 !      enddo
 
     endif !runtype
-
+    
 #endif
 !$OMP MASTER
     if (runtype==2) then
@@ -949,14 +949,11 @@ contains
     ! have access to hvcoord to compute dp3d:
     do ie=nets,nete
        do k=1,nlev
-          r_hat = r_hat_from_phi((elem(ie)%state%phinh_i(:,:,k,tl%n0)+elem(ie)%state%phinh_i(:,:,k+1,tl%n0))/2)
-          elem(ie)%state%dp3d(:,:,k,tl%n0)=r_hat**2 * &
-               ( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
+          elem(ie)%state%dp3d(:,:,k,tl%n0)= ( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
                ( hvcoord%hybi(k+1) - hvcoord%hybi(k) )*elem(ie)%state%ps_v(:,:,tl%n0)
        enddo
     end do
 #endif
-
 
     ! For new runs, and branch runs, convert state variable Q to (Qdp)
     ! because initial conditon reads in Q, not Qdp
@@ -981,7 +978,6 @@ contains
           enddo
        enddo
     endif
-
     call model_init2(elem(:), hybrid,deriv1,hvcoord,tl,nets,nete)
 
     ! advective and viscious CFL estimates
@@ -1063,6 +1059,7 @@ contains
     use hybvcoord_mod,      only: hvcoord_t
     use parallel_mod,       only: abortmp
     use prim_state_mod,     only: prim_printstate
+use eos, only: pnh_and_exner_from_eos
     use vertremap_mod,      only: vertical_remap
     use reduction_mod,      only: parallelmax
     use time_mod,           only: TimeLevel_t, timelevel_update, timelevel_qdp, nsplit, tstep
@@ -1086,6 +1083,7 @@ contains
     real(kind=real_kind) :: dp_np1(np,np)
     integer :: ie,i,j,k,n,q,t,scm_dum
     integer :: n0_qdp,np1_qdp,r,nstep_end,nets_in,nete_in,step_factor
+         real (kind=real_kind) :: pnh(np, np, nlev), exner(np, np, nlev), dpnh_i(np,np,nlevp)
     logical :: compute_diagnostics
 
     ! compute timesteps for tracer transport and vertical remap
@@ -1110,7 +1108,8 @@ contains
     ! compute scalar diagnostics if currently active
     if (compute_diagnostics) call run_diagnostics(elem,hvcoord,tl,3,.true.,nets,nete)
 
-    if (prim_step_type == 1) then
+
+   if (prim_step_type == 1) then
        call TimeLevel_Qdp(tl, dt_tracer_factor, n0_qdp, np1_qdp)
 
 #if !defined(CAM) && !defined(SCREAM)
@@ -1119,8 +1118,8 @@ contains
        ! homme.
        call compute_test_forcing(elem,hybrid,hvcoord,tl%n0,n0_qdp,dt_remap,nets,nete,tl)
 #endif
-
-       call applyCAMforcing_remap(elem,hvcoord,tl%n0,n0_qdp,dt_remap,nets,nete)
+ 
+       !call applyCAMforcing_remap(elem,hvcoord,tl%n0,n0_qdp,dt_remap,nets,nete)
 
        ! E(1) Energy after CAM forcing
        if (compute_diagnostics) call run_diagnostics(elem,hvcoord,tl,1,.true.,nets,nete)
@@ -1178,7 +1177,7 @@ contains
         nets_in=nets
         nete_in=nete
       endif
-
+      
       call vertical_remap(hybrid,elem,hvcoord,dt_remap,tl%np1,np1_qdp,nets_in,nete_in)
     elseif(prim_step_type == 2) then
       ! This time stepping routine permits the vertical remap time
@@ -1260,7 +1259,6 @@ contains
     real (kind=real_kind)                          :: maxcflx, maxcfly
     real (kind=real_kind) :: dp_np1(np,np)
     logical :: compute_diagnostics
-
     dt_q = dt*dt_tracer_factor
 
     call set_tracer_transport_derived_values(elem, nets, nete, tl)
@@ -1413,8 +1411,7 @@ contains
                    elem(ie)%state%ps_v(:,:,tl%np1) =  hvcoord%hyai(1)*hvcoord%ps0 + &
                         sum(elem(ie)%state%dp3d(:,:,:,tl%np1),3)
                    do k=1,nlev
-                      r_hat = r_hat_from_phi((elem(ie)%state%phinh_i(:,:,k,tl%np1)+elem(ie)%state%phinh_i(:,:,k+1,tl%np1))/2)  !DA_CHANGE
-                      dp(:,:,k) = r_hat**2 *(hvcoord%hyai(k+1) - hvcoord%hyai(k))*hvcoord%ps0 + &
+                      dp(:,:,k) = (hvcoord%hyai(k+1) - hvcoord%hyai(k))*hvcoord%ps0 + &
                                   (hvcoord%hybi(k+1) - hvcoord%hybi(k))*elem(ie)%state%ps_v(:,:,tl%np1)
                    end do
                    elem(ie)%state%dp3d(:,:,:,tl%np1) = dp
@@ -1576,7 +1573,7 @@ contains
   !
   use control_mod,        only : use_moisture, dt_remap_factor
   use hybvcoord_mod,      only : hvcoord_t
-  use deep_atm_mod, only: r_hat_from_phi
+  use deep_atm_mod, only: r_hat_from_phi, quasi_hydrostatic_terms
 #ifdef MODEL_THETA_L
   use control_mod,        only : theta_hydrostatic_mode
   use physical_constants, only : cp, gravit, kappa, Rgas, p0, rearth
@@ -1729,8 +1726,7 @@ contains
       if (adjust_ps) then
          ! compute new dp3d from adjusted ps()
          do k=1,nlev
-            r_hat = r_hat_from_phi((elem%state%phinh_i(:,:,k,np1_qdp)+elem%state%phinh_i(:,:,k+1,np1_qdp))/2) !DA_CHANGE
-            dp_adj(:,:,k) = r_hat**2 * (( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
+            dp_adj(:,:,k) = (( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
                  ( hvcoord%hybi(k+1) - hvcoord%hybi(k))*ps(:,:))
          enddo
       endif

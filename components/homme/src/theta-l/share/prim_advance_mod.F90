@@ -5,7 +5,7 @@
 !
 !  Man dynamics routines for "theta" nonhydrostatic model
 !  Original version: Mark Taylor 2017/1
-!  
+! call  
 !  2018/8 TOM sponge layer scaling from P. Lauritzen
 !  09/2018: O. Guba  code for new ftypes
 !  2018/12: M. Taylor apply forcing assuming nearly constant p 
@@ -105,6 +105,7 @@ contains
     real (kind=real_kind) :: itertol,a1,a2,a3,a4,a5,a6,ahat1,ahat2
     real (kind=real_kind) :: ahat3,ahat4,ahat5,ahat6,dhat1,dhat2,dhat3,dhat4
     real (kind=real_kind) ::  gamma,delta,ap,aphat,dhat5,offcenter
+    real (kind=real_kind) :: pnh(np, np, nlev), exner(np, np, nlev), dpnh_i(np,np,nlevp)
 
     integer :: ie,nm1,n0,np1,nstep,qsplit_stage,k
     integer :: n,i,j,maxiter
@@ -153,6 +154,7 @@ contains
        return
     endif
 #endif
+
 
     ! ==================================
     ! Take timestep
@@ -547,7 +549,7 @@ contains
 !----------------------------- ADVANCE-HYPERVIS ----------------------------
 
   subroutine advance_hypervis(elem,hvcoord,hybrid,deriv,nt,nets,nete,dt2,eta_ave_w)
-  use deep_atm_mod, only: g_from_phi
+  use deep_atm_mod, only: g_from_phi, quasi_hydrostatic_terms
   !
   !  take one timestep of:
   !          u(:,:,:,np) = u(:,:,:,np) +  dt2*nu*laplacian**order ( u )
@@ -1025,7 +1027,8 @@ contains
 
  subroutine compute_andor_apply_rhs(np1,nm1,n0,dt2,elem,hvcoord,hybrid,&
        deriv,nets,nete,compute_diagnostics,eta_ave_w,scale1,scale2,scale3)
-  use deep_atm_mod, only: r_hat_from_phi, z_from_phi, g_from_phi
+  use deep_atm_mod, only: r_hat_from_phi, z_from_phi, g_from_phi, quasi_hydrostatic_terms
+  use baroclinic_wave, only: baroclinic_wave_test
   use control_mod, only: atm_is_deep
   ! ===================================
   ! compute the RHS, accumulate into u(np1) and apply DSS
@@ -1114,6 +1117,7 @@ contains
   real (kind=real_kind) ::  vtemp(np,np,2,nlev)       ! generic gradient storage
   real (kind=real_kind), dimension(np,np) :: sdot_sum ! temporary field
   real (kind=real_kind) ::  v1,v2,w,d_eta_dot_dpdn_dn, T0
+  real (kind=real_kind) :: u_tmp, v_tmp, t_tmp, p_tmp, phis_tmp, rho_tmp, theta_tmp, q_tmp, psv_tmp, lon_tmp, lat_tmp, z_tmp, maxdiff 
   integer :: i,j,k,kptr,ie, nlyr_tot
 
   call t_startf('compute_andor_apply_rhs')
@@ -1166,7 +1170,6 @@ contains
      ! this routine will set dpnh_dp_i(nlevp)=1 - a very good approximation, that will
      ! then be corrected below, after the DSS.  
      call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_i,pnh,exner,dpnh_dp_i,caller='CAAR')
-
      dp3d_i(:,:,1) = dp3d(:,:,1)
      dp3d_i(:,:,nlevp) = dp3d(:,:,nlev)
      do k=2,nlev
@@ -1350,7 +1353,7 @@ contains
         gradphinh_i(:,:,:,k)   = recip_r_hat_vec(:,:,:,k)*gradient_sphere(phi_i(:,:,k),deriv,elem(ie)%Dinv)   
         gradw_i(:,:,:,k)   = recip_r_hat_vec(:,:,:,k)*gradient_sphere(elem(ie)%state%w_i(:,:,k,n0),deriv,elem(ie)%Dinv)
         v_gradw_i(:,:,k) = v_i(:,:,1,k)*gradw_i(:,:,1,k) + v_i(:,:,2,k)*gradw_i(:,:,2,k)
-        if ( atm_is_deep) then
+        if ( atm_is_deep .and. (k /=  1)) then
           w_deep_metric_term(:,:,k) = (v_i(:,:,1,k)**2 + v_i(:,:,2,k)**2)/(rearth + z_from_phi(phi_i(:,:,k))) ! DA_CHANGE
           w_deep_coriolis_term(:,:,k) = fcos * v_i(:,:,1,k)
         else
@@ -1362,6 +1365,7 @@ contains
                                           + scale1*(w_deep_metric_term(:,:,k) + w_deep_coriolis_term(:,:,k)) & 
                                           - scale2*g_from_phi((phi_i(:,:,k) + phi_i(:,:,k+1))/2.0)*(1-dpnh_dp_i(:,:,k) ) ! DA_CHANGE
 
+        !write(*,*) "max 1-mu at lev", k, ": ",  maxval(abs(1- dpnh_dp_i(:,:,k)))
         ! phi - tendency on interfaces
         ! vtemp(:,:,:,k) = gradphinh_i(:,:,:,k) + &
         !    (scale2-1)*hvcoord%hybi(k)*elem(ie)%derived%gradphis(:,:,:)
@@ -1382,7 +1386,7 @@ contains
 
      ! k =nlevp case, all terms in the imex methods are treated explicitly at the boundary
      k =nlevp 
-     w_deep_metric_term(:,:,k) = (v_i(:,:,1,k)**2 + v_i(:,:,2,k)**2)/(rearth + z_from_phi(phi_i(:,:,k))) ! DA_CHANGE
+     w_deep_metric_term(:,:,k) =  (v_i(:,:,1,k)**2 + v_i(:,:,2,k)**2)/(rearth + z_from_phi(phi_i(:,:,k))) ! DA_CHANGE
   
     w_deep_coriolis_term(:,:,k) = fcos * v_i(:,:,1,k)
     ! compute gradphi at interfaces and then average to levels
@@ -1540,7 +1544,6 @@ contains
            end do
         end do     
      end do 
-
 
 
      

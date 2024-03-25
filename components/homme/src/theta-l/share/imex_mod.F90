@@ -145,7 +145,7 @@ contains
        itercount=0
        itererr=0
        do ie=nets,nete
-          call phi_from_eos(hvcoord,elem(ie)%state%phis,elem(ie)%state%vtheta_dp(:,:,:,np1),&
+          call phi_from_eos(hvcoord,elem(ie)%state%phis, elem(ie)%state%ps_v(:,:,np1),elem(ie)%state%vtheta_dp(:,:,:,np1),&
                elem(ie)%state%dp3d(:,:,:,np1),elem(ie)%state%phinh_i(:,:,:,np1))
           elem(ie)%state%w_i(:,:,:,np1)=0
        enddo
@@ -227,7 +227,7 @@ contains
 #endif
 #if 1
        ! use hydrostatic for initial guess
-       call phi_from_eos(hvcoord,elem(ie)%state%phis,elem(ie)%state%vtheta_dp(:,:,:,np1),&
+       call phi_from_eos(hvcoord,elem(ie)%state%phis,elem(ie)%state%ps_v(:,:,np1),elem(ie)%state%vtheta_dp(:,:,:,np1),&
             elem(ie)%state%dp3d(:,:,:,np1),phi_np1)
        w_np1(:,:,1:nlev) = (z_from_phi(phi_np1(:,:,1:nlev), nlev) -  z_from_phi(phi_n0(:,:,1:nlev), nlev ))/(dt2) ! DA_CHANGE
 #endif
@@ -273,7 +273,7 @@ contains
           enddo
  
           ! numerical J:
-          !call get_dirk_jacobian(JacL,JacD,JacU,dt2,elem(ie)%state%dp3d(:,:,:,np1),dphi,pnh,0,1d-4,hvcoord,dpnh_dp_i,vtheta_dp) 
+          !call get_dirk_jacobian(JacL,JacD,JacU,dt2,elem(ie)%state%dp3d(:,:,:,np1),dphi, phi_np1,pnh,0,1d-4,hvcoord,dpnh_dp_i,elem(ie)%state%vtheta_dp(:,:,:,np1)) 
           ! analytic J:
           call get_dirk_jacobian(JacL,JacD,JacU,dt2,elem(ie)%state%dp3d(:,:,:,np1),dphi,phi_np1,pnh,1) 
 
@@ -341,7 +341,6 @@ contains
           ! this is not used in this loop, so move out of loop
           !reserr=maxval(abs(Fn))/(wmax*abs(dt2)) 
           deltaerr=maxval(abs(x))/wmax
-
           ! update iteration count and error measure
           itercount=itercount+1
           !if (reserr < restol) exit
@@ -422,16 +421,17 @@ contains
     real (kind=real_kind) :: a(np,np),b(np,np),ck(np,np),ckm1(np,np)
     !
     integer :: k,l,k2
-    if (exact.eq.1) then ! use exact Jacobian
+    if (exact.eq.1) then ! use exact JacobianA
+
        ! this code will need to change when the equation of state is changed.
        ! add special cases for k==1 and k==nlev+1
        phi_i_tmp = phi_i
        k  = 1 ! Jacobian row 1
-       r_hat(:,:,k) = r_hat_from_phi((phi_i_tmp(:,:,k)+phi_i_tmp(:,:,k+1))/2) ! DA_CHANGE
-       a  = (dt2*(g_from_phi((phi_i_tmp(:,:,k)+phi_i_tmp(:,:,k+1))/2)))**2/(1-kappa) ! DA_CHANGE
+       r_hat(:,:,k) = r_hat_from_phi(phi_i_tmp(:,:,k)) ! DA_CHANGE
+       a  = (dt2*(g_from_phi(phi_i_tmp(:,:,k))))**2/(1-kappa) ! DA_CHANGE
        b  = a/dp3d(:,:,k)
        ck = pnh(:,:,k)/dphi(:,:,k)
-       JacU(:,:,k) = 2*b*ck
+       JacU(:,:,k) = 0 * r_hat(:,:,k)**2 * 2*b*ck ! Neumann upper boundary sets \mu \equiv 1
        JacD(:,:,k) = 1 - JacU(:,:,k)
        ckm1 = ck
        do k = 2,nlev-1 ! Jacobian row k
@@ -439,18 +439,20 @@ contains
           a  = (dt2*(g_from_phi(phi_i_tmp(:,:,k))))**2/(1-kappa) ! DA_CHANGE
           b  = 2*a/(dp3d(:,:,k-1) + dp3d(:,:,k))
           ck = pnh(:,:,k)/dphi(:,:,k)
-          JacL(:,:,k-1) = b*ckm1
-          JacU(:,:,k  ) = b*ck
+          JacL(:,:,k-1) = r_hat(:,:,k)**2 * b*ckm1 ! TODO: this disagrees with definition of b that comes from Neumann 
+          JacU(:,:,k  ) = r_hat(:,:,k)**2 * b*ck
           JacD(:,:,k  ) = 1 - JacL(:,:,k-1) - JacU(:,:,k)
           ckm1 = ck
        end do
+
+       !JacL(:,:,1) = 0
        k  = nlev ! Jacobian row nlev
        r_hat(:,:,k) = r_hat_from_phi( phi_i_tmp(:,:,k)) !DA_CHANGE
        a  = (dt2*(g_from_phi(phi_i_tmp(:,:,k))))**2/(1-kappa) !DA_CHANGE
        b  = 2*a/(dp3d(:,:,k) + dp3d(:,:,k-1))
        ck = pnh(:,:,k)/dphi(:,:,k)
-       JacL(:,:,k-1) = b*ckm1
-       JacD(:,:,k  ) = 1 - JacL(:,:,k-1) - b*ck
+       JacL(:,:,k-1) = r_hat(:,:,k)**2 * b*ckm1
+       JacD(:,:,k  ) = 1 - JacL(:,:,k-1) - r_hat(:,:,k)**2 * b*ck
 
     else ! use finite difference approximation to Jacobian with differencing size espie
       ! compute Jacobian of F(dphi) = phi +const + (dt*g)^2 *(1-dp/dpi) column wise

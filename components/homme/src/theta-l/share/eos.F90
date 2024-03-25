@@ -59,6 +59,7 @@ implicit none
   real (kind=real_kind), intent(out), optional :: pnh_i_out(np,np,nlevp)  ! pnh on interfaces
   character(len=*),      intent(in), optional  :: caller       ! name for error
 
+
   !   local
   real (kind=real_kind) :: dphi(np,np,nlev)
   integer :: k
@@ -66,6 +67,7 @@ implicit none
   do k=1,nlev
      dphi(:,:,k)=phi_i(:,:,k+1)-phi_i(:,:,k)
   enddo
+  !write(*,*) "dphi", dphi(1,1,:)
   if (present(caller)) then
      call pnh_and_exner_from_eos2(hvcoord,vtheta_dp,dp3d,dphi,phi_i,pnh,exner,&
           dpnh_dp_i,caller,pnh_i_out)
@@ -79,7 +81,7 @@ implicit none
 
 subroutine pnh_and_exner_from_eos2(hvcoord,vtheta_dp,dp3d,dphi,phi_i,pnh,exner,&
      dpnh_dp_i,caller,pnh_i_out)
-use deep_atm_mod, only: r_hat_from_phi
+use deep_atm_mod, only: r_hat_from_phi, g_from_phi
 implicit none
 !
 ! Use Equation of State to compute exner pressure, nh presure
@@ -103,7 +105,7 @@ implicit none
   real (kind=real_kind), intent(out) :: pnh(np,np,nlev)        ! nh nonhyrdo pressure
   real (kind=real_kind), intent(out) :: dpnh_dp_i(np,np,nlevp) ! d(pnh) / d(pi)
   real (kind=real_kind), intent(out) :: exner(np,np,nlev)      ! exner nh pressure
-  character(len=*),      intent(in)  :: caller       ! name for error
+  character(len=*),      intent(in), optional  :: caller       ! name for error
   real (kind=real_kind), intent(out), optional :: pnh_i_out(np,np,nlevp)  ! pnh on interfaces
 
 
@@ -190,12 +192,14 @@ implicit none
 ! boundary terms
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!  
    r_hat = r_hat_from_phi(phi_i(:, :, 1))
-   pnh_i(:,:,1) = hvcoord%hyai(1)*hvcoord%ps0  ! hydrostatic ptop    
+   !pnh_i(:,:,1) = 0.05 * hvcoord%hyai(1)*hvcoord%ps0  ! hydrostatic ptop
+   !pnh_i(:,:,1) = pnh(:,:,1)-dp3d(:,:,1)/2  ! hydrostatic ptop
    ! surface boundary condition pnh_i determined by w equation to enforce
    ! w b.c.  This is computed in the RHS calculation.  Here, we use
    ! an approximation (hydrostatic) so that dpnh/dpi = 1
    ! DO NOT CHANGE this approximation.  it is required by 
    ! compute_andor_apply_rhs()
+   pnh_i(:,:,1) = pnh(:,:,1) - dp3d(:, :,1)/(2.0 * r_hat**2) !* (1 + u_top/g_from_phi(phi_i(:, :, 1)))
    pnh_i(:,:,nlevp) = pnh(:,:,nlev) + dp3d(:,:,nlev)/2
 
 
@@ -207,15 +211,13 @@ implicit none
       dp3d_i(:,:,k)=(dp3d(:,:,k)+dp3d(:,:,k-1))/2
    end do
    r_hat = r_hat_from_phi(phi_i(:, :, 1)) ! DA_CHANGE
-   dpnh_dp_i(:,:,1)  = r_hat**2 * 2*(pnh(:,:,1)-pnh_i(:,:,1))/dp3d_i(:,:,1)
+   dpnh_dp_i(:,:,1)  = 2*(pnh(:,:,1)-pnh_i(:,:,1))/dp3d_i(:,:,1) * r_hat**2
    r_hat = r_hat_from_phi(phi_i(:, :, nlevp)) ! DA_CHANGE
-   dpnh_dp_i(:,:,nlevp)  = r_hat**2 * 2*(pnh_i(:,:,nlevp)-pnh(:,:,nlev))/dp3d_i(:,:,nlevp)
+   dpnh_dp_i(:,:,nlevp)  = 2*(pnh_i(:,:,nlevp)-pnh(:,:,nlev))/dp3d_i(:,:,nlevp) * r_hat**2
    do k=2,nlev
       r_hat = r_hat_from_phi(phi_i(:, :, k)) !DA_CHANGE
-      dpnh_dp_i(:,:,k) = r_hat**2 * (pnh(:,:,k)-pnh(:,:,k-1))/dp3d_i(:,:,k)        
+      dpnh_dp_i(:,:,k) = (pnh(:,:,k) -pnh(:,:,k-1) )/dp3d_i(:,:,k) * r_hat**2 
    end do
-   
-
    if (present(pnh_i_out)) then
       ! boundary values already computed. interpolate interior
       ! use linear interpolation in hydrostatic pressure coordinate
@@ -233,7 +235,7 @@ implicit none
 
 
   !_____________________________________________________________________
-  subroutine phi_from_eos(hvcoord,phis,vtheta_dp,dp,phi_i)
+  subroutine phi_from_eos(hvcoord,phis,ps,vtheta_dp,dp,phi_i)
   use deep_atm_mod, only: r_hat_from_phi
 !
 ! Use Equation of State to compute geopotential
@@ -258,14 +260,14 @@ implicit none
   type (hvcoord_t),      intent(in)  :: hvcoord                      ! hybrid vertical coordinate struct
   real (kind=real_kind), intent(in) :: vtheta_dp(np,np,nlev)
   real (kind=real_kind), intent(in) :: dp(np,np,nlev)
-  real (kind=real_kind), intent(in) :: phis(np,np)
+  real (kind=real_kind), intent(in) :: phis(np,np), ps(np,np)
   real (kind=real_kind), intent(out) :: phi_i(np,np,nlevp)
  
   !   local
-  real (kind=real_kind) :: r_hat(np,np) ! pressure at cell centers 
   real (kind=real_kind) :: dphi_guess(np,np) ! pressure at cell centers 
   real (kind=real_kind) :: p(np,np,nlev) ! pressure at cell centers 
   real (kind=real_kind) :: p_i(np,np,nlevp)  ! pressure on interfaces
+  real (kind=real_kind) :: r_hat(np,np) ! pressure at cell centers 
 
   integer :: k
 
@@ -295,9 +297,9 @@ implicit none
   endif
 #endif
   ! compute pressure on interfaces                                                                                   
-  p_i(:,:,1)=hvcoord%hyai(1)*hvcoord%ps0
-  do k=1,nlev
-     p_i(:,:,k+1)=p_i(:,:,k) + dp(:,:,k)
+  p_i(:,:,nlevp)=ps
+  do k=nlev,1,-1
+     p_i(:,:,k)=p_i(:,:,k+1) - dp(:,:,k)
   enddo
   do k=1,nlev
      p(:,:,k) = (p_i(:,:,k+1)+p_i(:,:,k))/2

@@ -798,7 +798,7 @@ subroutine set_tracers(q,nq, dp,zm,i,j,k,lat,lon,elem)
   integer :: qi
 
   r_hat = r_hat_from_phi(phi_from_z(zm))
-  pdensity = r_hat**2 * dp
+  pdensity =  dp
 
   if (nq>qsize) call abortmp('qsize set too small for dcmip test case')
   ! set known tracers to q and the rest to a checkerboard pattern
