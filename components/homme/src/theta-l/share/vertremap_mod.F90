@@ -107,7 +107,7 @@ contains
 
      if (rsplit>0) then
         ! remove hydrostatic phi befor remap
-        call phi_from_eos(hvcoord,elem(ie)%state%phis, elem(ie)%state%ps_v(:,:,np1),elem(ie)%state%vtheta_dp(:,:,:,np1),dp_star,phi_ref)
+        call phi_from_eos(hvcoord,elem(ie)%state%phis,elem(ie)%state%vtheta_dp(:,:,:,np1),dp_star,phi_ref)
         elem(ie)%state%phinh_i(:,:,:,np1)=&
              elem(ie)%state%phinh_i(:,:,:,np1) -phi_ref(:,:,:)
  
@@ -141,7 +141,7 @@ contains
         enddo
 
         ! depends on theta, so do this after updating theta:
-        call phi_from_eos(hvcoord,elem(ie)%state%phis,elem(ie)%state%ps_v(:,:,np1),elem(ie)%state%vtheta_dp(:,:,:,np1),dp,phi_ref)
+        call phi_from_eos(hvcoord,elem(ie)%state%phis,elem(ie)%state%vtheta_dp(:,:,:,np1),dp,phi_ref)
         elem(ie)%state%phinh_i(:,:,:,np1)=&
              elem(ie)%state%phinh_i(:,:,:,np1)+phi_ref(:,:,:)
 

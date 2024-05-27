@@ -145,7 +145,7 @@ contains
        itercount=0
        itererr=0
        do ie=nets,nete
-          call phi_from_eos(hvcoord,elem(ie)%state%phis, elem(ie)%state%ps_v(:,:,np1),elem(ie)%state%vtheta_dp(:,:,:,np1),&
+          call phi_from_eos(hvcoord,elem(ie)%state%phis, elem(ie)%state%vtheta_dp(:,:,:,np1),&
                elem(ie)%state%dp3d(:,:,:,np1),elem(ie)%state%phinh_i(:,:,:,np1))
           elem(ie)%state%w_i(:,:,:,np1)=0
        enddo
@@ -227,7 +227,7 @@ contains
 #endif
 #if 1
        ! use hydrostatic for initial guess
-       call phi_from_eos(hvcoord,elem(ie)%state%phis,elem(ie)%state%ps_v(:,:,np1),elem(ie)%state%vtheta_dp(:,:,:,np1),&
+       call phi_from_eos(hvcoord,elem(ie)%state%phis,elem(ie)%state%vtheta_dp(:,:,:,np1),&
             elem(ie)%state%dp3d(:,:,:,np1),phi_np1)
        w_np1(:,:,1:nlev) = (z_from_phi(phi_np1(:,:,1:nlev), nlev) -  z_from_phi(phi_n0(:,:,1:nlev), nlev ))/(dt2) ! DA_CHANGE
 #endif

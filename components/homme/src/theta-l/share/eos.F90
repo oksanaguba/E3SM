@@ -233,7 +233,7 @@ implicit none
   end subroutine 
 
 
-
+#if 0
   !_____________________________________________________________________
   subroutine phi_from_eos(hvcoord,phis,ps,vtheta_dp,dp,phi_i)
   use deep_atm_mod, only: r_hat_from_phi
@@ -317,6 +317,91 @@ implicit none
 #endif
   enddo
   end subroutine
+
+#endif
+
+
+
+  subroutine phi_from_eos(hvcoord,phis,vtheta_dp,dp,phi_i)
+!
+! Use Equation of State to compute HYDROSTATIC geopotential
+!
+! input:  dp, phis, vtheta_dp  
+! output:  phi
+!
+! used to initialize phi for dry and wet test cases
+! used to compute background phi for reference state
+!
+! NOTE1: dp is pressure layer thickness.  If pnh is used to compute thickness, this
+! routine should be the discrete inverse of pnh_and_exner_from_eos().
+! This routine is usually called with hydrostatic layer thickness (dp3d), 
+! in which case it returns a hydrostatic PHI
+!
+! NOTE2: Exner pressure is defined in terms of p0=1000mb.  Be sure to use global constant p0,
+! instead of hvcoord%ps0, which is set by CAM to ~1021mb
+!  
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  implicit none
+
+  type (hvcoord_t),      intent(in)  :: hvcoord                      ! hybrid vertical coordinate struct
+  real (kind=real_kind), intent(in) :: vtheta_dp(np,np,nlev)
+  real (kind=real_kind), intent(in) :: dp(np,np,nlev)
+  real (kind=real_kind), intent(in) :: phis(np,np)
+  real (kind=real_kind), intent(out) :: phi_i(np,np,nlevp)
+
+  !   local
+  real (kind=real_kind) :: p(np,np,nlev) ! pressure at cell centers 
+  real (kind=real_kind) :: p_i(np,np,nlevp)  ! pressure on interfaces
+
+  integer :: k
+
+#ifndef NDEBUG
+  logical :: ierr
+  integer :: i,j,k2
+
+  ierr= any(vtheta_dp(:,:,:) < 0 )  .or. &
+          any(dp(:,:,:) < 0 )
+
+  if (ierr) then
+     print *,'bad state in phi_from_eos:'
+     do j=1,np
+     do i=1,np
+     do k=1,nlev
+        if ( (vtheta_dp(i,j,k) < 0) .or. (dp(i,j,k)<0) ) then
+           print *,'bad i,j,k=',i,j,k
+           print *,'vertical column: dp,vtheta_dp'
+           do k2=1,nlev
+              write(*,'(i3,4f14.4)') k2,dp(i,j,k2),vtheta_dp(i,j,k2)
+           enddo
+           call abortmp('EOS bad state: dp or vtheta_dp < 0')
+        endif
+     enddo
+     enddo
+     enddo
+  endif
+#endif
+  ! compute pressure on interfaces                                                                                   
+  p_i(:,:,1)=hvcoord%hyai(1)*hvcoord%ps0
+  do k=1,nlev
+     p_i(:,:,k+1)=p_i(:,:,k) + dp(:,:,k)
+  enddo
+  do k=1,nlev
+     p(:,:,k) = (p_i(:,:,k+1)+p_i(:,:,k))/2
+  enddo
+
+  phi_i(:,:,nlevp) = phis(:,:)
+
+  do k=nlev,1,-1
+#ifdef HOMMEXX_BFB_TESTING
+     phi_i(:,:,k) = phi_i(:,:,k+1)+ (Rgas*vtheta_dp(:,:,k)*bfb_pow(p(:,:,k)/p0,(kappa-1)))/p0
+#else
+     phi_i(:,:,k) = phi_i(:,:,k+1)+(Rgas*vtheta_dp(:,:,k)*(p(:,:,k)/p0)**(kappa-1))/p0
+#endif
+  enddo
+
+  end subroutine phi_from_eos
+
+
 
 end module
 

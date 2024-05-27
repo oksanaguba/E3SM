@@ -104,7 +104,7 @@ subroutine general_gravity_wave_init(elem,hybrid,hvcoord,nets,nete,d,f)
         call gravity_wave(x,y,p,z,zcoords,use_eta,hyam,hybm,d,u,v,w,T,T_mean,phis,ps,rho,rho_mean,q(1))
         dp = pressure_thickness(ps,k,hvcoord)
         call set_state(u,v,w,T,ps,phis,p,dp,zm(k),g, i,j,k,elem(ie),1,nt)
-        call set_tracers(q,qsize, dp,zm(k),i,j,k,y,x,elem(ie))
+        call set_tracers(q,qsize, dp,i,j,k,y,x,elem(ie))
      enddo; enddo; enddo;
      do k=1,nlevp; do j=1,np; do i=1,np
         call get_xycoordinates(x,y,hyai,hybi, i,j,k,elem(ie),hvcoord)

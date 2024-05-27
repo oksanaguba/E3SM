@@ -157,7 +157,7 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
       endif
     case('geo_i');
       if(theta_hydrostatic_mode) then
-         call phi_from_eos(hvcoord,elem%state%phis,elem%state%ps_v(:,:,nt),elem%state%vtheta_dp(:,:,:,nt),elem%state%dp3d(:,:,:,nt),field)
+         call phi_from_eos(hvcoord,elem%state%phis,elem%state%vtheta_dp(:,:,:,nt),elem%state%dp3d(:,:,:,nt),field)
       else
           field = elem%state%phinh_i(:,:,1:nlevp,nt)
       endif
@@ -366,7 +366,7 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
 
     if(theta_hydrostatic_mode) then
        dp=elem%state%dp3d(:,:,:,nt)
-       call phi_from_eos(hvcoord,elem%state%phis,elem%state%ps_v(:,:,nt),elem%state%vtheta_dp(:,:,:,nt),dp,phi_i)
+       call phi_from_eos(hvcoord,elem%state%phis,elem%state%vtheta_dp(:,:,:,nt),dp,phi_i)
     else
        phi_i = elem%state%phinh_i(:,:,:,nt)
     endif
@@ -726,9 +726,11 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
   logical, parameter :: do_rootfinding = .false., pnh_instead_of_mu=.false.
 
   tl=1
-  
-  !call phi_from_eos(hvcoord,elem%state%phis,elem%state%vtheta_dp(:,:,:,tl),&
-  !     elem%state%dp3d(:,:,:,tl),elem%state%phinh_i(:,:,:,tl))
+ 
+!       call phi_from_eos(hvcoord,elem%state%phis,elem%state%ps_v(:,:,nt),elem%state%vtheta_dp(:,:,:,nt),dp,phi_i)
+ 
+  call phi_from_eos(hvcoord,elem%state%phis,elem%state%vtheta_dp(:,:,:,tl),&
+       elem%state%dp3d(:,:,:,tl),elem%state%phinh_i(:,:,:,tl))
 
   ! Disable the following check in CUDA bfb builds,
   ! since the calls to pow are inexact
@@ -742,6 +744,7 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
  
   ! =====================
    
+#if 0
   do k=1,nlev
      pi(:,:,k) = hvcoord%hyam(k)*hvcoord%ps0 + hvcoord%hybm(k)*elem%state%ps_v(:,:,tl)
      if (maxval(abs(1-dpnh_dp_i(:,:,k))) > 1e-9) then
@@ -750,6 +753,7 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
         write(iulog,*) 'pnh',pi(1,1,k),pnh(1,1,k)
      endif
   enddo
+#endif
 #endif
 
   do tl = 2,timelevels
@@ -796,7 +800,7 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
 
    ! compute phi_ref
    temp = theta_ref*dp_ref
-   call phi_from_eos(hvcoord, phis, ps_ref, temp, dp_ref, phi_ref)
+   call phi_from_eos(hvcoord, phis, temp, dp_ref, phi_ref)
 
    ! keep profiles, based on the value of hv_ref_profiles
    if (hv_ref_profiles == 0) then
