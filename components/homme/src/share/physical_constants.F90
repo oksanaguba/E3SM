@@ -58,6 +58,7 @@ module physical_constants
   real (kind=real_kind), public, parameter :: rearth0      = 6.376D6    ! m
   real (kind=real_kind), public            :: rearth       = rearth0    ! m
   real (kind=real_kind), public, parameter :: gravit            = 9.80616D0  ! m s^-2
+  real (kind=real_kind), public, parameter :: g            = 9.80616D0  ! m s^-2
   real (kind=real_kind), public            :: gravitinv         = 1.0_real_kind/gravit
   real (kind=real_kind), public, parameter :: omega0       = 7.292D-5   ! s^-1
   real (kind=real_kind), public            :: omega        = omega0
