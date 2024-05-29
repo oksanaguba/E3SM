@@ -40,7 +40,7 @@ MODULE baroclinic_wave
 !
 !=======================================================================
 
-use physical_constants, only: g0=>gravit,kappa0=>kappa,Rgas,Cp0=>Cp,Rwater_vapor,rearth0,omega0, dd_pi
+use physical_constants, only: g0=>g,kappa0=>kappa,Rgas,Cp0=>Cp,Rwater_vapor,rearth0,omega0, dd_pi
 
   IMPLICIT NONE
 
@@ -88,9 +88,9 @@ use physical_constants, only: g0=>gravit,kappa0=>kappa,Rgas,Cp0=>Cp,Rwater_vapor
        lapse      = 0.005d0             ! lapse rate parameter
 
   REAL(8), PARAMETER ::               &
-       pertu0     = 0.0d0      ,      & ! SF Perturbation wind velocity (m/s)
+       pertu0     = 0.5d0      ,      & ! SF Perturbation wind velocity (m/s)
        pertr      = 1.d0/6.d0  ,      & ! SF Perturbation radius (Earth radii)
-       pertup     = 0.0d0      ,      & ! Exp. perturbation wind velocity (m/s)
+       pertup     = 1.0d0      ,      & ! Exp. perturbation wind velocity (m/s)
        pertexpr   = 0.1d0      ,      & ! Exp. perturbation radius (Earth radii)
        pertlon    = pi/9.d0    ,      & ! Perturbation longitude
        pertlat    = 2.d0*pi/9.d0,     & ! Perturbation latitude
@@ -122,9 +122,9 @@ CONTAINS
 !     input/output params parameters at given location
 !-----------------------------------------------------------------------
     INTEGER, INTENT(IN)  :: &
+                deep,       & ! Deep (1) or Shallow (0) test case
                 moist,      & ! Moist (1) or Dry (0) test case
                 pertt         ! Perturbation type
-    LOGICAL, INTENT(IN) :: deep
 
     REAL(8), INTENT(IN)  :: &
                 lon,        & ! Longitude (radians)
@@ -182,7 +182,7 @@ CONTAINS
     inttau2 = constC * z * exp(- scaledZ**2)
 
     ! radius ratio
-    if (deep) then
+    if (deep .eq. 0) then
       rratio = 1.d0
     else
       rratio = (z + aref) / aref;
@@ -198,7 +198,7 @@ CONTAINS
     !-----------------------------------------------------
     inttermU = (rratio * cos(lat))**(K - 1.d0) - (rratio * cos(lat))**(K + 1.d0)
     bigU = g / aref * K * inttau2 * inttermU * t
-    if (deep) then
+    if (deep .eq. 0) then
       rcoslat = aref * cos(lat)
     else
       rcoslat = (z + aref) * cos(lat)
@@ -270,7 +270,7 @@ CONTAINS
 !-----------------------------------------------------------------------
   SUBROUTINE evaluate_pressure_temperature(deep, X, lon, lat, z, p, t)
 
-    LOGICAL, INTENT(IN)  :: deep ! Deep (1) or Shallow (0) test case
+    INTEGER, INTENT(IN)  :: deep ! Deep (1) or Shallow (0) test case
 
     REAL(8), INTENT(IN)  :: &
                 X,          & ! Earth scaling ratio
@@ -315,7 +315,7 @@ CONTAINS
     !--------------------------------------------
     !    radius ratio
     !--------------------------------------------
-    if (deep) then
+    if (deep .eq. 0) then
       rratio = 1.d0
     else
       rratio = (z + aref) / aref;
@@ -344,7 +344,7 @@ CONTAINS
 !-----------------------------------------------------------------------
   SUBROUTINE evaluate_z_temperature(deep, X, lon, lat, p, z, t)
     
-    LOGICAL, INTENT(IN)  :: deep ! Deep (1) or Shallow (0) test case
+    INTEGER, INTENT(IN)  :: deep ! Deep (1) or Shallow (0) test case
 
     REAL(8), INTENT(IN)  :: &
                 X,          & ! Earth scaling ratio
