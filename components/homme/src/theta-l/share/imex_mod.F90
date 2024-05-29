@@ -421,8 +421,10 @@ contains
     real (kind=real_kind) :: ds(np,np,nlev),delta_mu(np,np,nlevp),r_hat(np,np,nlevp)
     real (kind=real_kind) :: a(np,np),b(np,np),ck(np,np),ckm1(np,np)
     !
-
+!original SA jacobian
 !#define ORIGINALI
+
+!new approx DA jacobian from Owen
 #undef ORIGINALI
 
     integer :: k,l,k2
