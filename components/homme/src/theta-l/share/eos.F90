@@ -79,7 +79,7 @@ implicit none
 
 
 #undef OGEOS
-!#define OFEOS
+!#define OGEOS
 
 #ifndef OGEOS
 !Owen's version
@@ -205,10 +205,10 @@ implicit none
    ! compute_andor_apply_rhs()
 
 !OWEN's
-!   pnh_i(:,:,1) = pnh(:,:,1) - dp3d(:, :,1)/(2.0 * r_hat**2) !* (1 + u_top/g_from_phi(phi_i(:, :, 1)))
+   pnh_i(:,:,1) = pnh(:,:,1) - dp3d(:, :,1)/(2.0 * r_hat**2) !* (1 + u_top/g_from_phi(phi_i(:, :, 1)))
 
-!pressure top
-   pnh_i(:,:,1) = hvcoord%hyai(1)*hvcoord%ps0/r_hat/r_hat
+!OG pressure top
+!   pnh_i(:,:,1) = hvcoord%hyai(1)*hvcoord%ps0/r_hat/r_hat
 
    pnh_i(:,:,nlevp) = pnh(:,:,nlev) + dp3d(:,:,nlev)/2
 
