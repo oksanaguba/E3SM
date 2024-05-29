@@ -83,7 +83,8 @@ subroutine dcmip2016_test1(elem,hybrid,hvcoord,nets,nete)
   integer,            intent(in)            :: nets,nete                ! start, end element index
 
   integer,  parameter :: use_zcoords  = 0                               ! use vertical pressure coordinates
-  logical,  parameter :: is_deep      = atm_is_deep                             ! use shallow atmosphere approximation
+  !logical,  parameter :: is_deep      = atm_is_deep                             ! use shallow atmosphere approximation
+  integer,  parameter :: is_deep      = 1                             ! use shallow atmosphere approximation
   integer,  parameter :: pertt        = 0                               ! use exponential perturbation type
   real(rl), parameter :: dcmip_X      = 1.0_rl                          ! full scale planet
   integer :: moist                                                      ! use moist version
@@ -115,172 +116,48 @@ subroutine dcmip2016_test1(elem,hybrid,hvcoord,nets,nete)
 
   if (qsize<6) call abortmp('ERROR: test requires qsize>=6')
   
+  ! set initial conditions
   do ie = nets,nete
+    do k=1,nlevp; do j=1,np; do i=1,np
 
-  do k=1,nlev
-    dp(:,:, k) =-( (hvcoord%etai(k)-hvcoord%etai(k+1)) *  p0)
-  end do
+        ! no surface topography
+        p_i(i,j,k)  = p0*hvcoord%etai(k)
 
-  do k=1,nlevp; do j=1,np; do i=1,np
         lon = elem(ie)%spherep(i,j)%lon
         lat = elem(ie)%spherep(i,j)%lat
 
-
-         p_i(i,j,k)  = p0*hvcoord%etai(k)
-         call baroclinic_wave_test(is_deep,moist,pertt,dcmip_X,lon,lat,p_i(i,j,k),&
+        w_i(i,j,k)   = 0.0d0
+        ! call this only to compute z_i, will ignore all other output
+        call baroclinic_wave_test(is_deep,moist,pertt,dcmip_X,lon,lat,p_i(i,j,k),&
             z_i(i,j,k),use_zcoords,u(i,j,1),v(i,j,1),T(i,j,1),thetav(i,j,1),phis(i,j),ps(i,j),rho(i,j,1),q(i,j,1,1))
-         if (k > 1) then
-           dphi_tmp(i,j,k-1) = (phi_from_z(z_i(i,j,k-1)) - phi_from_z(z_i(i,j,k)))/r_hat_from_phi(phi_from_z(z_i(i,j,k)))**2
-         end if 
-  end do; end do; end do
-  q(:,:,:,1:5) = 0.0d0
-  q(:,:,:,6) = 1
-  w(:,:,:)   = 0.0d0
-  w_i(:,:,:)   = 0.0d0
-    
+    enddo; enddo; enddo
+    do k=1,nlev; do j=1,np; do i=1,np
 
-  dphi_tmp = 10
-  
-  phi_prev(:,:,nlevp) = phis
-  z_i(:, :, nlevp) = z_from_phi(phis)
-  pnh_prev(:,:,nlevp) = ps
-  do k=nlev,1,-1; do j=1,np; do i=1,np
-      
-       lon = elem(ie)%spherep(i,j)%lon
-       lat = elem(ie)%spherep(i,j)%lat
+        ! no surface topography
+        p(i,j,k)  = p0*hvcoord%etam(k)
+        dp(i,j,k) = (hvcoord%etai(k+1)-hvcoord%etai(k))*p0
 
+        lon = elem(ie)%spherep(i,j)%lon
+        lat = elem(ie)%spherep(i,j)%lat
 
-! ===================================
-      if (k.eq. nlev ) then
-         dmass_i(i,j,k) = -dp(i,j,k)/2
-       else
-         dmass_i(i,j,k) = -(dp(i,j,k)+dp(i,j,k+1))/2
-       end if
-       dmass(i,j,k) = -dp(i,j,k)
- 
-    phi_guess(i,j,k) = phi_prev(i,j,k+1) + dphi_tmp(i,j,k)  
+        q(i,j,k,1:5) = 0.0d0
+        q(i,j,k,6) = 1
+        w(i,j,k)   = 0.0d0
 
-   if (mu_instead_of_eos_rootfinding) then
-    
-    do newton_idx=1, max_newton 
-       z_guess(i,j,k) = z_from_phi((phi_prev(i,j,k+1) + phi_guess(i,j,k))/2)
-       z_guess_pert(i,j,k) = z_from_phi((phi_prev(i,j,k+1) +phi_guess(i,j,k)+newton_eps)/2)
-       call baroclinic_wave_test(is_deep,moist,pertt,dcmip_X,lon,lat, &
-                                 pnh_next(i,j,k),z_guess(i,j,k),1,u(i,j,k),v(i,j,k),T(i,j,k),thetav(i,j,k),phis(i,j),ps(i,j),rho(i,j,k),q(i,j,k,1))
-       call baroclinic_wave_test(is_deep,moist,pertt,dcmip_X,lon,lat, &
-                                 pnh_next_pert(i,j,k),z_guess_pert(i,j,k),1,u_pert(i,j,k),v(i,j,k),t_pert(i,j,k),thetav(i,j,k),phis(i,j),ps(i,j),rho(i,j,k),q(i,j,k,1))
+        call baroclinic_wave_test(is_deep,moist,pertt,dcmip_X,lon,lat,p(i,j,k),&
+            z(i,j,k),use_zcoords,u(i,j,k),v(i,j,k),T(i,j,k),thetav(i,j,k),phis(i,j),ps(i,j),rho(i,j,k),q(i,j,k,1))
 
+        ! initialize tracer chemistry
+        call initial_value_terminator( lat*rad2dg, lon*rad2dg, q(i,j,k,4), q(i,j,k,5) )
+        call set_tracers(q(i,j,k,1:6),6,dp(i,j,k),i,j,k,lat,lon,elem(ie))
 
-       r_hat(i,j,k) = r_hat_from_phi(( phi_prev(i,j,k+1) + phi_guess(i,j,k))/2)
-       r_hat_pert(i,j,k) = r_hat_from_phi(( phi_prev(i,j,k+1) + phi_guess(i,j,k)+newton_eps)/2)
+        min_thetav =  min( min_thetav,   thetav(i,j,k) )
+        max_thetav =  max( max_thetav,   thetav(i,j,k) )
 
-       pnh_next(i,j,k) = -Rgas * T(i,j,k) * dmass(i,j,k) / (r_hat(i,j,k)**2 * (phi_guess(i,j,k) - phi_prev(i,j,k+1)))
-       pnh_next_pert(i,j,k) = -Rgas * t_pert(i,j,k) * dmass(i,j,k) / (r_hat_pert(i,j,k)**2 * (phi_guess(i,j,k) + newton_eps - phi_prev(i,j,k+1)))
-       !end if
-       residual(i,j,k) = -u(i,j,k)**2/(z_guess(i,j,k)+rearth) - 2 * omega * cos(lat) * u(i,j,k) + &
-                          g_from_phi(phi_guess(i,j,k)) * (1 - (pnh_next(i,j,k)-pnh_prev(i,j,k+1))/ dmass_i(i,j,k) * r_hat_from_phi(phi_prev(i,j,k+1))**2 )
-        if (abs(residual(i,j,k)) < 1e-10) then
-         exit
-        end if
-       deriv(i,j,k) =   ( (-u_pert(i,j,k)**2/(z_guess_pert(i,j,k)+rearth) - 2 * omega * cos(lat) * u_pert(i,j,k) + &
-                          g_from_phi(phi_guess(i,j,k)) * (1 - (pnh_next_pert(i,j,k)-pnh_prev(i,j,k+1))/ dmass_i(i,j,k) * r_hat_from_phi(phi_prev(i,j,k+1))**2 ))-&
-                          (-u(i,j,k)**2/(z_guess(i,j,k)+rearth) - 2 * omega * cos(lat) * u(i,j,k) + &
-                          g_from_phi(phi_guess(i,j,k)) * (1 - (pnh_next(i,j,k)-pnh_prev(i,j,k+1))/ dmass_i(i,j,k) * r_hat_from_phi(phi_prev(i,j,k+1))**2 )))/newton_eps
-                          
+    enddo; enddo; enddo
 
-  
-        if (isnan( residual(i,j,k)/deriv(i,j,k)) .or. phi_guess(i,j,k) < phi_prev(i,j,k+1)) then ! .or. pnh_next(i,j,k) > pnh_prev(i,j,k+1)) then
-           write(iulog,*)'WARNING: Deep atm geopotential rootfinding encountered zero at lev: ', k
-           write(iulog, *) "phi next: ", phi_guess(i,j,k), "phi_prev: ", phi_prev(i,j,k+1)
-           write(iulog, *) "pnh_next: ", pnh_next(i,j,k), "pnh_prev: ", pnh_prev(i,j,k+1)
-           call abort
-        end if
-
-        phi_guess(i,j,k) = phi_guess(i,j,k) - residual(i,j,k)/deriv(i,j,k)
-     
-
-    end do
-
-    else
-    do newton_idx=1, max_newton
-       z_guess(i,j,k) = z_from_phi((phi_guess(i,j,k) + phi_prev(i,j,k+1))/2)
-       z_guess_pert(i,j,k) = z_from_phi((phi_prev(i,j,k+1)+phi_guess(i,j,k)+newton_eps)/2)
-       call baroclinic_wave_test(is_deep,moist,pertt,dcmip_X,lon,lat, &
-                                 p_tmp,z_guess(i,j,k),1,u(i,j,k),v(i,j,k),T(i,j,k),thetav(i,j,k),phis(i,j),ps(i,j),rho(i,j,k),q(i,j,k,1))
-       call baroclinic_wave_test(is_deep,moist,pertt,dcmip_X,lon,lat, &
-                                 pnh_next_pert(i,j,k),z_guess_pert(i,j,k),1,u(i,j,k),v(i,j,k),t_pert(i,j,k),thetav(i,j,k),phis(i,j),ps(i,j),rho(i,j,k),q(i,j,k,1))
-
-       r_hat(i,j,k) = r_hat_from_phi((phi_guess(i,j,k) + phi_prev(i,j,k+1))/2)
-       r_hat_pert(i,j,k) = r_hat_from_phi((phi_prev(i,j,k+1) + phi_guess(i,j,k)+newton_eps)/2)
-
-
-
-       pnh_next(i,j,k) = -Rgas * T(i,j,k) * dmass(i,j,k) / (r_hat(i,j,k)**2 * (phi_guess(i,j,k) - phi_prev(i,j,k+1)))
-       pnh_next_pert(i,j,k) = -Rgas * t_pert(i,j,k) * dmass(i,j,k) / (r_hat_pert(i,j,k)**2 * (phi_guess(i,j,k) + newton_eps - phi_prev(i,j,k+1)))
-       residual(i,j,k) = pnh_next(i,j,k) - p_tmp
-       if (abs(residual(i,j,k)) < 1e-10) then
-         exit
-        end if
-       deriv(i,j,k) = (pnh_next_pert(i,j,k) &
-                       - pnh_next(i,j,k))/newton_eps
-
-        if (isnan( residual(i,j,k)/deriv(i,j,k)) .or. phi_guess(i,j,k) < phi_prev(i,j,k+1)) then 
-           write(iulog,*)'WARNING: Deep atm geopotential rootfinding encountered zero at lev: ', k
-           write(iulog, *) "phi next: ", phi_guess(i,j,k), "phi_prev: ", phi_prev(i,j,k+1)
-           write(iulog, *) "pnh_next: ", pnh_next(i,j,k), "pnh_prev: ", pnh_prev(i,j,k+1)
-           call abort
-        end if
-
-        phi_guess(i,j,k) = phi_guess(i,j,k) - residual(i,j,k)/deriv(i,j,k)
-
-
-    end do
-
-
-
-    end if
-    if (abs(residual(i,j,k)) > 1e-9) then
-      write(*,*)'WARNING: Deep atm geopotential rootfinding failed at level ', k, ' residual: ', abs(residual(i,j,k))
-      call abort
-    end if
-    pnh_prev(i,j,k) = pnh_next(i,j,k)
-    p(i,j,k) = pnh_next(i,j,k)
-    z_i(i, j, k) = z_from_phi(phi_guess(i, j,k)) 
-    z(i,j,k) = z_from_phi((phi_guess(i,j,k) + phi_prev(i,j,k+1))/2)
- 
-    phi_prev(i,j,k) = phi_guess(i,j,k)
-! ===================================
-
-  end do; end do; end do
-  !do k=1,nlev
-  ! write(*,*) "k: ", k,  " max pnh: ", maxval(p(:,:,k)), "min pnh: ", minval(p(:,:,k))
-  !end do
-
-        
-!  do k=1,nlev; do j=1,np; do i=1,np
-!        ! initialize tracer chemistry
-!        call initial_value_terminator( lat*rad2dg, lon*rad2dg, q(i,j,k,4), q(i,j,k,5) )
-!        call set_tracers(q(i,j,k,1:6),6,dp(i,j,k),z(i,j,k),i,j,k,lat,lon,elem(ie))
-!
-!        min_thetav =  min( min_thetav,   thetav(i,j,k) )
-!        max_thetav =  max( max_thetav,   thetav(i,j,k) )
-!
-!    enddo; enddo; enddo
- 
     call set_elem_state(u,v,w,w_i,T,ps,phis,p,dp,z,z_i,g,elem(ie),1,nt,ntQ=1)
     call tests_finalize(elem(ie),hvcoord)
-     
-    call pnh_and_exner_from_eos(hvcoord,elem(ie)%state%vtheta_dp(:,:,:,nt),&
-       elem(ie)%state%dp3d(:,:,:,nt),elem(ie)%state%phinh_i(:,:,:,nt),pnh,exner,dpnh_dp_i) 
-!    call pnh_and_exner_from_eos(hvcoord,T*dp*((p/p0)**(-kappa)),&
-!       dp,phi_from_z(z_i, nlevp),pnh,exner,dpnh_dp_i) 
-
-  do k=1,nlevp
-    if (maxval(abs(dpnh_dp_i(:,:,k)-1)) > 1e-9) then
-         write(*,*) "dpnh_dp_i error at lev ", k, ": ", maxval(dpnh_dp_i(:,:,k)-1), "minval: ", minval(dpnh_dp_i(:,:,k)-1)
-         !call abort
-    end if 
-  end do
 
   enddo
   sample_period = 1800.0 ! sec
@@ -392,7 +269,7 @@ subroutine dcmip2016_test2(elem,hybrid,hvcoord,nets,nete)
         q(2)=0
         q(3)=0
 
-        call set_tracers(q(:),3,dp(i,j,k),z(i,j,k),i,j,k,lat,lon,elem(ie))
+        call set_tracers(q(:),3,dp(i,j,k),i,j,k,lat,lon,elem(ie))
      enddo; enddo; enddo;
 
     call set_elem_state(u,v,w,w_i,T,ps,phis,p,dp,z,z_i,g,elem(ie),1,nt,ntQ=1)
@@ -498,7 +375,7 @@ subroutine dcmip2016_test3(elem,hybrid,hvcoord,nets,nete)
         q   (i,j,k,2)= 0 ! no initial clouds
         q   (i,j,k,3)= 0 ! no initial rain
 
-        call set_tracers(q(i,j,k,:),3,dp(i,j,k),z(i,j,k),i,j,k,lat,lon,elem(ie))
+        call set_tracers(q(i,j,k,:),3,dp(i,j,k),i,j,k,lat,lon,elem(ie))
 
       enddo; enddo
     enddo

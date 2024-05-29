@@ -145,7 +145,7 @@ contains
        itercount=0
        itererr=0
        do ie=nets,nete
-          call phi_from_eos(hvcoord,elem(ie)%state%phis, elem(ie)%state%ps_v(:,:,np1),elem(ie)%state%vtheta_dp(:,:,:,np1),&
+          call phi_from_eos(hvcoord,elem(ie)%state%phis, elem(ie)%state%vtheta_dp(:,:,:,np1),&
                elem(ie)%state%dp3d(:,:,:,np1),elem(ie)%state%phinh_i(:,:,:,np1))
           elem(ie)%state%w_i(:,:,:,np1)=0
        enddo
@@ -227,7 +227,7 @@ contains
 #endif
 #if 1
        ! use hydrostatic for initial guess
-       call phi_from_eos(hvcoord,elem(ie)%state%phis,elem(ie)%state%ps_v(:,:,np1),elem(ie)%state%vtheta_dp(:,:,:,np1),&
+       call phi_from_eos(hvcoord,elem(ie)%state%phis,elem(ie)%state%vtheta_dp(:,:,:,np1),&
             elem(ie)%state%dp3d(:,:,:,np1),phi_np1)
        w_np1(:,:,1:nlev) = (z_from_phi(phi_np1(:,:,1:nlev), nlev) -  z_from_phi(phi_n0(:,:,1:nlev), nlev ))/(dt2) ! DA_CHANGE
 #endif
@@ -361,12 +361,13 @@ contains
 #endif
        itererr=min(max_reserr,max_deltaerr) ! passed back to ARKODE
 
-
+#if 0
        if (itercount >= maxiter) then
           if (verbosity > 0) then
           write(iulog,*) 'WARNING:IMEX solver failed b/c max iteration count was met',deltaerr,reserr
           end if
        end if
+#endif
     end do ! end do for the ie=nets,nete loop
 #ifdef NEWTONCOND
     if (hybrid%masterthread) print *,'max J condition number (mpi task0): ',1/min_rcond
@@ -401,7 +402,7 @@ contains
     real (kind=real_kind), intent(out) :: JacD(np,np,nlev)
     real (kind=real_kind), intent(out) :: JacL(np,np,nlev-1),JacU(np,np,nlev-1)
     real (kind=real_kind), intent(in)  :: dp3d(np,np,nlev)
-    real (kind=real_kind), intent(inout) :: pnh(np,np,nlev)
+    real (kind=real_kind), intent(inout)  :: pnh(np,np,nlev)
     real (kind=real_kind), intent(in)  :: dphi(np,np,nlev)
     real (kind=real_kind), intent(in)  :: phi_i(np,np,nlevp)
     real (kind=real_kind), intent(in)  :: dt2
@@ -420,9 +421,39 @@ contains
     real (kind=real_kind) :: ds(np,np,nlev),delta_mu(np,np,nlevp),r_hat(np,np,nlevp)
     real (kind=real_kind) :: a(np,np),b(np,np),ck(np,np),ckm1(np,np)
     !
+!original SA jacobian
+!#define ORIGINALI
+
+!new approx DA jacobian from Owen
+#undef ORIGINALI
+
     integer :: k,l,k2
     if (exact.eq.1) then ! use exact JacobianA
 
+       ! this code will need to change when the equation of state is changed.
+       ! add special cases for k==1 and k==nlev+1
+#ifdef ORIGINALI
+       a  = (dt2*gravit)**2/(1-kappa)
+       k  = 1 ! Jacobian row 1
+       b  = a/dp3d(:,:,k)
+       ck = pnh(:,:,k)/dphi(:,:,k)
+       JacU(:,:,k) = 2*b*ck
+       JacD(:,:,k) = 1 - JacU(:,:,k)
+       ckm1 = ck
+       do k = 2,nlev-1 ! Jacobian row k
+          b  = 2*a/(dp3d(:,:,k-1) + dp3d(:,:,k))
+          ck = pnh(:,:,k)/dphi(:,:,k)
+          JacL(:,:,k-1) = b*ckm1
+          JacU(:,:,k  ) = b*ck
+          JacD(:,:,k  ) = 1 - JacL(:,:,k-1) - JacU(:,:,k)
+          ckm1 = ck
+       end do
+       k  = nlev ! Jacobian row nlev
+       b  = 2*a/(dp3d(:,:,k) + dp3d(:,:,k-1))
+       ck = pnh(:,:,k)/dphi(:,:,k)
+       JacL(:,:,k-1) = b*ckm1
+       JacD(:,:,k  ) = 1 - JacL(:,:,k-1) - b*ck
+#else
        ! this code will need to change when the equation of state is changed.
        ! add special cases for k==1 and k==nlev+1
        phi_i_tmp = phi_i
@@ -453,6 +484,8 @@ contains
        ck = pnh(:,:,k)/dphi(:,:,k)
        JacL(:,:,k-1) = r_hat(:,:,k)**2 * b*ckm1
        JacD(:,:,k  ) = 1 - JacL(:,:,k-1) - r_hat(:,:,k)**2 * b*ck
+#endif
+
 
     else ! use finite difference approximation to Jacobian with differencing size espie
       ! compute Jacobian of F(dphi) = phi +const + (dt*g)^2 *(1-dp/dpi) column wise
@@ -461,6 +494,36 @@ contains
       ! we only form the tridagonal entries and this code can easily be modified to
       ! accomodate sparse non-tridigonal and dense Jacobians, however, testing only
       ! the tridiagonal of a Jacobian is probably sufficient for testing purpose
+#ifdef ORIGINALI
+      do k=1,nlev
+        e=0
+        e(:,:,k)=1
+        dphi_temp(:,:,:) = dphi(:,:,:)
+        ! dphi_tmp(k)= ( phi(k+1)-(phi(k)+eps ) = dphi(k)-eps
+        ! dphi_tmp(k-1)= ( phi(k)+eps-(phi(k-1) ) = dphi(k-1)+eps
+        dphi_temp(:,:,k) = dphi(:,:,k) - epsie*e(:,:,k)
+        if (k>1) dphi_temp(:,:,k-1) = dphi(:,:,k-1) + epsie*e(:,:,k)
+
+        if (theta_hydrostatic_mode) then
+           !dpnh_dp_i_epsie(:,:,:)=1.d0
+           delta_mu=0
+        else
+!hvcoord,vtheta_dp,dp3d,dphi_temp,phi_i_tmp, pnh,exner,dpnh_dp_i_epsie,'get_dirk_jacobian'
+           call pnh_and_exner_from_eos2(hvcoord,vtheta_dp,dp3d,dphi_temp,phi_i,pnh,exner,dpnh_dp_i_epsie,'get_dirk_jacobian')
+           delta_mu(:,:,:)=(gravit*dt2)**2*(dpnh_dp_i(:,:,:)-dpnh_dp_i_epsie(:,:,:))/epsie
+        end if
+
+        JacD(:,:,k) = 1 +  delta_mu(:,:,k)
+        if (k.eq.1) then
+           JacL(:,:,k) =   delta_mu(:,:,k+1)
+        elseif (k.eq.nlev) then
+           JacU(:,:,k-1) = delta_mu(:,:,k-1)
+        else
+           JacL(:,:,k)   = delta_mu(:,:,k+1)
+           JacU(:,:,k-1) = delta_mu(:,:,k-1)
+        end if
+      end do
+#else
       phi_i_tmp = phi_i
       do k=1,nlev
         e=0
@@ -478,7 +541,7 @@ contains
            do k2=nlev,1,-1  ! scan
               phi_i_tmp(:,:,k2) = phi_i_tmp(:,:,k2+1)-dphi_temp(:,:,k2)
            enddo
- 
+
            call pnh_and_exner_from_eos2(hvcoord,vtheta_dp,dp3d,dphi_temp,phi_i_tmp, pnh,exner,dpnh_dp_i_epsie,'get_dirk_jacobian')
            r_hat = r_hat_from_phi(phi_i_tmp, nlevp) !DA_CHANGE
            delta_mu(:,:,:)= (g_from_phi(phi_i_tmp,nlevp)*dt2)**2*(dpnh_dp_i(:,:,:)-dpnh_dp_i_epsie(:,:,:))/epsie ! DA_CHANGE
@@ -495,6 +558,8 @@ contains
         end if
 
       end do
+
+#endif
     end if
   end subroutine get_dirk_jacobian
 

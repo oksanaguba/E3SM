@@ -78,7 +78,11 @@ implicit none
   end subroutine pnh_and_exner_from_eos
 
 
+#undef OGEOS
+!#define OGEOS
 
+#ifndef OGEOS
+!Owen's version
 subroutine pnh_and_exner_from_eos2(hvcoord,vtheta_dp,dp3d,dphi,phi_i,pnh,exner,&
      dpnh_dp_i,caller,pnh_i_out)
 use deep_atm_mod, only: r_hat_from_phi, g_from_phi
@@ -98,8 +102,8 @@ implicit none
 ! instead of hvcoord%ps0, which is set by CAM to ~1021mb
 !  
   type (hvcoord_t),     intent(in)  :: hvcoord             ! hybrid vertical coordinate struct
-  real (kind=real_kind), intent(in) :: vtheta_dp(np,np,nlev)   
-  real (kind=real_kind), intent(in) :: dp3d(np,np,nlev)   
+  real (kind=real_kind), intent(in) :: vtheta_dp(np,np,nlev)
+  real (kind=real_kind), intent(in) :: dp3d(np,np,nlev)
   real (kind=real_kind), intent(in) :: dphi(np,np,nlev)
   real (kind=real_kind), intent(in) :: phi_i(np,np,nlevp) ! Needed for deep atmosphere
   real (kind=real_kind), intent(out) :: pnh(np,np,nlev)        ! nh nonhyrdo pressure
@@ -112,10 +116,10 @@ implicit none
   !   local
   real (kind=real_kind) :: p_over_exner(np,np,nlev)
   real (kind=real_kind) :: pi(np,np,nlev)
-  real (kind=real_kind) :: exner_i(np,np,nlevp) 
-  real (kind=real_kind) :: pnh_i(np,np,nlevp)  
+  real (kind=real_kind) :: exner_i(np,np,nlevp)
+  real (kind=real_kind) :: pnh_i(np,np,nlevp)
   real (kind=real_kind) :: dp3d_i(np,np,nlevp)
-  real (kind=real_kind) :: pi_i(np,np,nlevp) 
+  real (kind=real_kind) :: pi_i(np,np,nlevp)
   real (kind=real_kind) :: r_hat(np,np)
   integer :: i,j,k,k2
   logical :: ierr
@@ -169,8 +173,8 @@ implicit none
 
      pnh = pi ! copy hydrostatic pressure into output variable
      dpnh_dp_i = 1
-     if (present(pnh_i_out)) then  
-       pnh_i_out=pi_i 
+     if (present(pnh_i_out)) then
+       pnh_i_out=pi_i
      endif
   else
 
@@ -199,7 +203,13 @@ implicit none
    ! an approximation (hydrostatic) so that dpnh/dpi = 1
    ! DO NOT CHANGE this approximation.  it is required by 
    ! compute_andor_apply_rhs()
+
+!OWEN's
    pnh_i(:,:,1) = pnh(:,:,1) - dp3d(:, :,1)/(2.0 * r_hat**2) !* (1 + u_top/g_from_phi(phi_i(:, :, 1)))
+
+!OG pressure top
+!   pnh_i(:,:,1) = hvcoord%hyai(1)*hvcoord%ps0/r_hat/r_hat
+
    pnh_i(:,:,nlevp) = pnh(:,:,nlev) + dp3d(:,:,nlev)/2
 
 
@@ -216,7 +226,7 @@ implicit none
    dpnh_dp_i(:,:,nlevp)  = 2*(pnh_i(:,:,nlevp)-pnh(:,:,nlev))/dp3d_i(:,:,nlevp) * r_hat**2
    do k=2,nlev
       r_hat = r_hat_from_phi(phi_i(:, :, k)) !DA_CHANGE
-      dpnh_dp_i(:,:,k) = (pnh(:,:,k) -pnh(:,:,k-1) )/dp3d_i(:,:,k) * r_hat**2 
+      dpnh_dp_i(:,:,k) = (pnh(:,:,k) -pnh(:,:,k-1) )/dp3d_i(:,:,k) * r_hat**2
    end do
    if (present(pnh_i_out)) then
       ! boundary values already computed. interpolate interior
@@ -226,14 +236,202 @@ implicit none
          pnh_i(:,:,k)=(dp3d(:,:,k-1)*pnh(:,:,k)+dp3d(:,:,k)*pnh(:,:,k-1))/&
               (dp3d(:,:,k-1)+dp3d(:,:,k))
       enddo
-      pnh_i_out=pnh_i    
+      pnh_i_out=pnh_i
    endif
-   
+
   endif ! hydrostatic/nonhydrostatic version
+  end subroutine
+#endif
+
+
+#ifdef OGEOS
+!OG version but with Owen's interface, phi_i instead of phis
+subroutine pnh_and_exner_from_eos2(hvcoord,vtheta_dp,dp3d,dphi,phi_i,pnh,exner,&
+     dpnh_dp_i,caller,pnh_i_out)
+use deep_atm_mod, only: r_hat_from_phi, g_from_phi
+  use physical_constants, only : p0, kappa, gravit, Rgas, rearth
+implicit none
+  type (hvcoord_t),     intent(in)  :: hvcoord             ! hybrid vertical coordinate struct
+  real (kind=real_kind), intent(in) :: vtheta_dp(np,np,nlev)   
+  real (kind=real_kind), intent(in) :: dp3d(np,np,nlev)   
+  real (kind=real_kind), intent(in) :: dphi(np,np,nlev)
+  real (kind=real_kind), intent(in) :: phi_i(np,np,nlevp) ! Needed for deep atmosphere
+  real (kind=real_kind), intent(out) :: pnh(np,np,nlev)        ! nh nonhyrdo pressure
+  real (kind=real_kind), intent(out) :: dpnh_dp_i(np,np,nlevp) ! d(pnh) / d(pi)
+  real (kind=real_kind), intent(out) :: exner(np,np,nlev)      ! exner nh pressure
+  character(len=*),      intent(in), optional  :: caller       ! name for error
+  real (kind=real_kind), intent(out), optional :: pnh_i_out(np,np,nlevp)  ! pnh on interfaces
+
+  !   local
+  real (kind=real_kind) :: p_over_exner(np,np,nlev)
+  real (kind=real_kind) :: pi(np,np,nlev)
+  real (kind=real_kind) :: exner_i(np,np,nlevp)
+  real (kind=real_kind) :: pnh_i(np,np,nlevp)
+  real (kind=real_kind) :: dp3d_i(np,np,nlevp)
+  real (kind=real_kind) :: pi_i(np,np,nlevp), g
+  integer :: i,j,k,k2
+  logical :: ierr
+
+  real (kind=real_kind) ::  rheighti(np,np,nlevp), rheightm(np,np,nlev), rhatm(np,np,nlev), r0
+  real (kind=real_kind) ::  rhati(np,np,nlevp), invrhatm(np,np,nlev), invrhati(np,np,nlevp), &
+                            newrhatsquared(np,np,nlev)
+
+  !construct phi_i here
+  !phi_i(:,:,nlevp) = phis(:,:)
+  !do k=nlev,1,-1
+  !  phi_i(:,:,k) = phi_i(:,:,k+1) - dphi(:,:,k)
+  !enddo
+
+  g = gravit
+  r0=rearth
+
+  rheighti = phi_i/g + r0
+  rheightm(:,:,1:nlev) = (rheighti(:,:,1:nlev) + rheighti(:,:,2:nlevp))/2.0
+  rhati = rheighti/r0 ! r/r0
+  rhatm = rheightm/r0
+  invrhatm = 1.0/rhatm
+  invrhati = 1.0/rhati
+
+  newrhatsquared = (rhati(:,:,1:nlev)*rhati(:,:,1:nlev)   + &
+                    rhati(:,:,2:nlevp)*rhati(:,:,2:nlevp) + &
+                    rhati(:,:,1:nlev)*rhati(:,:,2:nlevp))/3.0
+
+  ! check for bad state that will crash exponential function below
+  if (theta_hydrostatic_mode) then
+    ierr= any(dp3d(:,:,:) < 0 )
+  else
+    ierr= any(vtheta_dp(:,:,:) < 0 )  .or. &
+          any(dp3d(:,:,:) < 0 ) .or. &
+          any(dphi(:,:,:) > 0 )
+  endif
+
+  if (ierr) then
+     print *,'bad state in EOS, called from: ',caller
+     do j=1,np
+     do i=1,np
+     do k=1,nlev
+        if ( (vtheta_dp(i,j,k) < 0) .or. (dp3d(i,j,k)<0)  .or. &
+             (dphi(i,j,k)>0)  ) then
+           print *,'bad i,j,k=',i,j,k
+           print *,'vertical column: phi_i,dphi,dp3d,vtheta_dp'
+           do k2=1,nlev
+              write(*,'(i3,5f14.4)') k2,phi_i(i,j,k),dphi(i,j,k2),dp3d(i,j,k2),vtheta_dp(i,j,k2)
+           enddo
+print *, 'phi_i', phi_i(1,1,:)
+           call abortmp('EOS bad state: d(phi), dp3d or vtheta_dp < 0')
+        endif
+     enddo
+     enddo
+     enddo
+  endif
+
+  if (theta_hydrostatic_mode) then
+     ! hydrostatic pressure
+     pi_i(:,:,1)=hvcoord%hyai(1)*hvcoord%ps0
+     do k=1,nlev
+        pi_i(:,:,k+1)=pi_i(:,:,k) + dp3d(:,:,k)
+     enddo
+#ifdef HOMMEXX_BFB_TESTING
+     do k=1,nlev
+        pi(:,:,k) = (pi_i(:,:,k+1)+pi_i(:,:,k))/2
+     enddo
+     exner  = bfb_pow(pi/p0,kappa)
+#else
+     do k=1,nlev
+        pi(:,:,k)=pi_i(:,:,k) + dp3d(:,:,k)/2
+     enddo
+     exner  = (pi/p0)**kappa
+#endif
+
+     pnh = pi ! copy hydrostatic pressure into output variable
+     dpnh_dp_i = 1
+     if (present(pnh_i_out)) then
+       pnh_i_out=pi_i
+     endif
+  else
+
+!==============================================================
+!  non-hydrostatic EOS
+!==============================================================
+  do k=1,nlev
+     p_over_exner(:,:,k) = Rgas*vtheta_dp(:,:,k)/(-dphi(:,:,k))
+
+     !da
+#ifdef DA
+     !p_over_exner(:,:,k) = p_over_exner(:,:,k)*invrhatm(:,:,k)*invrhatm(:,:,k)
+     p_over_exner(:,:,k) = p_over_exner(:,:,k)/newrhatsquared(:,:,k)
+
+!print *, 'newrhatsq', newrhatsquared(1,1,k)
+#endif
+
+#ifndef HOMMEXX_BFB_TESTING
+     pnh(:,:,k) = p0 * (p_over_exner(:,:,k)/p0)**(1/(1-kappa))
+#else
+     pnh(:,:,k) = p0 * bfb_pow(p_over_exner(:,:,k)/p0,1/(1-kappa))
+#endif
+     exner(:,:,k) =  pnh(:,:,k)/ p_over_exner(:,:,k)
+  enddo
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+! boundary terms
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!  
+
+!!!!!
+   pnh_i(:,:,1) = hvcoord%hyai(1)*hvcoord%ps0*invrhati(:,:,1)*invrhati(:,:,1)  ! hydrostatic ptop/rhat^2
+
+   ! surface boundary condition pnh_i determined by w equation to enforce
+   ! w b.c.  This is computed in the RHS calculation.  Here, we use
+   ! an approximation (hydrostatic) so that dpnh/dpi = 1
+   ! DO NOT CHANGE this approximation.  it is required by 
+   ! compute_andor_apply_rhs()
+
+   pnh_i(:,:,nlevp) = pnh(:,:,nlev) + dp3d(:,:,nlev)/2
+!#ifdef DA
+!   pnh_i(:,:,nlevp) = pnh(:,:,nlev) + dp3d(:,:,nlev)/2*invrhatm(:,:,nlev)*invrhatm(:,:,nlev)
+!#endif
+
+   ! compute d(pnh)/d(pi) at interfaces
+   ! use one-sided differences at boundaries
+   dp3d_i(:,:,1) = dp3d(:,:,1)
+   dp3d_i(:,:,nlevp) = dp3d(:,:,nlev)
+   do k=2,nlev
+      dp3d_i(:,:,k)=(dp3d(:,:,k)+dp3d(:,:,k-1))/2
+   end do
+
+!original
+   dpnh_dp_i(:,:,1)  = 2*(pnh(:,:,1)-pnh_i(:,:,1))/dp3d_i(:,:,1)
+
+   dpnh_dp_i(:,:,nlevp)  = 2*(pnh_i(:,:,nlevp)-pnh(:,:,nlev))/dp3d_i(:,:,nlevp)
+   do k=2,nlev
+      dpnh_dp_i(:,:,k) = (pnh(:,:,k)-pnh(:,:,k-1))/dp3d_i(:,:,k)
+   end do
+
+#ifdef DA
+   !da
+   !keep the bottom val unchanged and set to 1
+   dpnh_dp_i(:,:,1:nlev) = dpnh_dp_i(:,:,1:nlev)*rhati(:,:,1:nlev)*rhati(:,:,1:nlev)
+#endif   
+
+   if (present(pnh_i_out)) then
+      ! boundary values already computed. interpolate interior
+      ! use linear interpolation in hydrostatic pressure coordinate
+      ! if pnh=pi, then pnh_i will recover pi_i
+      do k=2,nlev
+         pnh_i(:,:,k)=(dp3d(:,:,k-1)*pnh(:,:,k)+dp3d(:,:,k)*pnh(:,:,k-1))/&
+              (dp3d(:,:,k-1)+dp3d(:,:,k))
+      enddo
+      pnh_i_out=pnh_i
+   endif
+
+  endif ! hydrostatic/nonhydrostatic version
+
   end subroutine 
+#endif
 
 
 
+
+#if 0
+!!!! Owen's version with ps_v
   !_____________________________________________________________________
   subroutine phi_from_eos(hvcoord,phis,ps,vtheta_dp,dp,phi_i)
   use deep_atm_mod, only: r_hat_from_phi
@@ -317,6 +515,91 @@ implicit none
 #endif
   enddo
   end subroutine
+
+#endif
+
+
+
+  subroutine phi_from_eos(hvcoord,phis,vtheta_dp,dp,phi_i)
+!
+! Use Equation of State to compute HYDROSTATIC geopotential
+!
+! input:  dp, phis, vtheta_dp  
+! output:  phi
+!
+! used to initialize phi for dry and wet test cases
+! used to compute background phi for reference state
+!
+! NOTE1: dp is pressure layer thickness.  If pnh is used to compute thickness, this
+! routine should be the discrete inverse of pnh_and_exner_from_eos().
+! This routine is usually called with hydrostatic layer thickness (dp3d), 
+! in which case it returns a hydrostatic PHI
+!
+! NOTE2: Exner pressure is defined in terms of p0=1000mb.  Be sure to use global constant p0,
+! instead of hvcoord%ps0, which is set by CAM to ~1021mb
+!  
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  implicit none
+
+  type (hvcoord_t),      intent(in)  :: hvcoord                      ! hybrid vertical coordinate struct
+  real (kind=real_kind), intent(in) :: vtheta_dp(np,np,nlev)
+  real (kind=real_kind), intent(in) :: dp(np,np,nlev)
+  real (kind=real_kind), intent(in) :: phis(np,np)
+  real (kind=real_kind), intent(out) :: phi_i(np,np,nlevp)
+
+  !   local
+  real (kind=real_kind) :: p(np,np,nlev) ! pressure at cell centers 
+  real (kind=real_kind) :: p_i(np,np,nlevp)  ! pressure on interfaces
+
+  integer :: k
+
+#ifndef NDEBUG
+  logical :: ierr
+  integer :: i,j,k2
+
+  ierr= any(vtheta_dp(:,:,:) < 0 )  .or. &
+          any(dp(:,:,:) < 0 )
+
+  if (ierr) then
+     print *,'bad state in phi_from_eos:'
+     do j=1,np
+     do i=1,np
+     do k=1,nlev
+        if ( (vtheta_dp(i,j,k) < 0) .or. (dp(i,j,k)<0) ) then
+           print *,'bad i,j,k=',i,j,k
+           print *,'vertical column: dp,vtheta_dp'
+           do k2=1,nlev
+              write(*,'(i3,4f14.4)') k2,dp(i,j,k2),vtheta_dp(i,j,k2)
+           enddo
+           call abortmp('EOS bad state: dp or vtheta_dp < 0')
+        endif
+     enddo
+     enddo
+     enddo
+  endif
+#endif
+  ! compute pressure on interfaces                                                                                   
+  p_i(:,:,1)=hvcoord%hyai(1)*hvcoord%ps0
+  do k=1,nlev
+     p_i(:,:,k+1)=p_i(:,:,k) + dp(:,:,k)
+  enddo
+  do k=1,nlev
+     p(:,:,k) = (p_i(:,:,k+1)+p_i(:,:,k))/2
+  enddo
+
+  phi_i(:,:,nlevp) = phis(:,:)
+
+  do k=nlev,1,-1
+#ifdef HOMMEXX_BFB_TESTING
+     phi_i(:,:,k) = phi_i(:,:,k+1)+ (Rgas*vtheta_dp(:,:,k)*bfb_pow(p(:,:,k)/p0,(kappa-1)))/p0
+#else
+     phi_i(:,:,k) = phi_i(:,:,k+1)+(Rgas*vtheta_dp(:,:,k)*(p(:,:,k)/p0)**(kappa-1))/p0
+#endif
+  enddo
+
+  end subroutine phi_from_eos
+
+
 
 end module
 
