@@ -1368,6 +1368,7 @@ contains
         do j = 1, nlevdecomp
            ! carbon fluxes
            do l = 1, ndecomp_pools
+              m_decomp_cpools_to_fire_vr(c,j,l) = 0._r8 
               if ( is_litter(l) ) then
                  m_decomp_cpools_to_fire_vr(c,j,l) = decomp_cpools_vr(c,j,l) * f * 0.5_r8
               end if
@@ -1386,6 +1387,7 @@ contains
 
            ! nitrogen fluxes
            do l = 1, ndecomp_pools
+              m_decomp_npools_to_fire_vr(c,j,l) = 0.0_r8 
               if ( is_litter(l) ) then
                  m_decomp_npools_to_fire_vr(c,j,l) = decomp_npools_vr(c,j,l) * f * 0.5_r8
               end if
@@ -1403,6 +1405,7 @@ contains
 
            ! phosphorus fluxes - loss due to fire
            do l = 1, ndecomp_pools
+              m_decomp_ppools_to_fire_vr(c,j,l) = 0._r8  
               if ( is_litter(l) ) then
                  m_decomp_ppools_to_fire_vr(c,j,l) = decomp_ppools_vr(c,j,l) * f * 0.5_r8
               end if
@@ -1464,7 +1467,7 @@ contains
    !
    ! !USES:
    use elm_varctl       , only : inst_name
-   use clm_time_manager , only : get_calendar
+   use elm_time_manager , only : get_calendar
    use ncdio_pio        , only : pio_subsystem
    use shr_pio_mod      , only : shr_pio_getiotype
    use elm_nlUtilsMod   , only : find_nlgroup_name
@@ -1581,7 +1584,7 @@ subroutine hdm_interp(bounds)
   ! Interpolate data stream information for population density.
   !
   ! !USES:
-  use clm_time_manager, only : get_curr_date
+  use elm_time_manager, only : get_curr_date
   !
   ! !ARGUMENTS:
   type(bounds_type), intent(in) :: bounds
@@ -1615,7 +1618,7 @@ subroutine lnfm_init( bounds )
   !
   ! !USES:
   use elm_varctl       , only : inst_name
-  use clm_time_manager , only : get_calendar
+  use elm_time_manager , only : get_calendar
   use ncdio_pio        , only : pio_subsystem
   use shr_pio_mod      , only : shr_pio_getiotype
   use elm_nlUtilsMod   , only : find_nlgroup_name
@@ -1731,7 +1734,7 @@ subroutine lnfm_interp(bounds )
   ! Interpolate data stream information for Lightning.
   !
   ! !USES:
-  use clm_time_manager, only : get_curr_date
+  use elm_time_manager, only : get_curr_date
   !
   ! !ARGUMENTS:
   type(bounds_type), intent(in) :: bounds

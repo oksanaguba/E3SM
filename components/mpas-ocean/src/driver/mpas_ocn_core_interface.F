@@ -115,10 +115,12 @@ module ocn_core_interface
       logical, pointer :: thicknessFilterActive
       logical, pointer :: splitTimeIntegratorActive
       logical, pointer :: semiImplicitTimePKGActive
+      logical, pointer :: splitAB2TimeIntegratorActive
       logical, pointer :: windStressBulkPKGActive
       logical, pointer :: variableBottomDragPKGActive
       logical, pointer :: tracerBudgetActive
       logical, pointer :: landIcePressurePKGActive
+      logical, pointer :: dataLandIceFluxesPKGActive
       logical, pointer :: landIceFluxesPKGActive
       logical, pointer :: landIceCouplingPKGActive
       logical, pointer :: thicknessBulkPKGActive
@@ -136,6 +138,7 @@ module ocn_core_interface
       logical, pointer :: gotmPKGActive
       logical, pointer :: verticalRemapPKGActive
       logical, pointer :: activeWavePKGActive
+      logical, pointer :: subgridWetDryPKGActive
 
       type (mpas_pool_iterator_type) :: pkgItr
       logical, pointer :: packageActive
@@ -170,6 +173,7 @@ module ocn_core_interface
       logical, pointer :: config_use_time_varying_land_ice_forcing
       logical, pointer :: config_use_gotm
       logical, pointer :: config_use_active_wave
+      logical, pointer :: config_use_subgrid_wetting_drying
 
       character (len=StrKIND), pointer :: config_time_integrator
       character (len=StrKIND), pointer :: config_ocean_run_mode
@@ -215,7 +219,8 @@ module ocn_core_interface
       if ( forwardModeActive ) then
          if (    config_time_integrator == trim('split_explicit') &
             .or. config_time_integrator == trim('unsplit_explicit') &
-            .or. config_time_integrator == trim('split_implicit') ) then
+            .or. config_time_integrator == trim('split_implicit') &
+            .or. config_time_integrator == trim('split_explicit_ab2') ) then
             splitTimeIntegratorActive = .true.
          end if
       endif
@@ -223,6 +228,13 @@ module ocn_core_interface
       if ( forwardModeActive ) then
          if (config_time_integrator == trim('split_implicit') ) then
             semiImplicitTimePKGActive = .true.
+         end if
+      endif
+
+      call mpas_pool_get_package(packagePool, 'splitAB2TimeIntegratorActive', splitAB2TimeIntegratorActive)
+      if ( forwardModeActive ) then
+         if (config_time_integrator == trim('split_explicit_ab2') ) then
+            splitAB2TimeIntegratorActive = .true.
          end if
       endif
 
@@ -288,11 +300,16 @@ module ocn_core_interface
       ! test for land ice coupling, landIceCouplingPKG
       !
       call mpas_pool_get_package(packagePool, 'landIcePressurePKGActive', landIcePressurePKGActive)
+      call mpas_pool_get_package(packagePool, 'dataLandIceFluxesPKGActive', &
+                                 dataLandIceFluxesPKGActive)
       call mpas_pool_get_package(packagePool, 'landIceFluxesPKGActive', landIceFluxesPKGActive)
       call mpas_pool_get_package(packagePool, 'landIceCouplingPKGActive', landIceCouplingPKGActive)
       call mpas_pool_get_config(configPool, 'config_land_ice_flux_mode', config_land_ice_flux_mode)
       if ( trim(config_land_ice_flux_mode) == 'pressure_only' ) then
          landIcePressurePKGActive = .true.
+      else if ( trim(config_land_ice_flux_mode) == 'data' ) then
+         landIcePressurePKGActive = .true.
+         dataLandIceFluxesPKGActive = .true.
       else if ( trim(config_land_ice_flux_mode) == 'standalone' ) then
          landIcePressurePKGActive = .true.
          landIceFluxesPKGActive = .true.
@@ -402,7 +419,7 @@ module ocn_core_interface
          verticalRemapPKGActive = .true.
       end if
 
-      ! test for active waves 
+      ! test for active waves
       !
       call mpas_pool_get_package(packagePool, 'activeWavePKGActive', activeWavePKGActive)
       call mpas_pool_get_config(configPool, &
@@ -411,6 +428,15 @@ module ocn_core_interface
       if (config_use_active_wave) then
          activeWavePKGActive = .true.
       endif
+
+      !
+      ! test for use of subgrid wetting and drying
+      !
+      call mpas_pool_get_package(packagePool, 'subgridWetDryPKGActive', subgridWetDryPKGActive)
+      call mpas_pool_get_config(configPool, 'config_use_subgrid_wetting_drying', config_use_subgrid_wetting_drying)
+      if (config_use_subgrid_wetting_drying) then
+         subgridWetDryPKGActive = .true.
+      end if
 
       !
       ! call into analysis member driver to set analysis member packages

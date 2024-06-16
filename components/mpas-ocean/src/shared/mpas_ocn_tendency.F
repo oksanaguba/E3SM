@@ -67,6 +67,7 @@ module ocn_tendency
    use ocn_wetting_drying
    use ocn_vel_tidal_potential
    use ocn_vel_self_attraction_loading
+   use ocn_manufactured_solution
 
    implicit none
    private
@@ -224,6 +225,9 @@ contains
       ! Compute thickness change due to tidal forcing
       call ocn_tidal_forcing_layer_thickness(forcingPool, &
                                              tendThick, err)
+
+      ! Compute thickness tendency to manufactured solution
+      call ocn_manufactured_solution_tend_thick(tendThick, err)
 
 #ifdef MPAS_OPENACC
       !$acc exit data copyout(tendThick, surfaceThicknessFlux, surfaceThicknessFluxRunoff)
@@ -422,19 +426,21 @@ contains
                                thermExpCoeff, salineContractCoeff, &
                                tendVel, err)
 
-      ! Compute ssh additions due to self-attraction and loading
+      ! Compute pgf additions due to self-attraction and loading
       if(mpas_is_alarm_ringing(domain % clock, 'salComputeAlarm', ierr=err)) then 
 #ifdef MPAS_DEBUG
           call mpas_log_write('       Computing SAL')
 #endif
-          call ocn_compute_self_attraction_loading(domain, forcingPool, dminfo, ssh, err)
+          call ocn_compute_self_attraction_loading(domain, forcingPool, dminfo, &
+                                                   ssh, surfacePressure, err)
           call mpas_reset_clock_alarm(domain % clock, 'salComputeAlarm', ierr=err)
       endif
-      !$acc update device(ssh_sal)
 
       ! Add tidal potential (if needed) 
       call ocn_compute_tidal_potential_forcing(err)
-      if (config_time_integrator == 'RK4') then
+      if ( (config_time_integrator == 'RK4') &
+           .or. (config_time_integrator =='LTS') &
+           .or. (config_time_integrator == 'FB_LTS') ) then
         ! for split explicit, tidal forcing is added in barotropic subcycles
         call ocn_vel_tidal_potential_tend(ssh,surfacePressure, tendVel, err)
       endif
@@ -447,6 +453,9 @@ contains
                                 sfcStress, kineticEnergyCell, &
                                 layerThickEdgeDrag, &
                                 layerThickEdgeMean, tendVel, err)
+ 
+      ! Compute tendency term for manufactured solution
+      call ocn_manufactured_solution_tend_vel(tendVel, err)
 
       ! vertical mixing treated implicitly in a later routine
       ! adjust total velocity tendency based on wetting/drying
@@ -1135,8 +1144,9 @@ contains
          call ocn_tracer_hmix_tend(meshPool, layerThickEdgeMean, &
                                    layerThickness, zMid, tracerGroup, &
                                    RediKappa, slopeTriadUp, &
-                                   slopeTriadDown, dt, isActiveTracer, &
-                                   RediKappaScaling, rediLimiterCount, &
+                                   slopeTriadDown, limiterUp, &
+                                   limiterDown, dt, isActiveTracer, &
+                                   rediLimiterCount, &
                                    tracerGroupTend, err)
 
          if (computeBudgets) then

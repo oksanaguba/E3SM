@@ -20,6 +20,42 @@ contains
     call eam_pio_finalize()
   end subroutine eam_pio_finalize_c2f
 !=====================================================================!
+  function get_file_ncid_c2f(filename_in) result(ncid) bind(c)
+    use scream_scorpio_interface, only : lookup_pio_atm_file, pio_atm_file_t
+    type(c_ptr), intent(in)         :: filename_in
+
+    type(pio_atm_file_t), pointer :: atm_file
+    character(len=256)      :: filename
+    integer(kind=c_int) :: ncid
+    logical :: found
+
+    call convert_c_string(filename_in,filename)
+    call lookup_pio_atm_file(filename,atm_file,found)
+    if (found) then
+      ncid = int(atm_file%pioFileDesc%fh,kind=c_int)
+    else
+      ncid = -1
+    endif
+  end function get_file_ncid_c2f
+!=====================================================================!
+  function get_file_mode_c2f(filename_in) result(mode) bind(c)
+    use scream_scorpio_interface, only : lookup_pio_atm_file, pio_atm_file_t
+
+    type(c_ptr), intent(in)         :: filename_in
+
+    type(pio_atm_file_t), pointer :: atm_file
+    character(len=256)      :: filename
+    integer(kind=c_int)     :: mode
+    logical :: found
+
+    call convert_c_string(filename_in,filename)
+    call lookup_pio_atm_file(filename,atm_file,found)
+    if (found) then
+      mode = atm_file%purpose
+    else
+      mode = 0
+    endif
+  end function get_file_mode_c2f
   function is_file_open_c2f(filename_in,purpose) result(res) bind(c)
     use scream_scorpio_interface, only : lookup_pio_atm_file, pio_atm_file_t
 
@@ -34,7 +70,7 @@ contains
     call convert_c_string(filename_in,filename)
     call lookup_pio_atm_file(filename,atm_file,found)
     if (found) then
-      res = LOGICAL(atm_file%purpose .eq. purpose,kind=c_bool)
+      res = LOGICAL(purpose .lt. 0 .or. atm_file%purpose .eq. purpose,kind=c_bool)
     else
       res = .false.
     endif
@@ -72,16 +108,18 @@ contains
 
     character(len=256)            :: filename
     character(len=256)            :: varname
-    integer(kind=pio_offset_kind) :: dof_vec_f90(dof_len)
     integer                       :: ii
+    integer(kind=pio_offset_kind), allocatable :: dof_vec_f90(:)
 
     call convert_c_string(filename_in,filename)
     call convert_c_string(varname_in,varname)
     ! Need to add 1 to the dof_vec because C++ starts indices at 0 not 1:
+    allocate(dof_vec_f90(dof_len))
     do ii = 1,dof_len
       dof_vec_f90(ii) = dof_vec(ii) + 1
     end do
     call set_dof(trim(filename),trim(varname),dof_len,dof_vec_f90)
+    deallocate(dof_vec_f90)
   end subroutine set_dof_c2f
 !=====================================================================!
   subroutine eam_pio_closefile_c2f(filename_in) bind(c)
@@ -94,6 +132,16 @@ contains
 
   end subroutine eam_pio_closefile_c2f
 !=====================================================================!
+  subroutine eam_pio_flush_file_c2f(filename_in) bind(c)
+    use scream_scorpio_interface, only : eam_pio_flush_file
+    type(c_ptr), intent(in) :: filename_in
+    character(len=256)      :: filename
+
+    call convert_c_string(filename_in,filename)
+    call eam_pio_flush_file(trim(filename))
+
+  end subroutine eam_pio_flush_file_c2f
+!=====================================================================!
   subroutine pio_update_time_c2f(filename_in,time) bind(c)
     use scream_scorpio_interface, only : eam_update_time
     type(c_ptr), intent(in) :: filename_in
@@ -105,82 +153,6 @@ contains
     call eam_update_time(trim(filename),time)
 
   end subroutine pio_update_time_c2f
-!=====================================================================!
-  subroutine get_variable_c2f(filename_in, shortname_in, longname_in, numdims, var_dimensions_in, dtype, pio_decomp_tag_in) bind(c)
-    use scream_scorpio_interface, only : get_variable
-    type(c_ptr), intent(in)                :: filename_in
-    type(c_ptr), intent(in)                :: shortname_in
-    type(c_ptr), intent(in)                :: longname_in
-    integer(kind=c_int), value, intent(in) :: numdims
-    type(c_ptr), intent(in)                :: var_dimensions_in(numdims)
-    integer(kind=c_int), value, intent(in) :: dtype
-    type(c_ptr), intent(in)                :: pio_decomp_tag_in
-
-    character(len=256) :: filename
-    character(len=256) :: shortname
-    character(len=256) :: longname
-    character(len=256) :: var_dimensions(numdims)
-    character(len=256) :: pio_decomp_tag
-    integer            :: ii
-
-    call convert_c_string(filename_in,filename)
-    call convert_c_string(shortname_in,shortname)
-    call convert_c_string(longname_in,longname)
-    call convert_c_string(pio_decomp_tag_in,pio_decomp_tag)
-    do ii = 1,numdims
-      call convert_c_string(var_dimensions_in(ii), var_dimensions(ii))
-    end do
-
-    call get_variable(filename,shortname,longname,numdims,var_dimensions,dtype,pio_decomp_tag)
-
-  end subroutine get_variable_c2f
-!=====================================================================!
-  function get_int_attribute_c2f(file_name_c, attr_name_c) result(val) bind(c)
-    use scream_scorpio_interface, only : get_int_attribute
-    type(c_ptr), intent(in) :: file_name_c
-    type(c_ptr), intent(in) :: attr_name_c
-    integer(kind=c_int)     :: val
-
-    character(len=256) :: file_name
-    character(len=256) :: attr_name
-
-    call convert_c_string(file_name_c,file_name)
-    call convert_c_string(attr_name_c,attr_name)
-
-    val = get_int_attribute(file_name,attr_name)
-  end function get_int_attribute_c2f
-!=====================================================================!
-  subroutine set_int_attribute_c2f(file_name_c, attr_name_c, val) bind(c)
-    use scream_scorpio_interface, only : set_int_attribute
-    type(c_ptr), intent(in)         :: file_name_c
-    type(c_ptr), intent(in)         :: attr_name_c
-    integer(kind=c_int), intent(in) :: val
-
-    character(len=256) :: file_name
-    character(len=256) :: attr_name
-
-    call convert_c_string(file_name_c,file_name)
-    call convert_c_string(attr_name_c,attr_name)
-
-    call set_int_attribute(file_name,attr_name,val)
-  end subroutine set_int_attribute_c2f
-!=====================================================================!
-  subroutine set_str_attribute_c2f(file_name_c, attr_name_c, val_c) bind(c)
-    use scream_scorpio_interface, only : set_str_attribute
-    type(c_ptr), intent(in)         :: file_name_c
-    type(c_ptr), intent(in)         :: attr_name_c
-    type(c_ptr), intent(in)         :: val_c
-
-    character(len=256) :: file_name
-    character(len=256) :: attr_name
-    character(len=256) :: val
-
-    call convert_c_string(file_name_c,file_name)
-    call convert_c_string(attr_name_c,attr_name)
-    call convert_c_string(val_c,val)
-
-    call set_str_attribute(file_name,attr_name,val)
-  end subroutine set_str_attribute_c2f
 !=====================================================================!
   subroutine register_variable_c2f(filename_in, shortname_in, longname_in, &
                                    units_in, numdims, var_dimensions_in,   &
@@ -216,8 +188,8 @@ contains
 
   end subroutine register_variable_c2f
 !=====================================================================!
-  subroutine set_variable_metadata_c2f(filename_in, varname_in, metaname_in, metaval_in) bind(c)
-    use scream_scorpio_interface, only : set_variable_metadata
+  subroutine set_variable_metadata_char_c2f(filename_in, varname_in, metaname_in, metaval_in) bind(c)
+    use scream_scorpio_interface, only : set_variable_metadata_char
     type(c_ptr), intent(in)                :: filename_in
     type(c_ptr), intent(in)                :: varname_in
     type(c_ptr), intent(in)                :: metaname_in
@@ -233,9 +205,118 @@ contains
     call convert_c_string(metaname_in,metaname)
     call convert_c_string(metaval_in,metaval)
 
-    call set_variable_metadata(filename,varname,metaname,metaval)
+    call set_variable_metadata_char(filename,varname,metaname,metaval)
 
-  end subroutine set_variable_metadata_c2f
+  end subroutine set_variable_metadata_char_c2f
+!=====================================================================!
+  subroutine set_variable_metadata_float_c2f(filename_in, varname_in, metaname_in, metaval_in) bind(c)
+    use scream_scorpio_interface, only : set_variable_metadata_float
+    type(c_ptr), intent(in)                :: filename_in
+    type(c_ptr), intent(in)                :: varname_in
+    type(c_ptr), intent(in)                :: metaname_in
+    real(kind=c_float), value, intent(in)  :: metaval_in
+
+    character(len=256) :: filename
+    character(len=256) :: varname
+    character(len=256) :: metaname
+
+    call convert_c_string(filename_in,filename)
+    call convert_c_string(varname_in,varname)
+    call convert_c_string(metaname_in,metaname)
+
+    call set_variable_metadata_float(filename,varname,metaname,metaval_in)
+
+  end subroutine set_variable_metadata_float_c2f
+!=====================================================================!
+  subroutine set_variable_metadata_double_c2f(filename_in, varname_in, metaname_in, metaval_in) bind(c)
+    use scream_scorpio_interface, only : set_variable_metadata_double
+    type(c_ptr), intent(in)                :: filename_in
+    type(c_ptr), intent(in)                :: varname_in
+    type(c_ptr), intent(in)                :: metaname_in
+    real(kind=c_double), value, intent(in) :: metaval_in
+
+    character(len=256) :: filename
+    character(len=256) :: varname
+    character(len=256) :: metaname
+
+    call convert_c_string(filename_in,filename)
+    call convert_c_string(varname_in,varname)
+    call convert_c_string(metaname_in,metaname)
+
+    call set_variable_metadata_double(filename,varname,metaname,metaval_in)
+
+  end subroutine set_variable_metadata_double_c2f
+!=====================================================================!
+  function get_variable_metadata_float_c2f(filename_in, varname_in, metaname_in) result(metaval_out) bind(c)
+    use scream_scorpio_interface, only : get_variable_metadata_float
+    type(c_ptr), intent(in)                :: filename_in
+    type(c_ptr), intent(in)                :: varname_in
+    type(c_ptr), intent(in)                :: metaname_in
+    real(kind=c_float)                     :: metaval_out
+
+    character(len=256) :: filename
+    character(len=256) :: varname
+    character(len=256) :: metaname
+
+    call convert_c_string(filename_in,filename)
+    call convert_c_string(varname_in,varname)
+    call convert_c_string(metaname_in,metaname)
+
+    metaval_out = get_variable_metadata_float(filename,varname,metaname)
+
+  end function get_variable_metadata_float_c2f
+!=====================================================================!
+  function get_variable_metadata_double_c2f(filename_in, varname_in, metaname_in) result(metaval_out) bind(c)
+    use scream_scorpio_interface, only : get_variable_metadata_double
+    type(c_ptr), intent(in)                :: filename_in
+    type(c_ptr), intent(in)                :: varname_in
+    type(c_ptr), intent(in)                :: metaname_in
+    real(kind=c_double)                    :: metaval_out
+
+    character(len=256) :: filename
+    character(len=256) :: varname
+    character(len=256) :: metaname
+
+    call convert_c_string(filename_in,filename)
+    call convert_c_string(varname_in,varname)
+    call convert_c_string(metaname_in,metaname)
+
+    metaval_out = get_variable_metadata_double(filename,varname,metaname)
+
+  end function get_variable_metadata_double_c2f
+!=====================================================================!
+  subroutine get_variable_metadata_char_c2f(filename_in, varname_in, metaname_in, metaval_out) bind(c)
+    use scream_scorpio_interface, only : get_variable_metadata_char
+    use iso_c_binding, only: C_NULL_CHAR, c_char, c_f_pointer
+    type(c_ptr), intent(in) :: filename_in
+    type(c_ptr), intent(in) :: varname_in
+    type(c_ptr), intent(in) :: metaname_in
+    type(c_ptr), intent(in) :: metaval_out
+
+    character(len=256) :: filename
+    character(len=256) :: varname
+    character(len=256) :: metaname
+    character(len=256) :: metaval
+    character(len=256, kind=c_char), pointer :: temp_string
+    integer :: slen
+
+    call c_f_pointer(metaval_out,temp_string)
+
+    call convert_c_string(filename_in,filename)
+    call convert_c_string(varname_in,varname)
+    call convert_c_string(metaname_in,metaname)
+
+    metaval = get_variable_metadata_char(filename,varname,metaname)
+
+    slen = len(trim(metaval))
+    ! If string is 255 or less, add terminating char. If not, it's still
+    ! ok (the C++ string will have length=max_length=256)
+    if (slen .le. 255) then
+      temp_string = trim(metaval) // C_NULL_CHAR
+    else
+      temp_string = metaval
+    endif
+  end subroutine get_variable_metadata_char_c2f
 !=====================================================================!
   subroutine register_dimension_c2f(filename_in, shortname_in, longname_in, length, partitioned) bind(c)
     use scream_scorpio_interface, only : register_dimension
@@ -257,48 +338,15 @@ contains
 
   end subroutine register_dimension_c2f
 !=====================================================================!
-  function get_dimlen_c2f(filename_in,dimname_in) result(val) bind(c)
-    use scream_scorpio_interface, only : get_dimlen
-    type(c_ptr), intent(in) :: filename_in
-    type(c_ptr), intent(in) :: dimname_in
-    integer(kind=c_int)     :: val
-
-    character(len=256) :: filename
-    character(len=256) :: dimname
-
-    call convert_c_string(filename_in,filename)
-    call convert_c_string(dimname_in,dimname)
-    val = get_dimlen(filename,dimname)
-
-  end function get_dimlen_c2f
-!=====================================================================!
-  function has_variable_c2f(filename_in,varname_in) result(has) bind(c)
-    use scream_scorpio_interface, only : has_variable
-    type(c_ptr), intent(in) :: filename_in
-    type(c_ptr), intent(in) :: varname_in
-    logical(kind=c_bool)     :: has
-
-    character(len=256) :: filename
-    character(len=256) :: varname
-
-    call convert_c_string(filename_in,filename)
-    call convert_c_string(varname_in,varname)
-    has = LOGICAL(has_variable(filename,varname),kind=c_bool)
-
-  end function has_variable_c2f
-!=====================================================================!
   function read_curr_time_c2f(filename_in) result(val) bind(c)
     use scream_scorpio_interface, only : read_time_at_index
-    use scream_scorpio_interface, only : get_dimlen
     type(c_ptr), intent(in)                :: filename_in
     real(kind=c_double)                    :: val
 
-    integer            :: time_index
     character(len=256) :: filename
 
     call convert_c_string(filename_in,filename)
-    time_index = get_dimlen(filename,trim("time"))
-    val        = read_time_at_index(filename,time_index)
+    val        = read_time_at_index(filename)
 
   end function read_curr_time_c2f
 !=====================================================================!
@@ -315,6 +363,22 @@ contains
 
   end function read_time_at_index_c2f
 !=====================================================================!
+  function is_enddef_c2f(filename_in) bind(c) result(enddef)
+    use scream_scorpio_interface, only : lookup_pio_atm_file, pio_atm_file_t
+    type(c_ptr), intent(in) :: filename_in
+
+    type(pio_atm_file_t), pointer :: atm_file
+    character(len=256)    :: filename
+    logical (kind=c_bool) :: enddef
+    logical :: found
+
+    call convert_c_string(filename_in,filename)
+    call lookup_pio_atm_file(filename,atm_file,found)
+    if (found) then
+      enddef = LOGICAL(atm_file%is_enddef, kind=c_bool)
+    endif
+  end function is_enddef_c2f
+!=====================================================================!
   subroutine eam_pio_enddef_c2f(filename_in) bind(c)
     use scream_scorpio_interface, only : eam_pio_enddef
     type(c_ptr), intent(in) :: filename_in
@@ -324,6 +388,16 @@ contains
     call convert_c_string(filename_in,filename)
     call eam_pio_enddef(filename)
   end subroutine eam_pio_enddef_c2f
+!=====================================================================!
+  subroutine eam_pio_redef_c2f(filename_in) bind(c)
+    use scream_scorpio_interface, only : eam_pio_redef
+    type(c_ptr), intent(in) :: filename_in
+
+    character(len=256)      :: filename
+
+    call convert_c_string(filename_in,filename)
+    call eam_pio_redef(filename)
+  end subroutine eam_pio_redef_c2f
 !=====================================================================!
   subroutine convert_c_string(c_string_ptr,f_string)
     use iso_c_binding, only: c_f_pointer, C_NULL_CHAR

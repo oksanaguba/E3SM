@@ -42,10 +42,7 @@ get_gm (const ekat::Comm& comm)
   const int nlcols = 3;
   const int nlevs = 16;
   const int ngcols = nlcols*comm.size();
-  ekat::ParameterList gm_params;
-  gm_params.set("number_of_global_columns",ngcols);
-  gm_params.set("number_of_vertical_levels",nlevs);
-  auto gm = create_mesh_free_grids_manager(comm,gm_params);
+  auto gm = create_mesh_free_grids_manager(comm,0,0,nlevs,ngcols);
   gm->build_grids();
   return gm;
 }
@@ -82,8 +79,6 @@ get_fm (const std::shared_ptr<const AbstractGrid>& grid,
   };
 
   auto fm = std::make_shared<FieldManager>(grid);
-  fm->registration_begins();
-  fm->registration_ends();
   
   const auto units = ekat::units::Units::nondimensional();
   for (const auto& fl : layouts) {
@@ -125,7 +120,6 @@ void write (const int freq, const int seed, const int ps, const ekat::Comm& comm
   auto& ctrl_pl = om_pl.sublist("output_control");
   ctrl_pl.set("frequency_units",std::string("nsteps"));
   ctrl_pl.set("Frequency",freq);
-  ctrl_pl.set("MPI Ranks in Filename",true);
   ctrl_pl.set("save_grid_data",false);
 
   // Create Output manager
@@ -168,7 +162,7 @@ void read (const int freq, const int seed, const int ps_write, const int ps_read
     + ".nc";
   reader_pl.set("Filename",filename);
   reader_pl.set("Field Names",fnames);
-  AtmosphereInput reader(reader_pl,fm,gm);
+  AtmosphereInput reader(reader_pl,fm);
 
   reader.read_variables();
   for (const auto& fn : fnames) {

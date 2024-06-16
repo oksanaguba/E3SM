@@ -669,8 +669,12 @@ contains
        iotype = pio_iotype_netcdf4p
     else if ( typename .eq. 'NETCDF4C') then
        iotype = pio_iotype_netcdf4c
+#ifndef PIO1
     else if ( typename .eq. 'ADIOS') then
        iotype = pio_iotype_adios
+    else if ( typename .eq. 'HDF5') then
+       iotype = pio_iotype_hdf5
+#endif
     else if ( typename .eq. 'NOTHING') then
        iotype = defaulttype
     else if ( typename .eq. 'DEFAULT') then
@@ -726,7 +730,8 @@ contains
     if(pio_stride == 1 .and. .not. pio_async_interface) then
        pio_root = 0
     endif
-    if(pio_rearranger .ne. PIO_REARR_SUBSET .and. pio_rearranger .ne. PIO_REARR_BOX) then
+    if(pio_rearranger .ne. PIO_REARR_SUBSET .and. pio_rearranger .ne. PIO_REARR_BOX .and.&
+        pio_rearranger .ne. PIO_REARR_ANY) then
        write(shr_log_unit,*) 'pio_rearranger value, ',pio_rearranger,&
             ', not supported - using PIO_REARR_BOX'
        pio_rearranger = PIO_REARR_BOX
