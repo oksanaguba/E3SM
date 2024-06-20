@@ -20,11 +20,12 @@ module dp_coupling
   use perf_mod,       only: t_startf, t_stopf, t_barrierf
   use parallel_mod,   only: par
   use scamMod,        only: single_column
-  use element_ops,    only: get_temperature
+  use element_ops,    only: get_temperature, get_nonhydro_pressure
   use phys_grid,      only: get_ncols_p, get_gcol_all_p, &
                             transpose_block_to_chunk, transpose_chunk_to_block,   &
                             chunk_to_block_send_pters, chunk_to_block_recv_pters, &
                             block_to_chunk_recv_pters, block_to_chunk_send_pters
+  use control_mod,    only: theta_hydrostatic_mode
   private
   public :: d_p_coupling, p_d_coupling
 
@@ -57,6 +58,12 @@ CONTAINS
     real(kind=real_kind), dimension(npsq,2,pver,nelemd)     :: uv_tmp ! temp array to hold u and v
     real(kind=real_kind), dimension(npsq,pver,pcnst,nelemd) :: q_tmp  ! temp to hold advected constituents
     real(kind=real_kind), dimension(npsq,pver,nelemd)       :: om_tmp ! temp array to hold omega
+
+    !this impl will use phinh or pnh even for hydro code in state vars and dp-coupling layer
+    !to avoid if-statements. if clause will be only in PU.
+    !real(kind=real_kind), dimension(npsq,pver,nelemd)      :: phinh_tmp ! temp array to hold phi_nh
+    real(kind=real_kind), dimension(npsq,pver,nelemd)       :: pnh_tmp ! temp array to hold phi_nh
+
     type(element_t),          pointer :: elem(:)          ! pointer to dyn_out element array
     type(physics_buffer_desc),pointer :: pbuf_chnk(:)     ! temporary pbuf pointer
     integer(kind=int_kind)   :: ie                        ! indices over elements
@@ -73,7 +80,9 @@ CONTAINS
     integer                  :: bpter(npsq,0:pver)        ! offsets into block buffer for packing 
     integer                  :: cpter(pcols,0:pver)       ! offsets into chunk buffer for unpacking 
     integer                  :: nphys, nphys_sq           ! physics grid parameters
-    real (kind=real_kind)    :: temperature(np,np,nlev)   ! Temperature from dynamics
+    real (kind=real_kind)    :: nlev_buffer1(np,np,pver)  ! temp
+    real (kind=real_kind)    :: nlev_buffer2(np,np,pver)  ! temp
+    real (kind=real_kind)    :: nlevp_buffer(np,np,pverp) ! temp
     ! Frontogenesis
     real (kind=real_kind), allocatable :: frontgf(:,:,:)  ! frontogenesis function
     real (kind=real_kind), allocatable :: frontga(:,:,:)  ! frontogenesis angle 
@@ -82,7 +91,18 @@ CONTAINS
     ! Transpose buffers
     real (kind=real_kind), allocatable, dimension(:) :: bbuffer 
     real (kind=real_kind), allocatable, dimension(:) :: cbuffer
+    logical                  :: nonhydro
+    integer                  :: dummyind
     !---------------------------------------------------------------------------
+
+    nonhydro=.false.
+    dummyind = 0
+#ifdef MODEL_THETA_L
+    if(.not. theta_hydrostatic_mode) then
+      nonhydro = .true.
+      dummyind = 1
+    endif
+#endif
 
     nullify(pbuf_chnk)
     nullify(pbuf_frontgf)
@@ -127,13 +147,25 @@ CONTAINS
         call t_startf('UniquePoints')
         do ie = 1,nelemd
           ncols = elem(ie)%idxP%NumUniquePts
-          call get_temperature(elem(ie),temperature,hvcoord,tl_f)
-          call UniquePoints(elem(ie)%idxP,       elem(ie)%state%ps_v(:,:,tl_f), ps_tmp(1:ncols,ie))
-          call UniquePoints(elem(ie)%idxP,       elem(ie)%state%phis,           zs_tmp(1:ncols,ie))
-          call UniquePoints(elem(ie)%idxP,  nlev, temperature,                  T_tmp(1:ncols,:,ie))
-          call UniquePoints(elem(ie)%idxP,  nlev,elem(ie)%derived%omega_p,      om_tmp(1:ncols,:,ie))
-          call UniquePoints(elem(ie)%idxP,2,nlev,elem(ie)%state%V(:,:,:,:,tl_f),uv_tmp(1:ncols,:,:,ie))
-          call UniquePoints(elem(ie)%idxP,nlev,pcnst,elem(ie)%state%Q(:,:,:,:), q_tmp(1:ncols,:,:,ie))
+          call get_temperature(elem(ie),nlev_buffer1,hvcoord,tl_f)
+
+          call UniquePoints(elem(ie)%idxP,       elem(ie)%state%ps_v(:,:,tl_f),   ps_tmp(1:ncols,ie))
+          call UniquePoints(elem(ie)%idxP,       elem(ie)%state%phis,             zs_tmp(1:ncols,ie))
+          call UniquePoints(elem(ie)%idxP,  nlev,nlev_buffer1,                    T_tmp(1:ncols,:,ie))
+          call UniquePoints(elem(ie)%idxP,  nlev,elem(ie)%derived%omega_p,        om_tmp(1:ncols,:,ie))
+          call UniquePoints(elem(ie)%idxP,2,nlev,elem(ie)%state%V(:,:,:,:,tl_f),  uv_tmp(1:ncols,:,:,ie))
+          call UniquePoints(elem(ie)%idxP,  nlev,pcnst,elem(ie)%state%Q(:,:,:,:), q_tmp(1:ncols,:,:,ie))
+
+          !version with phi
+          !nlev var is not needed, used later
+          !call get_phi(elem,nlev_buffer,nlevp_buffer,hvcoord,tl_f)
+          !nlev_buffer(:,:,1:nlev) = nlevp_buffer(:,:,1:nlev)
+          !call UniquePoints(elem(ie)%idxP,  nlev,nlev_buffer,                     phinh_tmp(1:ncols,:,ie))
+
+          !version with pressure
+          !subroutine get_nonhydro_pressure(elem,pnh,exner,hvcoord,nt)
+          call get_nonhydro_pressure(elem(ie),nlev_buffer1,nlev_buffer2,hvcoord,tl_f)
+          call UniquePoints(elem(ie)%idxP,  nlev,nlev_buffer1,                     pnh_tmp(1:ncols,:,ie))
         end do
         call t_stopf('UniquePoints')
         !-----------------------------------------------------------------------
@@ -148,6 +180,8 @@ CONTAINS
       om_tmp(:,:,:)    = 0._r8
       zs_tmp(:,:)      = 0._r8
       q_tmp(:,:,:,:)   = 0._r8
+      !phinh_tmp(:,:,:) = 0._r8
+      pnh_tmp(:,:,:) = 0._r8
       if (use_gw_front) then
         frontgf(:,:,:) = 0._r8
         frontga(:,:,:) = 0._r8
@@ -156,6 +190,7 @@ CONTAINS
     end if ! par%dynproc
 
     call t_startf('dpcopy')
+
     if (local_dp_map) then
 
       !$omp parallel do private (lchnk, ncols, pgcols, icol, idmb1, idmb2, idmb3, ie, ioff, ilyr, m, pbuf_chnk, pbuf_frontgf, pbuf_frontga)
@@ -180,7 +215,7 @@ CONTAINS
           phys_state(lchnk)%oldps(icol)   = ps_tmp(ioff,ie)
 
           do ilyr = 1,pver
-            phys_state(lchnk)%t(icol,ilyr)     = T_tmp(ioff,ilyr,ie)	   
+            phys_state(lchnk)%t(icol,ilyr)     = T_tmp(ioff,ilyr,ie)
             phys_state(lchnk)%u(icol,ilyr)     = uv_tmp(ioff,1,ilyr,ie)
             phys_state(lchnk)%v(icol,ilyr)     = uv_tmp(ioff,2,ilyr,ie)
             phys_state(lchnk)%omega(icol,ilyr) = om_tmp(ioff,ilyr,ie)
@@ -189,6 +224,19 @@ CONTAINS
               pbuf_frontga(icol,ilyr) = frontga(ioff,ilyr,ie)
             end if
           end do ! ilyr
+
+          if(nonhydro)then
+          do ilyr = 1,pver
+            !using phinh requires a lot of extra vars to call 
+            !   call pnh_and_exner_from_eos(hvcoord,elem%state%vtheta_dp(:,:,:,nt),&
+            !   elem%state%dp3d(:,:,:,nt),elem%state%phinh_i(:,:,:,nt),&
+            !   pnh,exner,dpnh_dp_i,caller="get_nonhydro_pressire")
+            !phys_state(lchnk)%phinh(icol,ilyr) = phinh_tmp(ioff,ilyr,ie)
+
+            !using pnh does not need much
+            phys_state(lchnk)%pmid(icol,ilyr) = pnh_tmp(ioff,ilyr,ie)
+          end do ! ilyr
+          endif
 
           do m = 1,pcnst
             do ilyr = 1,pver
@@ -201,7 +249,12 @@ CONTAINS
 
     else  ! .not. local_dp_map
 
+      if(nonhydro) then
+      tsize = 4 + pcnst + 1 ! 1 for pnh
+      else
       tsize = 4 + pcnst
+      endif
+
       if (use_gw_front) tsize = tsize + 2
 
       allocate(bbuffer(tsize*block_buf_nrecs))
@@ -226,9 +279,13 @@ CONTAINS
               bbuffer(bpter(icol,ilyr)+1) = uv_tmp(icol,1,ilyr,ie)
               bbuffer(bpter(icol,ilyr)+2) = uv_tmp(icol,2,ilyr,ie)
               bbuffer(bpter(icol,ilyr)+3) = om_tmp(icol,ilyr,ie)
+              !if in the loop!
+              if(nonhydro) then
+              bbuffer(bpter(icol,ilyr)+4) = pnh_tmp(icol,ilyr,ie)
+              endif
               if (use_gw_front) then
-                bbuffer(bpter(icol,ilyr)+4) = frontgf(icol,ilyr,ie)
-                bbuffer(bpter(icol,ilyr)+5) = frontga(icol,ilyr,ie)
+                bbuffer(bpter(icol,ilyr)+4+dummyind) = frontgf(icol,ilyr,ie)
+                bbuffer(bpter(icol,ilyr)+5+dummyind) = frontga(icol,ilyr,ie)
               end if
               do m = 1,pcnst
                 bbuffer(bpter(icol,ilyr)+tsize-pcnst-1+m) = q_tmp(icol,ilyr,m,ie)
@@ -266,9 +323,12 @@ CONTAINS
             phys_state(lchnk)%u    (icol,ilyr) = cbuffer(cpter(icol,ilyr)+1)
             phys_state(lchnk)%v    (icol,ilyr) = cbuffer(cpter(icol,ilyr)+2)
             phys_state(lchnk)%omega(icol,ilyr) = cbuffer(cpter(icol,ilyr)+3)
+            if(nonhydro)then
+            phys_state(lchnk)%pmid(icol,ilyr)  = cbuffer(cpter(icol,ilyr)+4)
+            endif
              if (use_gw_front) then
-                pbuf_frontgf(icol,ilyr) = cbuffer(cpter(icol,ilyr)+4)
-                pbuf_frontga(icol,ilyr) = cbuffer(cpter(icol,ilyr)+5)
+                pbuf_frontgf(icol,ilyr) = cbuffer(cpter(icol,ilyr)+4+dummyind)
+                pbuf_frontga(icol,ilyr) = cbuffer(cpter(icol,ilyr)+5+dummyind)
              end if
              do m = 1,pcnst
                 phys_state(lchnk)%q(icol,ilyr,m) = cbuffer(cpter(icol,ilyr)+tsize-pcnst-1+m)
@@ -296,6 +356,7 @@ CONTAINS
       do ilyr = 1,pver
         do icol = 1,ncols
           if (.not.single_column) then
+            !this is not an issue?
             phys_state(lchnk)%omega(icol,ilyr) = phys_state(lchnk)%omega(icol,ilyr) &
                                                 *phys_state(lchnk)%pmid(icol,ilyr)
           end if
@@ -313,8 +374,8 @@ CONTAINS
           call outfld('PS&IC',elem(ie)%state%ps_v(:,:,tl_f),  ncol_d,ie)
           call outfld('U&IC', elem(ie)%state%V(:,:,1,:,tl_f), ncol_d,ie)
           call outfld('V&IC', elem(ie)%state%V(:,:,2,:,tl_f), ncol_d,ie)
-          call get_temperature(elem(ie),temperature,hvcoord,tl_f)
-          call outfld('T&IC',temperature,ncol_d,ie)
+          call get_temperature(elem(ie),nlev_buffer1,hvcoord,tl_f)
+          call outfld('T&IC',nlev_buffer1,ncol_d,ie)
           do m = 1,pcnst
             call outfld(trim(cnst_name(m))//'&IC',elem(ie)%state%Q(:,:,:,m), ncol_d,ie)
           end do ! m
@@ -511,7 +572,7 @@ CONTAINS
     use spmd_utils,     only: masterproc
     use ppgrid,         only: pver
     use geopotential,   only: geopotential_t
-    use physics_types,  only: set_state_pdry, set_wet_to_dry
+    use physics_types,  only: set_state_pdry, set_wet_to_dry, pmid_to_pint_nh
     use check_energy,   only: check_energy_timestep_init
     use hycoef,         only: hyam, hybm, hyai, hybi, ps0
     use shr_vmath_mod,  only: shr_vmath_log
@@ -533,40 +594,103 @@ CONTAINS
     real(r8) :: zvirv(pcols,pver)    ! Local zvir array pointer
     integer  :: m, i, k, ncol
     type(physics_buffer_desc), pointer :: pbuf_chnk(:)
+
+    logical  :: nonhydro
+    real(r8) :: pimid(pcols,pver), piint(pcols,pverp)
     !---------------------------------------------------------------------------
+
+    nonhydro=.false.
+#ifdef MODEL_THETA_L
+    if(.not. theta_hydrostatic_mode) then
+      nonhydro = .true.
+    endif
+#endif
 
     ! Evaluate derived quantities
     !$omp parallel do private (lchnk, ncol, k, i, zvirv, pbuf_chnk)
     do lchnk = begchunk,endchunk
       ncol = get_ncols_p(lchnk)
-      do k = 1,nlev
+
+      if(nonhydro)then
+
+        !nonhydrostatic
+        do k = 1,nlev
+          do i = 1,ncol
+            piint(i,k)=hyai(k)*ps0+hybi(k)*phys_state(lchnk)%ps(i)
+            pimid(i,k)=hyam(k)*ps0+hybm(k)*phys_state(lchnk)%ps(i)
+          end do
+        enddo
         do i = 1,ncol
-          phys_state(lchnk)%pint(i,k)=hyai(k)*ps0+hybi(k)*phys_state(lchnk)%ps(i)
-          phys_state(lchnk)%pmid(i,k)=hyam(k)*ps0+hybm(k)*phys_state(lchnk)%ps(i)
+          piint(i,pverp)=hyai(pverp)*ps0+hybi(pverp)*phys_state(lchnk)%ps(i)
         end do
-        call shr_vmath_log(phys_state(lchnk)%pint(1:ncol,k), &
-                           phys_state(lchnk)%lnpint(1:ncol,k),ncol)
-        call shr_vmath_log(phys_state(lchnk)%pmid(1:ncol,k), &
-                           phys_state(lchnk)%lnpmid(1:ncol,k),ncol)
-      end do
-      do i = 1,ncol
-        phys_state(lchnk)%pint(i,pverp)=hyai(pverp)*ps0+hybi(pverp)*phys_state(lchnk)%ps(i)
-      end do
+
+        ! not k loop!
+        do i = 1,ncol
+
+          phys_state(lchnk)%pdel(i,1:pver) = piint(i,2:pverp) - piint(i,1:pver)
+
+          call pmid_to_pint_nh(phys_state(lchnk)%pmid(i,1:pver),phys_state(lchnk)%pint(i,1:pverp),&
+                               phys_state(lchnk)%pdel(i,1:pver),piint(i,1))
+          !ps needs to be overwritten, it was set before to hydro ps
+
+          phys_state(lchnk)%ps(i)    = phys_state(lchnk)%pint(i,pverp)
+          phys_state(lchnk)%oldps(i) = phys_state(lchnk)%pint(i,pverp)
+        enddo
+        do k = 1,nlev
+          !plevp is done below
+          do i = 1,ncol
+          call shr_vmath_log(phys_state(lchnk)%pint(1:ncol,k), &
+                             phys_state(lchnk)%lnpint(1:ncol,k),ncol)
+          call shr_vmath_log(phys_state(lchnk)%pmid(1:ncol,k), &
+                             phys_state(lchnk)%lnpmid(1:ncol,k),ncol)
+          end do
+        enddo
+
+        do k = 1,nlev
+          do i = 1,ncol
+            !repeated
+            phys_state(lchnk)%oldpdel (i,k) = phys_state(lchnk)%pdel (i,k)
+            phys_state(lchnk)%rpdel(i,k)  = 1._r8/phys_state(lchnk)%pdel(i,k)
+            phys_state(lchnk)%exner (i,k) = (phys_state(lchnk)%pint(i,pver+1) &
+                                            /phys_state(lchnk)%pmid(i,k))**cappa
+          end do
+        end do
+
+      else
+
+        !default
+        do k = 1,nlev
+          do i = 1,ncol
+            phys_state(lchnk)%pint(i,k)=hyai(k)*ps0+hybi(k)*phys_state(lchnk)%ps(i)
+            phys_state(lchnk)%pmid(i,k)=hyam(k)*ps0+hybm(k)*phys_state(lchnk)%ps(i)
+          end do
+          call shr_vmath_log(phys_state(lchnk)%pint(1:ncol,k), &
+                             phys_state(lchnk)%lnpint(1:ncol,k),ncol)
+          call shr_vmath_log(phys_state(lchnk)%pmid(1:ncol,k), &
+                             phys_state(lchnk)%lnpmid(1:ncol,k),ncol)
+        end do
+
+        do i = 1,ncol
+          phys_state(lchnk)%pint(i,pverp)=hyai(pverp)*ps0+hybi(pverp)*phys_state(lchnk)%ps(i)
+        end do
+
+        do k = 1,nlev
+          do i = 1,ncol
+            phys_state(lchnk)%pdel (i,k)  = phys_state(lchnk)%pint(i,k+1) &
+                                           -phys_state(lchnk)%pint(i,k)
+
+            phys_state(lchnk)%oldpdel (i,k) = phys_state(lchnk)%pdel (i,k)
+
+            phys_state(lchnk)%rpdel(i,k)  = 1._r8/phys_state(lchnk)%pdel(i,k)
+            phys_state(lchnk)%exner (i,k) = (phys_state(lchnk)%pint(i,pver+1) &
+                                            /phys_state(lchnk)%pmid(i,k))**cappa
+          end do
+        end do
+
+      endif !hydro or nonhydro
+
       call shr_vmath_log(phys_state(lchnk)%pint(1:ncol,pverp), &
                          phys_state(lchnk)%lnpint(1:ncol,pverp),ncol)
-
-      do k = 1,nlev
-        do i = 1,ncol
-          phys_state(lchnk)%pdel (i,k)  = phys_state(lchnk)%pint(i,k+1) &
-                                         -phys_state(lchnk)%pint(i,k)
-
-          phys_state(lchnk)%oldpdel (i,k) = phys_state(lchnk)%pdel (i,k) 
-
-          phys_state(lchnk)%rpdel(i,k)  = 1._r8/phys_state(lchnk)%pdel(i,k)
-          phys_state(lchnk)%exner (i,k) = (phys_state(lchnk)%pint(i,pver+1) &
-                                          /phys_state(lchnk)%pmid(i,k))**cappa
-        end do
-      end do
 
       !----------------------------------------------------
       ! Need to fill zvirv 2D variables to be 
@@ -606,7 +730,9 @@ CONTAINS
        !        back to wet. (in APE, all tracers are wet, so it is ok for now)  
        !
        ! Convert dry type constituents from moist to dry mixing ratio
-       call set_state_pdry(phys_state(lchnk))	! First get dry pressure to use for this timestep
+
+       ! for NH pressure option this call needs already computed geopotential
+       call set_state_pdry(phys_state(lchnk)) ! First get dry pressure to use for this timestep
        call set_wet_to_dry(phys_state(lchnk)) ! Dynamics had moist, physics wants dry.
 
        ! Compute energy and water integrals of input state
@@ -649,4 +775,5 @@ CONTAINS
   end subroutine derived_phys
   !=================================================================================================
   !=================================================================================================
+
 end module dp_coupling

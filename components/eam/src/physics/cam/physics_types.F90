@@ -6,7 +6,7 @@
 module physics_types
 
   use shr_kind_mod, only: r8 => shr_kind_r8
-  use ppgrid,       only: pcols, pver, psubcols
+  use ppgrid,       only: pcols, pver, pverp, psubcols
   use constituents, only: pcnst, qmin, cnst_name, icldliq, icldice, irain, isnow
   use geopotential, only: geopotential_t
   use physconst,    only: zvir, gravit, cpair, rair, cpairv, rairv
@@ -17,6 +17,7 @@ module physics_types
   use phys_control, only: waccmx_is, use_mass_borrower, use_waterloading, use_cpstar
   use shr_const_mod,only: shr_const_rwv
   use perf_mod,     only: t_startf, t_stopf
+  use control_mod,  only: theta_hydrostatic_mode
 
   implicit none
   private          ! Make default type private to the module
@@ -57,6 +58,8 @@ module physics_types
   public physics_ptend_alloc   ! allocate individual components within tend
   public physics_ptend_dealloc ! deallocate individual components within tend
 
+  public pmid_to_pint_nh       ! using pnh on midlevels, compute pnh on interfaces
+
 !-------------------------------------------------------------------------------
   type physics_state
      integer                                     :: &
@@ -67,9 +70,10 @@ module physics_types
      real(r8), dimension(:), allocatable         :: &
           lat,     &! latitude (radians)
           lon,     &! longitude (radians)
-          ps,      &! surface pressure
-          oldps,      &! surface pressure
-          psdry,   &! dry surface pressure
+          psnh,      &! surface pressure
+          pshy,      &! surface pressure
+          oldpshy,      &! surface pressure
+          psdryhy,   &! dry surface pressure
           phis,    &! surface geopotential
           ulat,    &! unique latitudes  (radians)
           ulon      ! unique longitudes (radians)
@@ -88,7 +92,7 @@ module physics_types
           rpdeldry,&! recipricol layer thickness dry (Pa)
           lnpmid,  &! ln(pmid)
           lnpmiddry,&! log midpoint pressure dry (Pa) 
-          exner,   &! inverse exner function w.r.t. surface pressure (ps/p)^(R/cp)
+          exner,  &! inverse exner function w.r.t. surface pressure (ps/p)^(R/cp)
           cpstar,  &
           zm        ! geopotential height above surface at midpoints (m)
 
@@ -519,10 +523,13 @@ contains
     end if
 
     ! 1-D variables
-    call shr_assert_in_domain(state%ps(:ncol),          is_nan=.false., &
-         varname="state%ps",        msg=msg)
-    call shr_assert_in_domain(state%psdry(:ncol),       is_nan=.false., &
-         varname="state%psdry",     msg=msg)
+    call shr_assert_in_domain(state%pshy(:ncol),          is_nan=.false., &
+         varname="state%pshy",        msg=msg)
+    call shr_assert_in_domain(state%psdryhy(:ncol),       is_nan=.false., &
+         varname="state%psdryhy",     msg=msg)
+    call shr_assert_in_domain(state%psnh(:ncol),          is_nan=.false., &
+         varname="state%psnh",        msg=msg)
+
     call shr_assert_in_domain(state%phis(:ncol),        is_nan=.false., &
          varname="state%phis",      msg=msg)
     call shr_assert_in_domain(state%te_ini(:ncol),      is_nan=.false., &
@@ -542,8 +549,9 @@ contains
     call shr_assert_in_domain(state%cpstar(:ncol,:),      is_nan=.false., &
          varname="state%cpstar",    msg=msg)
 
-    call shr_assert_in_domain(state%oldps(:ncol),          is_nan=.false., &
-         varname="state%ps",        msg=msg)
+    call shr_assert_in_domain(state%oldpshy(:ncol),          is_nan=.false., &
+         varname="state%oldpshy",        msg=msg)
+
     call shr_assert_in_domain(state%oldpdel(:ncol,:),      is_nan=.false., &
          varname="state%pdel",      msg=msg)
     call shr_assert_in_domain(state%oldq(:ncol,:,:),       is_nan=.false., &
@@ -615,10 +623,13 @@ contains
     end if
 
     ! 1-D variables
-    call shr_assert_in_domain(state%ps(:ncol),          lt=posinf_r8, gt=0._r8, &
-         varname="state%ps",        msg=msg)
-    call shr_assert_in_domain(state%psdry(:ncol),       lt=posinf_r8, gt=0._r8, &
-         varname="state%psdry",     msg=msg)
+    call shr_assert_in_domain(state%pshy(:ncol),          lt=posinf_r8, gt=0._r8, &
+         varname="state%pshy",        msg=msg)
+    call shr_assert_in_domain(state%psdryhy(:ncol),       lt=posinf_r8, gt=0._r8, &
+         varname="state%psdryhy",     msg=msg)
+    call shr_assert_in_domain(state%psnh(:ncol),       lt=posinf_r8, gt=0._r8, &
+         varname="state%psnh",     msg=msg)
+
     call shr_assert_in_domain(state%phis(:ncol),        lt=posinf_r8, gt=neginf_r8, &
          varname="state%phis",      msg=msg)
     call shr_assert_in_domain(state%te_ini(:ncol),      lt=posinf_r8, gt=neginf_r8, &
@@ -640,10 +651,10 @@ contains
          varname="state%cpstar",    msg=msg)
 
 !set them where ps and pdel are set
-    call shr_assert_in_domain(state%oldps(:ncol),          lt=posinf_r8, gt=0._r8, &
-         varname="state%ps",        msg=msg)
+    call shr_assert_in_domain(state%oldpshy(:ncol),          lt=posinf_r8, gt=0._r8, &
+         varname="state%oldpshy",        msg=msg)
     call shr_assert_in_domain(state%oldpdel(:ncol,:),      lt=posinf_r8, gt=neginf_r8, &
-         varname="state%pdel",      msg=msg)
+         varname="state%oldpdel",      msg=msg)
     ! 3-D variables
     do m = 1,pcnst
        call shr_assert_in_domain(state%oldq(:ncol,:,m),    lt=posinf_r8, gt=neginf_r8, &
@@ -1310,8 +1321,9 @@ end subroutine physics_ptend_copy
     do i = 1, ncol
        state_out%lat(i)    = state_in%lat(i)
        state_out%lon(i)    = state_in%lon(i)
-       state_out%ps(i)     = state_in%ps(i)
-       state_out%oldps(i)     = state_in%oldps(i)
+       state_out%pshy(i)     = state_in%pshy(i)
+       state_out%psnh(i)     = state_in%psnh(i)
+       state_out%oldpshy(i)     = state_in%oldpshy(i)
        state_out%phis(i)   = state_in%phis(i)
        state_out%te_ini(i) = state_in%te_ini(i) 
        state_out%te_cur(i) = state_in%te_cur(i) 
@@ -1357,7 +1369,7 @@ end subroutine physics_ptend_copy
 
 
        do i = 1, ncol
-          state_out%psdry(i)  = state_in%psdry(i) 
+          state_out%psdryhy(i)  = state_in%psdryhy(i) 
        end do
        do k = 1, pver
           do i = 1, ncol
@@ -1445,11 +1457,20 @@ subroutine set_state_pdry (state,pdeld_calc)
   implicit none
 
   type(physics_state), intent(inout) :: state
-  logical, optional, intent(in) :: pdeld_calc    !  .true. do calculate pdeld [default]
+  lugical, optional, intent(in) :: pdeld_calc    !  .true. do calculate pdeld [default]
                                                  !  .false. don't calculate pdeld 
   integer ncol
   integer i, k
   logical do_pdeld_calc
+  logical nonhydro
+  real(r8) :: pimid(pcols,pver), piint(pcols,pverp), dz(pcols,pverp)
+
+  nonhydro=.false.
+#ifdef MODEL_THETA_L
+  if(.not. theta_hydrostatic_mode) then
+    nonhydro = .true.
+  endif
+#endif
 
   if ( present(pdeld_calc) ) then
      do_pdeld_calc = pdeld_calc
@@ -1459,32 +1480,63 @@ subroutine set_state_pdry (state,pdeld_calc)
   
   ncol = state%ncol
 
-
-  state%psdry(:ncol) = state%pint(:ncol,1)
-  state%pintdry(:ncol,1) = state%pint(:ncol,1)
-
+  !this code is used for NH and HY
   if (do_pdeld_calc)  then
     if(use_waterloading)then
-     do k = 1, pver
+      do k = 1, pver
         state%pdeldry(:ncol,k) = state%pdel(:ncol,k)*&
            (1._r8-state%q(:ncol,k,1)-state%q(:ncol,k,icldliq)-state%q(:ncol,k,icldice)&
                  -state%q(:ncol,k,irain)-state%q(:ncol,k,isnow))
-     end do
+      end do
     else
-     do k = 1, pver
+      do k = 1, pver
         state%pdeldry(:ncol,k) = state%pdel(:ncol,k)*(1._r8-state%q(:ncol,k,1))
-     end do
+      end do
     endif
   endif
-  do k = 1, pver
-     state%pintdry(:ncol,k+1) = state%pintdry(:ncol,k)+state%pdeldry(:ncol,k)
-     state%pmiddry(:ncol,k) = (state%pintdry(:ncol,k+1)+state%pintdry(:ncol,k))/2._r8
-     state%psdry(:ncol) = state%psdry(:ncol) + state%pdeldry(:ncol,k)
-  end do
 
+  if(.not. nonhydro) then
+    !this code will set HY vars
+    state%psdryhy(:ncol) = state%pint(:ncol,1)
+    state%pintdry(:ncol,1) = state%pint(:ncol,1)
+    do k = 1, pver
+      state%pintdry(:ncol,k+1) = state%pintdry(:ncol,k)+state%pdeldry(:ncol,k)
+      state%pmiddry(:ncol,k) = (state%pintdry(:ncol,k+1)+state%pintdry(:ncol,k))/2._r8
+      state%psdryhy(:ncol) = state%psdryhy(:ncol) + state%pdeldry(:ncol,k)
+    end do
+  else
+    !for NH run, set only psdry hy here REPEATED
+    state%psdryhy(:ncol) = state%pint(:ncol,1)
+    do k = 1, pver
+      state%psdryhy(:ncol) = state%psdryhy(:ncol) + state%pdeldry(:ncol,k)
+    end do
+  endif
+
+  if(nonhydro) then
+
+    dz(:ncol,1:pver) = state%zi(:ncol,1:pver) - state%zi(:ncol,2:pverp)
+    !use pdeldry from above to compute dry NH pressure from pnh_dry=R * T * rho_dry
+    !vars to set here: pmiddry, pintdry, psdry
+    !pmid has full NH pressure
+    !density = dp3d / dz / g 
+
+    do k = 1, pver
+      state%pmiddry(:ncol,k) = rair * state%T(:ncol,k) * ( state%pdeldry(:ncol,k) / dz(:ncol,k) / gravit )
+    enddo
+
+    call pmid_to_pint_nh(state%pmiddry(i,1:pver),state%pintdry(i,1:pverp),&
+                         state%pdeldry(i,1:pver),state%pint(i,1))
+
+    !nh ps dry
+    !state%psdry(:ncol) = state%pintdry(:ncol,pverp)
+
+  endif
+
+  !independent from NH or HY code
   state%rpdeldry(:ncol,:) = 1._r8/state%pdeldry(:ncol,:)
   state%lnpmiddry(:ncol,:) = log(state%pmiddry(:ncol,:))
   state%lnpintdry(:ncol,:) = log(state%pintdry(:ncol,:))
+
 
 end subroutine set_state_pdry 
 
@@ -1580,16 +1632,17 @@ subroutine physics_state_alloc(state,lchnk,psetcols)
   allocate(state%lon(psetcols), stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%lon')
   
-  allocate(state%ps(psetcols), stat=ierr)
-  if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%ps')
+  allocate(state%pshy(psetcols), stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%pshy')
  
+  allocate(state%psnh(psetcols), stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%psnh')
 
-  allocate(state%oldps(psetcols), stat=ierr)
-  if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%ps')
-
+  allocate(state%oldpshy(psetcols), stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%oldpshy')
  
-  allocate(state%psdry(psetcols), stat=ierr)
-  if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%psdry')
+  allocate(state%psdryhy(psetcols), stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%psdryhy')
   
   allocate(state%phis(psetcols), stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_alloc error: allocation error for state%phis')
@@ -1729,9 +1782,10 @@ subroutine physics_state_alloc(state,lchnk,psetcols)
   state%lon(:) = inf
   state%ulat(:) = inf
   state%ulon(:) = inf
-  state%ps(:) = inf
-  state%oldps(:) = 0.0
-  state%psdry(:) = inf
+  state%pshy(:) = inf
+  state%psnh(:) = inf
+  state%oldpshy(:) = 0.0
+  state%psdryhy(:) = inf
   state%phis(:) = inf
   state%t(:,:) = inf
   state%u(:,:) = inf
@@ -1793,16 +1847,17 @@ subroutine physics_state_dealloc(state)
   deallocate(state%lon, stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%lon')
   
-  deallocate(state%ps, stat=ierr)
-  if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%ps')
+  deallocate(state%pshy, stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%pshy')
   
+  deallocate(state%psnh, stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%psnh')
 
-  deallocate(state%oldps, stat=ierr)
-  if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%ps')
+  deallocate(state%oldpshy, stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%oldpshy')
 
-
-  deallocate(state%psdry, stat=ierr)
-  if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%psdry')
+  deallocate(state%psdryhy, stat=ierr)
+  if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%psdryhy')
   
   deallocate(state%phis, stat=ierr)
   if ( ierr /= 0 ) call endrun('physics_state_dealloc error: deallocation error for state%phis')
@@ -2117,5 +2172,40 @@ subroutine physics_ptend_dealloc(ptend)
   if ( ierr /= 0 ) call endrun('physics_ptend_dealloc error: deallocation error for ptend%cflx_top')
 
 end subroutine physics_ptend_dealloc
+
+
+
+
+!computes p NH on interfaces from p NH on midpoints 
+!using homme interpolations/assumptions and p HY (dp3d)
+  subroutine pmid_to_pint_nh(pmid,pint,dp3d,ptop)
+
+    implicit none
+    real(r8), intent(inout), dimension(1:pverp) :: pint
+    real(r8), intent(in),    dimension(1:pver)  :: pmid
+    real(r8), intent(in),    dimension(1:pver)  :: dp3d
+    real(r8), intent(in)                        :: ptop
+
+    integer  :: k
+
+    !mu=1 at the surface approximation
+    !https://acme-climate.atlassian.net/wiki/spaces/NGDNA/pages/2579530246/NH+surface+pressure
+    !pint(nlevp) = pmid(nlev) + dp3d(nlev)/2
+
+    pint(pverp) = pmid(pver) + dp3d(pver)/2
+
+    !prob using ps0 here is enough
+    pint(1) = ptop
+
+    !pnh_i(:,:,k)=(dp3d(:,:,k-1)*pnh(:,:,k)+dp3d(:,:,k)*pnh(:,:,k-1))/&
+    !          (dp3d(:,:,k-1)+dp3d(:,:,k))
+    do k=2,pver
+      pint(k) = (dp3d(k-1)*pmid(k)+dp3d(k)*pmid(k-1))/(dp3d(k-1)+dp3d(k))
+    enddo
+
+  end subroutine pmid_to_pint_nh
+
+
+
 
 end module physics_types
