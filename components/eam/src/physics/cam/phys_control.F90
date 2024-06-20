@@ -145,6 +145,17 @@ logical, public, protected :: use_gw_convect = .false.
 !GW energy fix
 logical, public, protected :: use_gw_energy_fix = .false.
 
+!WL, cpstar, enthalpies
+!all set in eam guts and via namelists, their values are printed at init
+logical, public, protected :: use_waterloading         = .false.
+logical, public, protected :: use_cpstar               = .false.
+logical, public, protected :: use_enthalpy_cpdry       = .false.
+logical, public, protected :: use_enthalpy_cl          = .false.
+logical, public, protected :: use_enthalpy_cpwv        = .false.
+logical, public, protected :: use_enthalpy_theoretical = .false.
+logical, public, protected :: use_global_cpterms_dme   = .false.
+logical, public, protected :: dycore_fixer_only        = .false.
+
 ! Switches that turn on/off individual parameterizations.
 !
 ! Comment by Hui Wan (PNNL, 2014-12):
@@ -179,7 +190,7 @@ subroutine phys_ctl_readnl(nlfile)
    use namelist_utils,  only: find_group_name
    use units,           only: getunit, freeunit
    use mpishorthand
-   use cam_control_mod, only: cam_ctrl_set_physics_type
+   use cam_control_mod, only: cam_ctrl_set_physics_type, cam_ctrl_waterloading
    use physconst,       only: pi
 
    character(len=*), intent(in) :: nlfile  ! filepath for file containing namelist input
@@ -204,6 +215,8 @@ subroutine phys_ctl_readnl(nlfile)
       print_fixer_message, & 
       use_hetfrz_classnuc, use_gw_oro, use_gw_front, use_gw_convect, &
       use_gw_energy_fix, &
+      use_waterloading, use_cpstar, use_enthalpy_cpdry, use_enthalpy_cl, use_enthalpy_cpwv, &
+      use_enthalpy_theoretical, use_global_cpterms_dme, dycore_fixer_only, &
       cld_macmic_num_steps, micro_do_icesupersat, &
       fix_g1_err_ndrop, ssalt_tuning, resus_fix, convproc_do_aer, &
       convproc_do_gas, convproc_method_activate, liqcf_fix, regen_fix, demott_ice_nuc, pergro_mods, pergro_test_active, &
@@ -276,7 +289,15 @@ subroutine phys_ctl_readnl(nlfile)
    call mpibcast(use_gw_oro,                      1 , mpilog,  0, mpicom)
    call mpibcast(use_gw_front,                    1 , mpilog,  0, mpicom)
    call mpibcast(use_gw_convect,                  1 , mpilog,  0, mpicom)
-   call mpibcast(use_gw_energy_fix,              1 , mpilog,  0, mpicom)
+   call mpibcast(use_gw_energy_fix,               1 , mpilog,  0, mpicom)
+   call mpibcast(use_waterloading,                1 , mpilog,  0, mpicom)
+   call mpibcast(use_cpstar,                      1 , mpilog,  0, mpicom)
+   call mpibcast(use_enthalpy_cpdry,              1 , mpilog,  0, mpicom)
+   call mpibcast(use_enthalpy_cl,                 1 , mpilog,  0, mpicom)
+   call mpibcast(use_enthalpy_cpwv,               1 , mpilog,  0, mpicom)
+   call mpibcast(use_enthalpy_theoretical,        1 , mpilog,  0, mpicom)
+   call mpibcast(use_global_cpterms_dme,          1 , mpilog,  0, mpicom)
+   call mpibcast(dycore_fixer_only,               1 , mpilog,  0, mpicom)
    call mpibcast(fix_g1_err_ndrop,                1 , mpilog,  0, mpicom)
    call mpibcast(ssalt_tuning,                    1 , mpilog,  0, mpicom)
    call mpibcast(resus_fix,                       1 , mpilog,  0, mpicom)
@@ -311,6 +332,8 @@ subroutine phys_ctl_readnl(nlfile)
 #endif
 
    call cam_ctrl_set_physics_type(cam_physpkg)
+
+   cam_ctrl_waterloading = use_waterloading
 
    ! Error checking:
 

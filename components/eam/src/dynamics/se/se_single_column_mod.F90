@@ -127,7 +127,7 @@ subroutine apply_SC_forcing(elem,hvcoord,tl,n,t_before_advance,nets,nete)
     use scamMod, only: single_column, use_3dfrc
     use kinds, only : real_kind
     use dimensions_mod, only : np, np, nlev, npsq
-    use control_mod, only : use_cpstar, qsplit
+    use control_mod, only :  qsplit
     use hybvcoord_mod, only : hvcoord_t
     use element_mod, only : element_t
     use physical_constants, only : Cp, Rgas, cpwater_vapor

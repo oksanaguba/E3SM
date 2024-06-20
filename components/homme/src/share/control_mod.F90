@@ -137,6 +137,7 @@ module control_mod
 ! internally the code should use logical "use_moisture"
   character(len=MAX_STRING_LEN)    , public :: moisture  
 
+! OG: PREQX cpstar, not used in eflx work
   integer, public  :: use_cpstar=0          ! use cp or cp* in thermodynamics
   logical, public  :: use_moisture=.false.  ! use Q(:,:,:,1) to compute T_v
 

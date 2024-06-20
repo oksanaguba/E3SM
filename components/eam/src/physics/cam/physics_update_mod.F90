@@ -84,7 +84,7 @@ contains
   !----------------------------------------------------------------------------
   !----------------------------------------------------------------------------
 
-  subroutine physics_update(state, ptend, dt, tend)
+  subroutine physics_update(state, ptend, dt, tend, isinterface)
     !purpose: This subroutine calls physics_update_main (old physics_update)
     !and also output variables for pergro test
 
@@ -98,7 +98,8 @@ contains
     
     !optional arguments
     type(physics_tend ), intent(inout), optional  :: tend  ! Physics tendencies over timestep
-    
+    logical, intent(in), optional       :: isinterface    
+
     !Local vars
     character(len = fieldname_len)   :: pname, varname, vsuffix
     
@@ -120,8 +121,12 @@ contains
     if (.not. (any(ptend%lq(:)) .or. ptend%ls .or. ptend%lu .or. ptend%lv)) outfld_active = .false.
     
     !call the old physics update call
-    call physics_update_main (state, ptend, dt, tend)
-    
+    if(present(isinterface).and.isinterface)then
+    call physics_update_main (state, ptend, dt, tend, .true.)
+    else
+    call physics_update_main (state, ptend, dt, tend, .false.)
+    endif    
+
     if (pergro_test_active .and. outfld_active) then
        
        !write text file to be used for the post processing

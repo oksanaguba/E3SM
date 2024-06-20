@@ -26,19 +26,20 @@ module check_energy
 !   2020-01  O. Guba Correct energy density function
 !
 !---------------------------------------------------------------------------------
+  use shr_infnan_mod,only: shr_infnan_isnan
   use shr_kind_mod,    only: r8 => shr_kind_r8
   use ppgrid,          only: pcols, pver, begchunk, endchunk
   use spmd_utils,      only: masterproc
   
   use phys_gmean,      only: gmean
-  use physconst,       only: gravit, latvap, latice, cpair, cpairv
+  use physconst,       only: gravit, latvap, latice, cpair, cpairv, cpwv, cpliq, cpice 
   use physics_types,   only: physics_state, physics_tend, physics_ptend, physics_ptend_init
   use constituents,    only: cnst_get_ind, pcnst, cnst_name, cnst_get_type_byind, &
                              icldliq, icldice, irain, isnow
   use time_manager,    only: is_first_step
   use cam_logfile,     only: iulog
   use cam_abortutils,  only: endrun 
-  use phys_control,    only: ieflx_opt
+  use phys_control,    only: ieflx_opt, use_cpstar, use_waterloading
 
   implicit none
   private
@@ -69,6 +70,12 @@ module check_energy
   public :: check_ieflx_fix         ! add ieflx to sensible heat flux 
 
   public :: energy_helper_eam_def
+  public :: energy_helper_eam_def_column
+  public :: fixer_semi_pb
+  public :: fixer_pb
+  public :: fixer_pb_simple
+  public :: dme_adjust
+  public :: dme_adjust_wl
 
 ! Private module data
 
@@ -269,14 +276,42 @@ end subroutine check_energy_get_integrals
     integer  i,k                                   ! column, level indices
     real(r8) :: wr(state%ncol)                     ! vertical integral of rain
     real(r8) :: ws(state%ncol)                     ! vertical integral of snow
+
+    real(r8) :: qdryini
 !-----------------------------------------------------------------------
 
     lchnk = state%lchnk
     ncol  = state%ncol
 
+!    qini     (:ncol,:pver) = state%q(:ncol,:pver,      1)
+!    cldliqini(:ncol,:pver) = state%q(:ncol,:pver,icldliq)
+!    cldiceini(:ncol,:pver) = state%q(:ncol,:pver,icldice)
+!    rainini(:ncol,:pver) = state%q(:ncol,:pver,irain)
+!    snowini(:ncol,:pver) = state%q(:ncol,:pver,isnow)
+
+    do i=1,ncol
+    do k=1,pver
+
+    qdryini = 1.0 - state%q(i,k,       1) - state%q(i,k,icldliq) &
+                  - state%q(i,k,icldice)  - state%q(i,k,irain)   &
+                  - state%q(i,k,isnow)
+
+    ! a lot of infrastructure for the energy fixer is called before qini* values are init-ed in tphysbc
+    !therefore, init cpstar here (this will be called in dp_coupling layer). not the best solution overall.
+
+    !do it before dycore energy fixer
+    state%cpstar(i,k) = cpair*qdryini + cpwv*state%q(i,k,1) + cpliq*( state%q(i,k,icldliq) + state%q(i,k,irain) ) + &
+                        cpice*( state%q(i,k,icldice) + state%q(i,k,isnow) ) 
+
+    enddo
+    enddo
+
+
+
     call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
                                    ke,se,wv,wl,wi,wr,ws,te,tw, &
-                                   ncol)
+                                   ncol, &
+                                   state%cpstar)
 
     state%te_ini(:ncol) = te(:ncol)
     state%tw_ini(:ncol) = tw(:ncol)
@@ -297,6 +332,7 @@ end subroutine check_energy_get_integrals
     end if
 
   end subroutine check_energy_timestep_init
+
 
 !===============================================================================
 
@@ -361,7 +397,8 @@ end subroutine check_energy_get_integrals
 
     call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
                                    ke,se,wv,wl,wi,wr,ws,te,tw, &
-                                   ncol)
+                                   ncol, &
+                                   cpstar=state%cpstar)
 
     ! compute expected values and tendencies
     do i = 1, ncol
@@ -459,10 +496,11 @@ end subroutine check_energy_get_integrals
     integer :: ncol                      ! number of active columns
     integer :: lchnk                     ! chunk index
 
-    real(r8) :: te(pcols,begchunk:endchunk,3)   
+    real(r8) :: te(pcols,begchunk:endchunk,13)   
                                          ! total energy of input/output states (copy)
-    real(r8) :: te_glob(3)               ! global means of total energy
+    real(r8) :: te_glob(13)               ! global means of total energy
     real(r8), pointer :: teout(:)
+    integer :: i
 !-----------------------------------------------------------------------
 
     ! Copy total energy out of input and output states
@@ -476,14 +514,27 @@ end subroutine check_energy_get_integrals
        ! output energy
        call pbuf_get_field(pbuf_get_chunk(pbuf2d,lchnk),teout_idx, teout)
 
-       te(:ncol,lchnk,2) = teout(1:ncol)
+       te(:ncol,lchnk,2) = teout(:ncol)
        ! surface pressure for heating rate
        te(:ncol,lchnk,3) = state(lchnk)%pint(:ncol,pver+1)
+
+       te(:ncol,lchnk,4) = state(lchnk)%cptermp(:ncol)
+       te(:ncol,lchnk,5) = state(lchnk)%cpterme(:ncol)
+       te(:ncol,lchnk,6) = state(lchnk)%pw(:ncol)
+
+       te(:ncol,lchnk,7) = state(lchnk)%qflx(:ncol)
+       te(:ncol,lchnk,8) = state(lchnk)%liqflx(:ncol)
+       te(:ncol,lchnk,9) = state(lchnk)%iceflx(:ncol)
+       te(:ncol,lchnk,10) = state(lchnk)%dvapor(:ncol)
+       te(:ncol,lchnk,11) = state(lchnk)%dliquid(:ncol)
+       te(:ncol,lchnk,12) = state(lchnk)%dice(:ncol)
+       te(:ncol,lchnk,13) = state(lchnk)%pwvapor(:ncol)
+
     end do
 
     ! Compute global means of input and output energies and of
     ! surface pressure for heating rate (assume uniform ptop)
-    call gmean(te, te_glob, 3)
+    call gmean(te, te_glob, 13)
 
     if (begchunk .le. endchunk) then
        teinp_glob = te_glob(1)
@@ -497,6 +548,13 @@ end subroutine check_energy_get_integrals
 
        if (masterproc) then
           write(iulog,'(1x,a9,1x,i8,4(1x,e25.17))') "nstep, te", nstep, teinp_glob, teout_glob, heat_glob, psurf_glob
+          write(iulog,'(1x,a13,1x,i8,2(1x,e25.17))') "nstep, pw, cp", nstep, te_glob(6), (te_glob(4)-te_glob(5))*dtime
+          write(iulog,'(1x,a15,1x,i8,2(1x,e25.17))') "nstep, cpp, cpe", nstep, te_glob(4)*dtime, te_glob(5)*dtime
+
+          write(iulog,'(1x,a19,1x,i8,2(1x,e25.17))') "nstep, qflx, dqv/dt", nstep,   te_glob(7), te_glob(10)/dtime
+          write(iulog,'(1x,a20,1x,i8,2(1x,e25.17))') "nstep, liqflx, dql/dt", nstep, te_glob(8), te_glob(11)/dtime
+          write(iulog,'(1x,a20,1x,i8,2(1x,e25.17))') "nstep, iceflx, dqi/dt", nstep, te_glob(9), te_glob(12)/dtime
+          write(iulog,'(1x,a19,1x,i8,2(1x,e25.17))') "nstep, pw, pwvapor", nstep, te_glob(6), te_glob(13)
        end if
     else
        heat_glob = 0._r8
@@ -1115,7 +1173,10 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
 
   subroutine energy_helper_eam_def(u,v,T,q,ps,pdel,phis, &
                                    ke,se,wv,wl,wi,wr,ws,te,tw, &     
-                                   ncol,teloc,psterm)
+                                   ncol, &
+                                   cpstar, &
+                                   qini,cldliqini,cldiceini,rainini,snowini,qdryini, &
+                                   teloc,psterm)
 
 !state vars are of size psetcols,pver, so, not exactly correct
     real(r8), intent(in) :: u(pcols,pver) 
@@ -1126,6 +1187,15 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
     real(r8), intent(in) :: pdel(pcols,pver) 
     real(r8), intent(in) :: phis(pcols) 
 
+
+    real(r8),            intent(in   ), optional :: qini(pcols,pver)    ! initial specific humidity
+    real(r8),            intent(in   ), optional :: cldliqini(pcols,pver)    ! initial specific humidity
+    real(r8),            intent(in   ), optional :: cldiceini(pcols,pver)    ! initial specific humidity
+    real(r8),            intent(in   ), optional :: rainini(pcols,pver)    ! initial specific humidity
+    real(r8),            intent(in   ), optional :: snowini(pcols,pver)    ! initial specific humidity
+    real(r8),            intent(in   ), optional :: qdryini(pcols,pver)    ! initial specific humidity
+
+    real(r8),            intent(in   ), optional :: cpstar(pcols,pver)
 
     real(r8), intent(inout) :: ke(ncol)     ! vertical integral of kinetic energy
     real(r8), intent(inout) :: se(ncol)     ! vertical integral of static energy
@@ -1138,6 +1208,7 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
     real(r8), intent(inout) :: ws(ncol)     ! vertical integral of snow
 
 ! do not use in this version
+!why are these pcol variables?
     real(r8), intent(inout), optional :: teloc(pcols,pver) 
     real(r8), intent(inout), optional :: psterm(pcols) 
 
@@ -1145,19 +1216,58 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
     integer :: i,k                            
 
     if (icldliq > 1  .and.  icldice > 1 .and. irain > 1 .and. isnow > 1) then
+
+       if(present(cpstar))then
+
+!use cpstar
+!print *, "OG we use cpstar in energy_helper_eam_def"
        do i = 1, ncol
           call energy_helper_eam_def_column(u(i,:),v(i,:),T(i,:),q(i,1:pver,1:pcnst),&
                                    ps(i),pdel(i,:),phis(i), &
-                                   ke(i),se(i),wv(i),wl(i),wi(i),wr(i),ws(i),te(i),tw(i) )                             
+                                   ke(i),se(i),wv(i),wl(i),wi(i),wr(i),ws(i),te(i),tw(i), &
+                                   cpstar=cpstar(i,:))
        enddo
+
+       elseif(present(qini))then
+
+!use QINI
+
+!print *, "OG we use new def of energy with init fields"
+       do i = 1, ncol
+          call energy_helper_eam_def_column(u(i,:),v(i,:),T(i,:),q(i,1:pver,1:pcnst),&
+                                   ps(i),pdel(i,:),phis(i), &
+                                   ke(i),se(i),wv(i),wl(i),wi(i),wr(i),ws(i),te(i),tw(i), &
+                                   qini=qini(i,:),cldliqini=cldliqini(i,:),cldiceini=cldiceini(i,:),&
+                                   rainini=rainini(i,:),snowini=snowini(i,:),qdryini=qdryini(i,:) )
+       enddo
+       else
+
+!use cpdry
+
+       do i = 1, ncol
+          call energy_helper_eam_def_column(u(i,:),v(i,:),T(i,:),q(i,1:pver,1:pcnst),&
+                                   ps(i),pdel(i,:),phis(i), &
+                                   ke(i),se(i),wv(i),wl(i),wi(i),wr(i),ws(i),te(i),tw(i) )
+       enddo
+
+       endif
+
     else
        call endrun('energy_helper...column is not implemented if water forms do not exist')
     endif
 
   end subroutine energy_helper_eam_def
 
+
+
+
+
+
+
   subroutine energy_helper_eam_def_column(u,v,T,q,ps,pdel,phis, &
                                    ke,se,wv,wl,wi,wr,ws,te,tw, &
+                                   cpstar, &
+                                   qini,cldliqini,cldiceini,rainini,snowini,qdryini, &
                                    teloc,psterm)
 
 !state vars are of size psetcols,pver, so, not exactly correct
@@ -1168,6 +1278,14 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
     real(r8), intent(in) :: ps
     real(r8), intent(in) :: pdel(pver)
     real(r8), intent(in) :: phis
+
+    real(r8),            intent(in   ), optional :: qini(pver)    ! initial specific humidity
+    real(r8),            intent(in   ), optional :: cldliqini(pver)    ! initial specific humidity
+    real(r8),            intent(in   ), optional :: cldiceini(pver)    ! initial specific humidity
+    real(r8),            intent(in   ), optional :: rainini(pver)    ! initial specific humidity
+    real(r8),            intent(in   ), optional :: snowini(pver)    ! initial specific humidity
+    real(r8),            intent(in   ), optional :: qdryini(pver)    ! initial specific humidity
+    real(r8),            intent(in   ), optional :: cpstar(pver)    ! initial specific humidity
 
     real(r8), intent(inout) :: ke     ! vertical integral of kinetic energy
     real(r8), intent(inout) :: se     ! vertical integral of static energy
@@ -1183,6 +1301,10 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
     real(r8), intent(inout), optional :: psterm
 
     integer :: i,k
+    real(r8) :: cpstar_loc, qdry
+
+    !default value, if not cpstar or computing cpstar from qini
+    cpstar_loc = cpair
 
     ! Compute vertical integrals of dry static energy and water (vapor, liquid, ice)
     ke = 0._r8
@@ -1197,6 +1319,8 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
     if (present(teloc) .and. present(psterm))then
        teloc = 0.0; psterm = 0.0
        do k = 1, pver
+! ADD CPSTAR here too
+!right now this code is not used, could be used in local fixers
           teloc(k) = 0.5_r8*(u(k)**2 + v(k)**2)*pdel(k)/gravit &
                    + t(k)*cpair*pdel(k)/gravit &
                    + (latvap+latice)*q(k,1       )*pdel(k)/gravit
@@ -1208,9 +1332,33 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
 
     do k = 1, pver
        ke = ke + 0.5_r8*(u(k)**2 + v(k)**2)*pdel(k)/gravit
-       se = se +         t(k)*cpair*pdel(k)/gravit
+
+       if (.not.use_cpstar) then
+         se = se +         t(k)*cpair*pdel(k)/gravit
+       else
+
+         if(present(cpstar))then
+           cpstar_loc = cpstar(k)
+         elseif (present(qini))then
+           !cpstar based on qini etc  
+           cpstar_loc = cpair*qdryini(k) + cpwv*qini(k) + cpliq*( cldliqini(k) + rainini(k) ) + &
+                        cpice*( cldiceini(k) + snowini(k) )
+#if 1
+!do not use such option
+         else
+           !cpstar based on current q
+           qdry = 1.0_r8 - q(k,1) - q(k,icldliq) - q(k,icldice) - q(k,irain) - q(k,isnow)
+           cpstar_loc = cpair*qdry + cpwv*q(k,1) + cpliq*( q(k,icldliq) + q(k,irain) ) + &
+                                           cpice*( q(k,icldice) + q(k,isnow) )
+#endif
+         endif
+
+         se = se +         t(k)*cpstar_loc*pdel(k)/gravit
+       endif
+
        wv = wv + q(k,1      )*pdel(k)/gravit
     end do
+
     se = se + phis*ps/gravit
 
     do k = 1, pver
@@ -1224,10 +1372,158 @@ subroutine qflx_gmean(state, tend, cam_in, dtime, nstep)
     end do
 
     ! Compute vertical integrals of frozen static energy and total water.
+
     te = se + ke + (latvap+latice)*wv + latice*( wl + wr )
     tw = wv + wl + wi + wr + ws
 
   end subroutine energy_helper_eam_def_column
+
+
+
+!use: state2 with TE2,
+!state2  +=  ttend/dtime ==> state2 now has energy TE1
+  subroutine fixer_semi_pb(teloc1, teloc2, psterm1, psterm2, pdel, ttend)
+
+!state vars are of size psetcols,pver, so, not exactly correct
+    real(r8), intent(inout) :: ttend(pver)
+    real(r8), intent(in) :: pdel(pver)
+
+    real(r8), intent(in) :: teloc1(pver)
+    real(r8), intent(in) :: teloc2(pver)
+    real(r8), intent(in) :: psterm1
+    real(r8), intent(in) :: psterm2
+
+    integer :: i,k
+    real(r8) :: fq
+
+    !compute temperature tend from PW adjustment
+    !keep is as local as possible
+    ttend(1:pver)=0.0
+    !first, tendency from terms at each vertical level
+    fq=0.0
+    do k=1,pver
+       ttend(k)=(teloc1(k)-teloc2(k))*gravit/cpair/pdel(k)
+       !sum pdel into fq for the next, boundary (or ps) term
+       fq=fq+pdel(k)
+    enddo
+
+    !second, tendency from ps term is peanutbuttered to each level
+    ttend(1:pver) = ttend(1:pver) + (psterm1-psterm2)*gravit/cpair/fq
+
+  end subroutine fixer_semi_pb
+
+  subroutine fixer_pb(teloc1, teloc2, psterm1, psterm2, pdel, ttend)
+
+!state vars are of size psetcols,pver, so, not exactly correct
+    real(r8), intent(inout) :: ttend(pver)
+    real(r8), intent(in) :: pdel(pver)
+    real(r8), intent(in) :: teloc1(pver)
+    real(r8), intent(in) :: teloc2(pver)
+    real(r8), intent(in) :: psterm1
+    real(r8), intent(in) :: psterm2
+
+    real(r8) :: zeroarray(pver)
+
+    zeroarray(:) = 0.0
+    call fixer_semi_pb(zeroarray, zeroarray, &
+              psterm1+sum(teloc1), psterm2+sum(teloc2), pdel, ttend)
+
+  end subroutine fixer_pb
+
+!state1 with te1
+!state2 with pdel
+!returns ttend st state2 with ttend and pdel adds deltate
+  subroutine fixer_pb_simple(deltate, pdel, ttend)
+
+!state vars are of size psetcols,pver, so, not exactly correct
+    real(r8), intent(inout) :: ttend(pver)
+    real(r8), intent(in) :: pdel(pver)
+    real(r8), intent(in) :: deltate
+
+    real(r8) :: zeroarray(pver)
+
+    zeroarray(:) = 0.0
+    call fixer_semi_pb(zeroarray, zeroarray, &
+              deltate, 0.0_r8, pdel, ttend)
+
+  end subroutine fixer_pb_simple
+
+
+  subroutine dme_adjust(state, qini, dt)
+
+    implicit none
+    type(physics_state), intent(inout) :: state
+    real(r8),            intent(in   ) :: qini(pcols,pver)    ! initial specific humidity
+    real(r8),            intent(in   ) :: dt                  ! model physics timestep
+    integer  :: lchnk         ! chunk identifier
+    integer  :: ncol          ! number of atmospheric columns
+    integer  :: i,k,m         ! Longitude, level indices
+    real(r8) :: fdq(pcols)    ! mass adjustment factor
+
+    lchnk = state%lchnk
+    ncol  = state%ncol
+
+    ! adjust dry mass in each layer back to input value, while conserving
+    ! constituents, momentum, and total energy
+    do k = 1, pver
+
+!!!       ! adjusment factor is just change in water vapor
+       fdq(:ncol) = 1._r8 + state%q(:ncol,k,1) - qini(:ncol,k)
+
+       ! adjust constituents to conserve mass in each layer
+       do m = 1, pcnst
+          state%q(:ncol,k,m) = state%q(:ncol,k,m) / fdq(:ncol)
+       end do
+
+! compute new total pressure variables
+       state%pdel  (:ncol,k  ) = state%pdel(:ncol,k  ) * fdq(:ncol)
+       state%pint  (:ncol,k+1) = state%pint(:ncol,k  ) + state%pdel(:ncol,k)
+    end do
+    state%ps(:ncol) = state%pint  (:ncol,pver+1)
+
+  end subroutine dme_adjust
+
+
+  subroutine dme_adjust_wl(state, qini, cldliqini, cldiceini, rainini, snowini, dt)
+
+    implicit none
+    type(physics_state), intent(inout) :: state
+    real(r8),            intent(in   ) :: qini(pcols,pver)    ! initial specific humidity
+    real(r8),            intent(in   ) :: cldliqini(pcols,pver)    ! initial specific humidity
+    real(r8),            intent(in   ) :: cldiceini(pcols,pver)    ! initial specific humidity
+    real(r8),            intent(in   ) :: rainini(pcols,pver)    ! initial specific humidity
+    real(r8),            intent(in   ) :: snowini(pcols,pver)    ! initial specific humidity
+    real(r8),            intent(in   ) :: dt                  ! model physics timestep
+    integer  :: lchnk         ! chunk identifier
+    integer  :: ncol          ! number of atmospheric columns
+    integer  :: i,k,m         ! Longitude, level indices
+    real(r8) :: fdq(pcols)    ! mass adjustment factor
+
+    lchnk = state%lchnk
+    ncol  = state%ncol
+
+    ! adjust dry mass in each layer back to input value, while conserving
+    ! constituents, momentum, and total energy
+    do k = 1, pver
+
+       fdq(:ncol) = 1._r8 + state%q(:ncol,k,1) - qini(:ncol,k)    &
+                  + state%q(:ncol,k,icldliq) - cldliqini(:ncol,k) &
+                  + state%q(:ncol,k,icldice) - cldiceini(:ncol,k) &
+                  + state%q(:ncol,k,irain) - rainini(:ncol,k)     &
+                  + state%q(:ncol,k,isnow) - snowini(:ncol,k)
+       ! adjust constituents to conserve mass in each layer
+       do m = 1, pcnst
+          state%q(:ncol,k,m) = state%q(:ncol,k,m) / fdq(:ncol)
+       end do
+
+! compute new total pressure variables
+       state%pdel  (:ncol,k  ) = state%pdel(:ncol,k  ) * fdq(:ncol)
+       state%pint  (:ncol,k+1) = state%pint(:ncol,k  ) + state%pdel(:ncol,k)
+    end do
+    state%ps(:ncol) = state%pint  (:ncol,pver+1)
+
+  end subroutine dme_adjust_wl
+
 
 
 

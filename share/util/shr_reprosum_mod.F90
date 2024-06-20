@@ -432,6 +432,9 @@ module shr_reprosum_mod
       integer omp_get_max_threads
       external omp_get_max_threads
 #endif
+     
+      integer :: idxx(nflds), ii
+
 !
 !-----------------------------------------------------------------------
 !
@@ -442,6 +445,8 @@ module shr_reprosum_mod
       repro_sum_slow = 0
       repro_sum_both = 0
       nonrepro_sum = 0
+
+      idxx(:) = -1
 
 ! set MPI communicator
       if ( present(commid) ) then
@@ -471,6 +476,10 @@ module shr_reprosum_mod
 
          if (nan_check .or. inf_check) then
 
+do ii=1,nflds
+if (any(shr_infnan_isnan(arr(:,ii)))) idxx(ii)=ii
+enddo
+
             nan_count = count(shr_infnan_isnan(arr))
             inf_count = count(shr_infnan_isinf(arr))
 
@@ -479,6 +488,9 @@ module shr_reprosum_mod
                write(s_logunit,37) real(nan_count,r8), real(inf_count,r8), mypid
 37 format("SHR_REPROSUM_CALC: Input contains ",e12.5, &
           " NaNs and ", e12.5, " INFs on process ", i7)
+
+               print *, 'indices are', idxx
+
                call shr_sys_abort("shr_reprosum_calc ERROR: NaNs or INFs in input")
             endif
 

@@ -1678,6 +1678,31 @@ with se_tstep, dt_remap_factor, dt_tracer_factor set to -1
 <gw_convect_hcf phys="default"> 10.0       </gw_convect_hcf>
 <effgw_oro phys="default"> 0.375      </effgw_oro>
 <use_gw_energy_fix phys="default"> .true.      </use_gw_energy_fix>
+
+<!-- this var affects DME adjustment only -->
+<use_waterloading phys="default"> .true.      </use_waterloading>
+
+<!-- this var=true can only be used with use_waterloading=true -->
+<!-- this is used in calculations of energy for DME adjust -->
+<use_cpstar phys="default"> .true.      </use_cpstar>
+
+<!-- for the next 3 vars, 1 and only 1 can be set to true -->
+<!-- this var=true computes enthalpies of qflx and prect with cpdry -->
+<use_enthalpy_cpdry phys="default"> .true.      </use_enthalpy_cpdry>
+
+<!-- this var=true computes enthalpies of qflx and prect with cl -->
+<use_enthalpy_cl phys="default"> .false.      </use_enthalpy_cl>
+
+<!-- this var=true computes enthalpies of qflx and prect with all correct c -->
+<use_enthalpy_theoretical phys="default"> .false.      </use_enthalpy_theoretical>
+
+<!-- this var=true removes enthalpies/eflx from dme -->
+<use_global_cpterms_dme phys="default"> .true.      </use_global_cpterms_dme>
+
+<!-- this var=true removes PW from fixer, resetting energy -->
+<dycore_fixer_only phys="default"> .false.      </dycore_fixer_only>
+
+
 <clubb_C14 phys="default"> 2.5D0      </clubb_C14>
 <clubb_tk1 phys="default"> 268.15D0   </clubb_tk1>
 <dust_emis_fact phys="default"> 1.50D0     </dust_emis_fact>

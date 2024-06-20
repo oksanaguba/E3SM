@@ -12,10 +12,10 @@ module physpkg
   ! July 2015   B. Singh       Added code for unified convective transport
   !-----------------------------------------------------------------------
 
-
+  use shr_infnan_mod,   only: shr_infnan_isnan
   use shr_kind_mod,     only: i8 => shr_kind_i8, r8 => shr_kind_r8
   use spmd_utils,       only: masterproc
-  use physconst,        only: latvap, latice, rh2o
+  use physconst,        only: latvap, latice, rh2o, cpair, cpwv, cpliq, cpice, gravit
   use physics_types,    only: physics_state, physics_tend, physics_state_set_grid, &
        physics_ptend, physics_tend_init,    &
        physics_type_alloc, physics_ptend_dealloc,&
@@ -29,7 +29,10 @@ module physpkg
   use camsrfexch,       only: cam_out_t, cam_in_t
 
   use cam_control_mod,  only: ideal_phys, adiabatic
-  use phys_control,     only: phys_do_flux_avg, phys_getopts, waccmx_is
+  use phys_control,     only: phys_do_flux_avg, phys_getopts, waccmx_is, &
+                              use_waterloading, use_cpstar, use_enthalpy_cpdry, use_enthalpy_cpwv, &
+                              use_enthalpy_cl, use_enthalpy_theoretical, use_global_cpterms_dme, &
+                              dycore_fixer_only
   use zm_conv,          only: do_zmconv_dcape_ull => trigdcape_ull, &
                               do_zmconv_dcape_only => trig_dcape_only
   use scamMod,          only: single_column, scm_crm_mode
@@ -47,6 +50,10 @@ module physpkg
   use modal_aero_wateruptake, only: modal_aero_wateruptake_init, &
                                     modal_aero_wateruptake_reg
 
+  use check_energy,     only: dme_adjust, dme_adjust_wl, energy_helper_eam_def, energy_helper_eam_def_column,&
+                              fixer_pb_simple
+ 
+
   implicit none
   private
 
@@ -57,6 +64,9 @@ module physpkg
   integer ::  qini_idx           = 0 
   integer ::  cldliqini_idx      = 0 
   integer ::  cldiceini_idx      = 0 
+  integer ::  rainini_idx        = 0 
+  integer ::  snowini_idx        = 0 
+  integer ::  qdryini_idx        = 0 
   integer ::  static_ener_ac_idx = 0
   integer ::  water_vap_ac_idx   = 0
 
@@ -197,6 +207,9 @@ subroutine phys_register
     call pbuf_add_field('QINI',      'physpkg', dtype_r8, (/pcols,pver/), qini_idx)
     call pbuf_add_field('CLDLIQINI', 'physpkg', dtype_r8, (/pcols,pver/), cldliqini_idx)
     call pbuf_add_field('CLDICEINI', 'physpkg', dtype_r8, (/pcols,pver/), cldiceini_idx)
+    call pbuf_add_field('RAININI', 'physpkg', dtype_r8, (/pcols,pver/), rainini_idx)
+    call pbuf_add_field('SNOWINI', 'physpkg', dtype_r8, (/pcols,pver/), snowini_idx)
+    call pbuf_add_field('QDRYINI', 'physpkg', dtype_r8, (/pcols,pver/), qdryini_idx)
     call pbuf_add_field('static_ener_ac', 'global', dtype_r8, (/pcols/), static_ener_ac_idx)
     call pbuf_add_field('water_vap_ac',   'global', dtype_r8, (/pcols/), water_vap_ac_idx)
 
@@ -932,6 +945,9 @@ subroutine phys_init( phys_state, phys_tend, pbuf2d, cam_out )
    !BSINGH -  addfld and adddefault calls for perturb growth testing    
     if(pergro_test_active)call add_fld_default_calls()
 
+    !print WL- and cpstar-related variables
+    call print_wl_cpstar_info()
+
 end subroutine phys_init
 
   !
@@ -1170,6 +1186,7 @@ subroutine phys_run1_adiabatic_or_ideal(ztodt, phys_state, phys_tend,  pbuf2d)
 
        if (dycore_is('LR') .or. dycore_is('SE') ) then
           call check_energy_fix(phys_state(c), ptend(c), nstep, flx_heat)
+          !not ready for cpstar
           call physics_update(phys_state(c), ptend(c), ztodt, phys_tend(c))
           call check_energy_chng(phys_state(c), phys_tend(c), "chkengyfix", nstep, ztodt, &
                zero, zero, zero, flx_heat)
@@ -1503,6 +1520,9 @@ subroutine tphysac (ztodt,   cam_in,  &
     real(r8), pointer, dimension(:,:) :: qini
     real(r8), pointer, dimension(:,:) :: cldliqini
     real(r8), pointer, dimension(:,:) :: cldiceini
+    real(r8), pointer, dimension(:,:) :: rainini
+    real(r8), pointer, dimension(:,:) :: snowini
+    real(r8), pointer, dimension(:,:) :: qdryini
     real(r8), pointer, dimension(:,:) :: dtcore
     real(r8), pointer, dimension(:,:) :: ast     ! relative humidity cloud fraction 
 
@@ -1522,6 +1542,18 @@ subroutine tphysac (ztodt,   cam_in,  &
     logical :: l_rayleigh
     logical :: l_gw_drag
     logical :: l_ac_energy_chk
+
+!ogdef
+    real(r8) :: ke(pcols), se(pcols), wv(pcols), wl(pcols), wi(pcols), te(pcols),&
+                tw(pcols), wr(pcols), ws(pcols), cpterm(pcols), &
+                te_before_pw(pcols), te_after_pw(pcols), deltat(pcols) 
+
+    real(r8) :: small_ttend(pcols,pver)
+
+    real(r8) :: keloc, seloc, wvloc, wlloc, wiloc, teloc1, teloc2,&
+                twloc, wrloc, wsloc
+    integer  :: ic
+    real(r8) :: qdry(pver), cpstar(pver), qvmass(pcols)
 
     !
     !-----------------------------------------------------------------------
@@ -1562,6 +1594,9 @@ subroutine tphysac (ztodt,   cam_in,  &
     call pbuf_get_field(pbuf, qini_idx, qini)
     call pbuf_get_field(pbuf, cldliqini_idx, cldliqini)
     call pbuf_get_field(pbuf, cldiceini_idx, cldiceini)
+    call pbuf_get_field(pbuf, rainini_idx, rainini)
+    call pbuf_get_field(pbuf, snowini_idx, snowini)
+    call pbuf_get_field(pbuf, qdryini_idx, qdryini)
 
     ifld = pbuf_get_index('CLD')
     call pbuf_get_field(pbuf, ifld, cld, start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
@@ -1620,25 +1655,25 @@ if (l_tracer_aero) then
     ! Test tracers
 
     call tracers_timestep_tend(state, ptend, cam_in%cflx, cam_in%landfrac, ztodt)      
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
     call check_tracers_chng(state, tracerint, "tracers_timestep_tend", nstep, ztodt,   &
          cam_in%cflx)
 
     call aoa_tracers_timestep_tend(state, ptend, cam_in%cflx, cam_in%landfrac, ztodt)      
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
     call check_tracers_chng(state, tracerint, "aoa_tracers_timestep_tend", nstep, ztodt,   &
          cam_in%cflx)
     
     ! add tendency from aircraft emissions
     call co2_cycle_set_ptend(state, pbuf, ptend)
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
 
     ! Chemistry calculation
     if (chem_is_active()) then
        call chem_timestep_tend(state, ptend, cam_in, cam_out, ztodt, &
             pbuf,  fh2o, fsds)
 
-       call physics_update(state, ptend, ztodt, tend)
+       call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
        call check_energy_chng(state, tend, "chem", nstep, ztodt, fh2o, zero, zero, zero)
        call check_tracers_chng(state, tracerint, "chem_timestep_tend", nstep, ztodt, &
             cam_in%cflx)
@@ -1660,7 +1695,7 @@ end if ! l_tracer_aero
        call clubb_surface ( state, ptend, ztodt, cam_in, surfric, obklen)
        
        ! Update surface flux constituents 
-       call physics_update(state, ptend, ztodt, tend)
+       call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
 
     else
     if (l_vdiff) then
@@ -1678,7 +1713,7 @@ end if ! l_tracer_aero
        call mspd_intr (ztodt    ,state    ,ptend)
     endif
 
-       call physics_update(state, ptend, ztodt, tend)
+       call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
        call t_stopf ('vertical_diffusion_tend')
     
     end if ! l_vdiff
@@ -1691,7 +1726,7 @@ if (l_rayleigh) then
     !===================================================
     call t_startf('rayleigh_friction')
     call rayleigh_friction_tend( ztodt, state, ptend)
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
     call t_stopf('rayleigh_friction')
 
     if (do_clubb_sgs) then
@@ -1710,7 +1745,7 @@ if (l_tracer_aero) then
     !  aerosol dry deposition processes
     call t_startf('aero_drydep')
     call aero_model_drydep( state, pbuf, obklen, surfric, cam_in, ztodt, cam_out, ptend )
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
     call t_stopf('aero_drydep')
 
     !---------------------------------------------------------------------------------
@@ -1728,14 +1763,14 @@ if (l_gw_drag) then
 
     call gw_tend(state, sgh, pbuf, ztodt, ptend, cam_in)
 
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
     ! Check energy integrals
     call check_energy_chng(state, tend, "gwdrag", nstep, ztodt, zero, zero, zero, zero)
     call t_stopf('gw_tend')
 
     ! QBO relaxation
     call qbo_relax(state, pbuf, ptend)
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
     ! Check energy integrals
     call check_energy_chng(state, tend, "qborelax", nstep, ztodt, zero, zero, zero, zero)
 
@@ -1754,7 +1789,7 @@ if (l_gw_drag) then
        call ionos_intr(state, ptend, pbuf, ztodt)
     endif
 
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
     ! Check energy integrals
     call check_energy_chng(state, tend, "iondrag", nstep, ztodt, zero, zero, zero, zero)
     call t_stopf  ( 'iondrag' )
@@ -1766,13 +1801,13 @@ end if ! l_gw_drag
     !===================================================
     if((Nudge_Model).and.(Nudge_ON)) then
       call nudging_timestep_tend(state,ptend)
-      call physics_update(state,ptend,ztodt,tend)
+      call physics_update(state,ptend,ztodt,tend, isinterface=.true.)
     endif
 
 if (l_ac_energy_chk) then
     !-------------- Energy budget checks vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
 
-    call pbuf_set_field(pbuf, teout_idx, state%te_cur, (/1,itim_old/),(/pcols,1/))       
+!    call pbuf_set_field(pbuf, teout_idx, state%te_cur, (/1,itim_old/),(/pcols,1/))       
 
     tmp_t(:ncol,:pver) = state%t(:ncol,:pver)
 
@@ -1789,11 +1824,203 @@ if (l_ac_energy_chk) then
     if ( dycore_is('LR') .or. dycore_is('SE')) call set_dry_to_wet(state)    ! Physics had dry, dynamics wants moist
 
 
+
+!!!!!!!!!!!!!!!!!!!!! CODE related to EFLX
+!      cam_out%precc (i) = prec_dp(i)  + prec_sh(i)
+!      cam_out%precl (i) = prec_sed(i) + prec_pcw(i)
+!      cam_out%precsc(i) = snow_dp(i)  + snow_sh(i)
+!      cam_out%precsl(i) = snow_sed(i) + snow_pcw(i)
+!  263 PRECL                            m/s                 1 A  Large-scale (stable) precipitation rate (liq + ice)
+!  264 PRECC                            m/s                 1 A  Convective precipitation rate (liq + ice)
+!  265 PRECT                            m/s                 1 A  Total (convective and large-scale) precipitation rate (liq + ice)
+!  269 PRECSL                           m/s                 1 A  Large-scale (stable) snow rate (water equivalent)
+!  270 PRECSC                           m/s                 1 A  Convective snow rate (water equivalent)
+
+
+    if (use_enthalpy_cpdry) then
+    state%cpterme(:ncol) =          cpair * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
+    state%cptermp(:ncol) = 1000.0 * cpair * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
+                           1000.0 * cpair * state%t(:ncol,pver) * cam_out%precc(:ncol)
+
+    elseif(use_enthalpy_theoretical) then
+    state%cpterme(:ncol) =          cpwv * state%t(:ncol,pver)  * cam_in%cflx(:ncol,1)
+    state%cptermp(:ncol) = &
+    1000.0*cpliq*state%t(:ncol,pver)*(cam_out%precl(:ncol)+cam_out%precc(:ncol)-cam_out%precsc(:ncol)-cam_out%precsl(:ncol))+&
+    1000.0*cpice*state%t(:ncol,pver)*(                                          cam_out%precsc(:ncol)+cam_out%precsl(:ncol))
+
+    elseif(use_enthalpy_cl) then
+    state%cpterme(:ncol) =          cpliq * state%t(:ncol,pver) * cam_in%cflx(:ncol,1)
+    state%cptermp(:ncol) = 1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
+                           1000.0 * cpliq * state%t(:ncol,pver) * cam_out%precc(:ncol)
+
+    elseif(use_enthalpy_cpwv) then
+    state%cpterme(:ncol) =          cpwv * state%t(:ncol,pver) * cam_in%cflx(:ncol,1)
+    state%cptermp(:ncol) = 1000.0 * cpwv * state%t(:ncol,pver) * cam_out%precl(:ncol) + &
+                           1000.0 * cpwv * state%t(:ncol,pver) * cam_out%precc(:ncol)
+    endif
+
+    !collect all deltas and fluxes for glob mean
+    state%qflx(:ncol) = cam_in%cflx(:ncol,1)
+    state%dvapor(:ncol) = 0.0
+    state%dliquid(:ncol) = 0.0
+    state%dice(:ncol) = 0.0
+    do k=1,pver
+      state%dvapor(:ncol)  = state%dvapor(:ncol) + state%pdel(:ncol,k)*(state%q(:ncol,k,1) - qini(:ncol,k))/gravit
+      state%dliquid(:ncol) = state%dliquid(:ncol) &
+                           + state%pdel(:ncol,k)*(state%q(:ncol,k,icldliq) - cldliqini(:ncol,k))/gravit &
+                           + state%pdel(:ncol,k)*(state%q(:ncol,k,irain) - rainini(:ncol,k))/gravit
+      state%dice(:ncol)    = state%dice(:ncol) &
+                           + state%pdel(:ncol,k)*(state%q(:ncol,k,icldice) - cldiceini(:ncol,k))/gravit &
+                           + state%pdel(:ncol,k)*(state%q(:ncol,k,isnow) - snowini(:ncol,k))/gravit
+    enddo
+
+    state%liqflx(:ncol) = 1000.0*(cam_out%precl(:ncol)+cam_out%precc(:ncol)-cam_out%precsc(:ncol)-cam_out%precsl(:ncol))
+    state%iceflx(:ncol) = 1000.0*(                                          cam_out%precsc(:ncol)+cam_out%precsl(:ncol))
+
+    call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
+                                   ke(:ncol),se(:ncol),wv(:ncol),wl(:ncol),&
+                                   wi(:ncol),wr(:ncol),ws(:ncol),te_before_pw(:ncol),tw(:ncol), &
+                                   ncol, &
+                                   cpstar=state%cpstar)
+
+    state%te_cur(:ncol) = te_before_pw(:ncol)
+
+    !compute energy of PW (DME adjust) terms
+
+    !save dp, ps, q first
+    !did mot save pint -- seems to not be used?
+    state%oldq = state%q
+    state%oldpdel = state%pdel
+    state%oldps = state%ps
+
+    !first, compute PW of loading only vapor
+    call dme_adjust(state, qini, ztodt)
+
+    !compute energy after PW, TE with PW is in te_after_pw
+    !if cpstar is on, this version should use cpstar, but it does not need to use qini and other init tracer values
+    call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
+                                   ke(:ncol),se(:ncol),wv(:ncol),wl(:ncol),&
+                                   wi(:ncol),wr(:ncol),ws(:ncol),te_after_pw(:ncol),tw(:ncol), &
+                                   ncol)
+
+    !compute DME adjust energy vapor only
+    state%pwvapor(:ncol) = state%te_cur(:ncol) - te_after_pw(:ncol)
+    !now we can reset all variables after DME adjust
+    state%q = state%oldq
+    state%pdel = state%oldpdel
+    state%ps = state%oldps
+
+
+    if(use_waterloading) then
+      !WL version
+      call dme_adjust_wl(state, qini, cldliqini, cldiceini, rainini, snowini, ztodt)
+    else
+      !no WL version
+      call dme_adjust(state, qini, ztodt)
+    endif
+
+    !compute energy after PW, TE with PW is in te_after_pw
+    !if cpstar is on, this version should use cpstar, but it does not need to use qini and other init tracer values
+    call energy_helper_eam_def(state%u,state%v,state%T,state%q,state%ps,state%pdel,state%phis, &
+                                   ke(:ncol),se(:ncol),wv(:ncol),wl(:ncol),&
+                                   wi(:ncol),wr(:ncol),ws(:ncol),te_after_pw(:ncol),tw(:ncol), &
+                                   ncol)
+     
+    !finally, compute DME adjust energy
+    state%pw(:ncol) = state%te_cur(:ncol) - te_after_pw(:ncol) 
+
+    !units and dt:
+    !for cpdry, PW has to match cp terms, and it does
+    !pw ~= (cptermp - cpterme)*ztodt
+
+    !define total cp term for simplicity
+    cpterm(:ncol) = state%cptermp(:ncol)*ztodt - state%cpterme(:ncol)*ztodt
+
+    !delta is for using a local fixer after transfer of enthalpies
+    deltat(:ncol) = cpterm(:ncol) - state%pw(:ncol) 
+
+!debug around local fixer, ignore for now
+#if 0
+    do ic=1,ncol
+!what we want, small local fixer
+    call fixer_pb_simple(deltat(ic), state%pdel(ic,:), small_ttend(ic,:) )
+!pw as a local fixer
+!    call fixer_pb_simple(state%pw(ic), state%pdel(ic,:), small_ttend(ic,:) )
+!cpterms as local fixer
+!    call fixer_pb_simple((state%cptermp(ic)-state%cpterme(ic))*ztodt, &
+!                   state%pdel(ic,:), small_ttend(ic,:) )
+
+!check
+    call energy_helper_eam_def_column(state%u(ic,:),state%v(ic,:),&
+             state%T(ic,:),&
+             state%q(ic,:,:),state%ps(ic),state%pdel(ic,:),state%phis(ic), &
+                                   keloc,seloc,wvloc,wlloc,wiloc,wrloc,wsloc,teloc1,twloc)
+    call energy_helper_eam_def_column(state%u(ic,:),state%v(ic,:),&
+             state%T(ic,:)+small_ttend(ic,:),&
+             state%q(ic,:,:),state%ps(ic),state%pdel(ic,:),state%phis(ic), &
+                                   keloc,seloc,wvloc,wlloc,wiloc,wrloc,wsloc,teloc2,twloc)
+!this one gets close results
+!print *, 'ic, deltat,teloc2-teloc1',deltat(ic), teloc2-teloc1
+!this one gets error of 1e-9 or less
+!if(abs(deltat(ic)) > 0.5)then
+!print *, 'ic, deltat - (teloc2-teloc1) / ..', (deltat(ic) - (teloc2-teloc1))/deltat(ic)
+!endif
+
+    enddo    
+#endif 
+
+
+    !now we can reset all variables after DME adjust
+    state%q = state%oldq
+    state%pdel = state%oldpdel
+    state%ps = state%oldps
+
+    !check how fixer looks like without PW in it.
+    ! that is, when fixer is for dycore only
+    if(dycore_fixer_only)then
+      state%te_cur(:ncol) = state%te_cur(:ncol) - state%pw(:ncol)
+    endif
+
+    !remove cp terms from fixer to mimic enthalpy transfers
+    if(use_global_cpterms_dme)then
+      !take CP term out of te_cur
+      state%te_cur(:ncol) = state%te_cur(:ncol) - state%cptermp(:ncol)*ztodt &
+                                              + state%cpterme(:ncol)*ztodt
+    endif
+
+!ignore
+#if 0
+!LOCAL fixer
+    tend%dtdt(:ncol,1:pver) = tend%dtdt(:ncol,1:pver) - small_ttend(:ncol,1:pver)/ztodt 
+#endif
+
+!ignore
+!rescale TTEND with cpstar
+#if 0
+    do ic=1,ncol
+      qdry(:) = 1.0 - state%q(ic,:,1) - state%q(ic,:,icldice) - state%q(ic,:,icldliq) &
+                    - state%q(ic,:,irain) - state%q(ic,:,isnow)
+      cpstar(:) = cpair*qdry(:) + cpwv*state%q(ic,:,1) + cpliq*( state%q(ic,:,icldliq) + state%q(ic,:,irain) ) &
+                                                       + cpice*( state%q(ic,:,icldice) + state%q(ic,:,isnow) )
+      tend%dtdt(ic,1:pver) = tend%dtdt(ic,1:pver) / cpstar(1:pver) * cpair
+    enddo
+#endif
+
+
+!!!!!!!!!!!!!! end of EFLX work
+
+
+
+
+
+    call pbuf_set_field(pbuf, teout_idx, state%te_cur, (/1,itim_old/),(/pcols,1/)) 
+
     ! Scale dry mass and energy (does nothing if dycore is EUL or SLD)
     tmp_q     (:ncol,:pver) = state%q(:ncol,:pver,1)
     tmp_cldliq(:ncol,:pver) = state%q(:ncol,:pver,icldliq)
     tmp_cldice(:ncol,:pver) = state%q(:ncol,:pver,icldice)
-    call physics_dme_adjust(state, tend, qini, ztodt)
+
+!    call physics_dme_adjust(state, tend, qini, ztodt)
 !!!   REMOVE THIS CALL, SINCE ONLY Q IS BEING ADJUSTED. WON'T BALANCE ENERGY. TE IS SAVED BEFORE THIS
 !!!   call check_energy_chng(state, tend, "drymass", nstep, ztodt, zero, zero, zero, zero)
 
@@ -1992,6 +2219,9 @@ subroutine tphysbc (ztodt,               &
     real(r8), pointer, dimension(:,:) :: qini
     real(r8), pointer, dimension(:,:) :: cldliqini
     real(r8), pointer, dimension(:,:) :: cldiceini
+    real(r8), pointer, dimension(:,:) :: rainini
+    real(r8), pointer, dimension(:,:) :: snowini
+    real(r8), pointer, dimension(:,:) :: qdryini
     real(r8), pointer, dimension(:,:) :: dtcore
 
     real(r8), pointer, dimension(:,:,:) :: fracis  ! fraction of transported species that are insoluble
@@ -2154,6 +2384,9 @@ subroutine tphysbc (ztodt,               &
     call pbuf_get_field(pbuf, qini_idx, qini)
     call pbuf_get_field(pbuf, cldliqini_idx, cldliqini)
     call pbuf_get_field(pbuf, cldiceini_idx, cldiceini)
+    call pbuf_get_field(pbuf, rainini_idx, rainini)
+    call pbuf_get_field(pbuf, snowini_idx, snowini)
+    call pbuf_get_field(pbuf, qdryini_idx, qdryini)
 
     ifld   =  pbuf_get_index('DTCORE')
     call pbuf_get_field(pbuf, ifld, dtcore, start=(/1,1,itim_old/), kount=(/pcols,pver,1/) )
@@ -2168,6 +2401,33 @@ subroutine tphysbc (ztodt,               &
     tend %dvdt(:ncol,:pver)  = 0._r8
 
 !!== KZ_WCON
+
+
+
+
+    qini     (:ncol,:pver) = state%q(:ncol,:pver,      1)
+    cldliqini(:ncol,:pver) = state%q(:ncol,:pver,icldliq)
+    cldiceini(:ncol,:pver) = state%q(:ncol,:pver,icldice)
+    rainini(:ncol,:pver) = state%q(:ncol,:pver,irain)
+    snowini(:ncol,:pver) = state%q(:ncol,:pver,isnow)
+
+    do i=1,ncol
+    do k=1,pver
+
+    qdryini(i,k) = 1.0 - state%q(i,k,       1) - state%q(i,k,icldliq) &
+                               - state%q(i,k,icldice)  - state%q(i,k,irain)   &
+                               - state%q(i,k,isnow)
+
+    !with updated *ini, update cpstar, too
+    !do it before dycore energy fixer
+
+!update cpstar in dp_coupling instead
+!    state%cpstar(i,k) = cpair*qdryini(i,k) + cpwv*qini(i,k) + cpliq*( cldliqini(i,k) + rainini(i,k) ) + &
+!                        cpice*( cldiceini(i,k) + snowini(i,k) )
+
+    enddo
+    enddo
+
     call check_qflx (state, tend, "PHYBC01", nstep, ztodt, cam_in%cflx(:,1))
     call check_water(state, tend, "PHYBC01", nstep, ztodt)
 
@@ -2256,23 +2516,21 @@ subroutine tphysbc (ztodt,               &
     !===================================================
     ! Global mean total energy fixer
     !===================================================
+
 if (l_bc_energy_fix) then
 
     call t_startf('energy_fixer')
 
     tini(:ncol,:pver) = state%t(:ncol,:pver)
     if (dycore_is('LR') .or. dycore_is('SE'))  then
+       !if(.not. is_first_step())then
        call check_energy_fix(state, ptend, nstep, flx_heat)
-       call physics_update(state, ptend, ztodt, tend)
+       call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
+       !endif
        call check_energy_chng(state, tend, "chkengyfix", nstep, ztodt, zero, zero, zero, flx_heat)
     end if
     ! Save state for convective tendency calculations.
     call diag_conv_tend_ini(state, pbuf)
-
-    qini     (:ncol,:pver) = state%q(:ncol,:pver,       1)
-    cldliqini(:ncol,:pver) = state%q(:ncol,:pver,icldliq)
-    cldiceini(:ncol,:pver) = state%q(:ncol,:pver,icldice)
-
 
     call outfld('TEOUT', teout       , pcols, lchnk   )
     call outfld('TEINP', state%te_ini, pcols, lchnk   )
@@ -2311,7 +2569,9 @@ if (l_dry_adj) then
          ptend%s, ptend%q(1,1,1))
     ptend%s(:ncol,:)   = (ptend%s(:ncol,:)   - state%t(:ncol,:)  )/ztodt * cpair
     ptend%q(:ncol,:,1) = (ptend%q(:ncol,:,1) - state%q(:ncol,:,1))/ztodt
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
+
+    call check_energy_chng(state, tend, "dadadj", nstep, ztodt, zero, zero, zero, zero)
 
     call t_stopf('dry_adjustment')
 
@@ -2335,7 +2595,7 @@ end if
          dsubcld, jt, maxg, ideep, lengath) 
     call t_stopf('convect_deep_tend')
 
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
 
     call pbuf_get_field(pbuf, prec_dp_idx, prec_dp )
     call pbuf_get_field(pbuf, snow_dp_idx, snow_dp )
@@ -2367,7 +2627,7 @@ end if
          state      , ptend  ,  pbuf   , sh_e_ed_ratio   , sgh, sgh30, cam_in) 
     call t_stopf ('convect_shallow_tend')
 
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
 
     flx_cnd(:ncol) = prec_sh(:ncol) + rliq2(:ncol)
     call check_energy_chng(state, tend, "convect_shallow", nstep, ztodt, zero, flx_cnd, snow_sh, zero)
@@ -2404,7 +2664,7 @@ end if
             cmfmc,   cmfmc2, &
             cam_in%ts,      cam_in%sst,        zdu)
 
-       call physics_update(state, ptend, ztodt, tend)
+       call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
        call check_energy_chng(state, tend, "cldwat_tend", nstep, ztodt, zero, prec_str(:ncol), snow_str(:ncol), zero)
 
        call t_stopf('stratiform_tend')
@@ -2435,7 +2695,7 @@ end if
 
             call physics_ptend_scale(ptend, 1._r8/cld_macmic_num_steps, ncol)
 
-            call physics_update(state, ptend, ztodt, tend)
+            call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
             call check_energy_chng(state, tend, "mp_aero_tend", nstep, ztodt, zero, zero, zero, zero)      
 
           endif
@@ -2468,7 +2728,7 @@ end if
              ! ptend down by the number of substeps, then applying it for
              ! the full time (ztodt).
              call physics_ptend_scale(ptend, 1._r8/cld_macmic_num_steps, ncol)          
-             call physics_update(state, ptend, ztodt, tend)
+             call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
              call check_energy_chng(state, tend, "macrop_tend", nstep, ztodt, &
                   zero, flx_cnd/cld_macmic_num_steps, &
                   det_ice/cld_macmic_num_steps, flx_heat/cld_macmic_num_steps)
@@ -2511,7 +2771,7 @@ end if
                 call physics_ptend_scale(ptend, 1._r8/cld_macmic_num_steps, ncol)
                 !    Update physics tendencies and copy state to state_eq, because that is 
                 !      input for microphysics              
-                call physics_update(state, ptend, ztodt, tend)
+                call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
                 call check_energy_chng(state, tend, "clubb_tend", nstep, ztodt, &
                      cam_in%cflx(:,1)/cld_macmic_num_steps, flx_cnd/cld_macmic_num_steps, &
                      det_ice/cld_macmic_num_steps, flx_heat/cld_macmic_num_steps)
@@ -2564,7 +2824,7 @@ end if
              ! (see above note for macrophysics).
              call physics_ptend_scale(ptend_sc, 1._r8/cld_macmic_num_steps, ncol)
 
-             call physics_update (state_sc, ptend_sc, ztodt, tend_sc)
+             call physics_update (state_sc, ptend_sc, ztodt, tend_sc, isinterface=.true.)
              call check_energy_chng(state_sc, tend_sc, "microp_tend_subcol", &
                   nstep, ztodt, zero_sc, prec_str_sc(:ncol)/cld_macmic_num_steps, &
                   snow_str_sc(:ncol)/cld_macmic_num_steps, zero_sc)
@@ -2585,7 +2845,7 @@ end if
           ! (see above note for macrophysics).
           call physics_ptend_scale(ptend, 1._r8/cld_macmic_num_steps, ncol)
 
-          call physics_update (state, ptend, ztodt, tend)
+          call physics_update (state, ptend, ztodt, tend, isinterface=.true.)
           call check_energy_chng(state, tend, "microp_tend", nstep, ztodt, &
                zero, prec_str(:ncol)/cld_macmic_num_steps, &
                snow_str(:ncol)/cld_macmic_num_steps, zero)
@@ -2637,13 +2897,13 @@ end if
                 sh_e_ed_ratio, mu, md, du, eu, ed, dp, dsubcld,    &
                 jt, maxg, ideep, lengath, species_class,           &
                 cam_out, pbuf, ptend )                               ! outputs
-         call physics_update(state, ptend, ztodt, tend)
+         call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
 
          ! deep convective aerosol transport
          call convect_deep_tend_2( state, ptend, ztodt, pbuf, &
                 mu, eu, du, md, ed, dp, dsubcld, jt, maxg,    &
                 ideep, lengath, species_class )
-         call physics_update(state, ptend, ztodt, tend)
+         call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
 
          ! check tracer integrals
          call check_tracers_chng(state, tracerint, "cmfmca", nstep, ztodt,  zero_tracers)
@@ -2698,7 +2958,7 @@ if (l_rad) then
     do i=1,ncol
        tend%flx_net(i) = net_flx(i)
     end do
-    call physics_update(state, ptend, ztodt, tend)
+    call physics_update(state, ptend, ztodt, tend, isinterface=.true.)
     call check_energy_chng(state, tend, "radheat", nstep, ztodt, zero, zero, zero, net_flx)
 
     call t_stopf('radiation')
@@ -2885,5 +3145,44 @@ subroutine add_fld_default_calls()
   enddo
 
 end subroutine add_fld_default_calls
+
+
+
+subroutine print_wl_cpstar_info()
+  use spmd_utils,     only : masterproc
+  use cam_abortutils, only : endrun
+
+  if (masterproc) write(iulog,*) 'use_waterloading = ', use_waterloading
+  if (masterproc) write(iulog,*) 'use_cpstar = ', use_cpstar
+  if (masterproc) write(iulog,*) 'use_enthalpy_cpdry = ', use_enthalpy_cpdry
+  if (masterproc) write(iulog,*) 'use_enthalpy_cl = ', use_enthalpy_cl
+  if (masterproc) write(iulog,*) 'use_enthalpy_cpwv = ', use_enthalpy_cpwv
+  if (masterproc) write(iulog,*) 'use_enthalpy_theoretical = ', use_enthalpy_theoretical
+  if (masterproc) write(iulog,*) 'use_global_cpterms_dme = ', use_global_cpterms_dme
+  if (masterproc) write(iulog,*) 'dycore_fixer_only = ', dycore_fixer_only
+
+  if ((use_cpstar).and.(.not. use_waterloading)) then
+    call endrun ('PHYS init error:  use_cpstar=true requires use_waterloading=true')
+  endif
+
+  if ((use_enthalpy_cpdry).and.(use_enthalpy_cl.or.use_enthalpy_theoretical.or.use_enthalpy_cpwv)) then
+    call endrun ('PHYS init error:  use_enthalpy* -- only one should be set to true')
+  endif
+
+  if ((use_enthalpy_cl).and.(use_enthalpy_cpdry.or.use_enthalpy_theoretical.or.use_enthalpy_cpwv)) then
+    call endrun ('PHYS init error:  use_enthalpy* -- only one should be set to true')
+  endif
+
+  if ((use_enthalpy_theoretical).and.(use_enthalpy_cl.or.use_enthalpy_cpdry.or.use_enthalpy_cpwv)) then
+    call endrun ('PHYS init error:  use_enthalpy* -- only one should be set to true')
+  endif
+
+  if ((use_enthalpy_cpwv).and.(use_enthalpy_cl.or.use_enthalpy_cpdry.or.use_enthalpy_theoretical)) then
+    call endrun ('PHYS init error:  use_enthalpy* -- only one should be set to true')
+  endif
+
+end subroutine print_wl_cpstar_info
+
+
 
 end module physpkg
