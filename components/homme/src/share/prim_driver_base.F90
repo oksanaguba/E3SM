@@ -1609,6 +1609,11 @@ contains
   sum_fq = 0
 #endif
 
+
+#if 0
+
+stop
+
   call t_startf("ApplyCAMForcing_tracers")
 
 #ifdef MODEL_THETA_L
@@ -1779,6 +1784,8 @@ contains
 #endif
 
   call t_stopf("ApplyCAMForcing_tracers")
+
+#endif
 
   end subroutine applyCAMforcing_tracers
   

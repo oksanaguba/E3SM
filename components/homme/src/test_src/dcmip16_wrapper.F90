@@ -1,7 +1,4 @@
 
-
-
-
 #ifndef CAM
 #include "config.h"
 
@@ -11,7 +8,8 @@ module dcmip16_wrapper
 
 use dcmip12_wrapper,      only: pressure_thickness, set_tracers, get_evenly_spaced_z, set_hybrid_coefficients
 use control_mod,          only: test_case, dcmip16_pbl_type, dcmip16_prec_type, use_moisture, theta_hydrostatic_mode,&
-     sub_case, case_planar_bubble, bubble_prec_type
+     sub_case, case_planar_bubble, bubble_prec_type, &
+     bubble_rj_cpdry, bubble_rj_cpstar_hy, bubble_rj_cpstar_nh, bubble_rj_cVstar
 use baroclinic_wave,      only: baroclinic_wave_test
 use supercell,            only: supercell_init, supercell_test, supercell_z
 use tropical_cyclone,     only: tropical_cyclone_test
@@ -30,6 +28,14 @@ use reduction_mod,        only: parallelmax, parallelmin
 use terminator,           only: initial_value_terminator, tendency_terminator
 use time_mod,             only: time_at, TimeLevel_t
 
+use physical_constants,   only: bubble_const1, bubble_const2, bubble_const3, bubble_const4, &
+                                bubble_t0_const, bubble_epsilo, bubble_e0, &
+                                latvap, &
+                                g, cp, p0, kappa, &
+                                rdry=>rgas, rvapor=>rwater_vapor
+use global_norms_mod, only: global_integral
+use newphysics
+
 implicit none
 
 ! this cannot be made stack variable, nelemd is not compile option
@@ -37,10 +43,8 @@ real(rl),dimension(:,:,:), allocatable :: precl ! storage for column precip
 real(rl):: zi(nlevp), zm(nlev)                                          ! z coordinates
 real(rl):: ddn_hyai(nlevp), ddn_hybi(nlevp)                             ! vertical derivativess of hybrid coefficients
 real(rl):: tau
-real(rl), parameter :: rh2o    = 461.5d0,            &                  ! Gas constant for water vapor (J/kg/K)
-                       Mvap    = (Rwater_vapor/Rgas) - 1.d0             ! Constant for virtual temp. calc. (~0.608)
 
-real(rl) :: sample_period  = 2.0_rl
+real(rl) :: sample_period  = 1.0_rl
 real(rl) :: rad2dg = 180.0_rl/pi
 
 type :: PhysgridData_t
@@ -359,6 +363,57 @@ subroutine dcmip2016_test3(elem,hybrid,hvcoord,nets,nete)
 end subroutine
 
 !_______________________________________________________________________
+subroutine dcmip2016_append_measurements2(elem,prect_mass_forint,prect_en_forint,cl_en_forint,en_leak_forint,mass_leak_forint,&
+                                      tot_mass_forint, tot_energy_forint, &
+                                      tl,hybrid,nets,nete)
+  type(TimeLevel_t),  intent(in) :: tl
+  type(hybrid_t),     intent(in) :: hybrid                   ! hybrid parallel structure
+
+  type(element_t)      , intent(in) :: elem(:)
+  integer,            intent(in)            :: nets,nete                ! start, end element index
+  real(rl), dimension(np,np,nets:nete), intent(in) :: prect_mass_forint,prect_en_forint,cl_en_forint,en_leak_forint,&
+                                               mass_leak_forint, tot_mass_forint, tot_energy_forint
+
+  real(rl) :: time, prect_mass, prect_en, cl_en, en_leak, mass_leak, tot_mass, tot_energy
+  real(rl) :: next_sample_time = 0.0
+
+  time = time_at(tl%nstep)
+  ! append measurements at regular intervals
+  if(time .ge. next_sample_time) then
+!$OMP BARRIER
+!$OMP MASTER
+    next_sample_time = next_sample_time + sample_period
+!$OMP END MASTER
+!$OMP BARRIER
+
+!    Mass2 = global_integral(elem, tmp(:,:,nets:nete),hybrid,npts,nets,nete)
+!    pmax_precl = parallelMax(max_precl,hybrid)
+
+    prect_mass = global_integral(elem,prect_mass_forint,hybrid,np,nets,nete)
+    prect_en   = global_integral(elem,prect_en_forint,  hybrid,np,nets,nete)
+    cl_en      = global_integral(elem,cl_en_forint,     hybrid,np,nets,nete)
+    en_leak    = global_integral(elem,en_leak_forint,   hybrid,np,nets,nete)
+    mass_leak  = global_integral(elem,mass_leak_forint, hybrid,np,nets,nete)
+    tot_mass   = global_integral(elem,tot_mass_forint,  hybrid,np,nets,nete)
+    tot_energy = global_integral(elem,tot_energy_forint,hybrid,np,nets,nete)
+
+    if (hybrid%masterthread) then
+       print *, 'p Mass [kg/m2/sec]',time_at(tl%nstep),prect_mass
+       print *, 'p En    [W/m2]',time_at(tl%nstep),prect_en
+       print *, 'p cl En [W/m2]',time_at(tl%nstep),cl_en
+       print *, 'leak En [W/m2]',time_at(tl%nstep),en_leak
+       print *, 'leak M [ks/m2/sec]',time_at(tl%nstep),mass_leak
+       print *, 'total M [ks/m2/sec]',time_at(tl%nstep),tot_mass
+       print *, 'total E [W/m2]',time_at(tl%nstep),tot_energy
+       print *, ' '
+
+    endif
+  endif
+
+  end subroutine dcmip2016_append_measurements2
+
+
+!_______________________________________________________________________
 subroutine dcmip2016_append_measurements(max_w,max_precl,min_ps,tl,hybrid)
   real(rl),           intent(in) :: max_w, max_precl, min_ps
   type(TimeLevel_t),  intent(in) :: tl
@@ -423,6 +478,7 @@ subroutine dcmip2016_append_measurements(max_w,max_precl,min_ps,tl,hybrid)
   endif
 
   end subroutine
+
 
 !_______________________________________________________________________
 subroutine dcmip2016_test1_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl)
@@ -577,7 +633,271 @@ subroutine dcmip2016_test1_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl)
 
   call dcmip2016_append_measurements(max_w,max_precl,min_ps,tl,hybrid)
 
-end subroutine
+end subroutine dcmip2016_test1_forcing
+
+
+
+
+!_______________________________________________________________________
+subroutine bubble_new_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl)
+
+  use physical_constants, only: g, Rgas, cp, cpwater_vapor, cl, latvap, latice, &
+                                Rwater_vapor, bubble_epsilo, rhow
+  use parallel_mod,     only: global_shared_buf, global_shared_sum
+  use global_norms_mod, only: wrap_repro_sum
+
+  type(element_t),    intent(inout), target :: elem(:)                  ! element array
+  type(hybrid_t),     intent(in)            :: hybrid                   ! hybrid parallel structure
+  type(hvcoord_t),    intent(in)            :: hvcoord                  ! hybrid vertical coordinates
+  integer,            intent(in)            :: nets,nete                ! start, end element index
+  integer,            intent(in)            :: nt, ntQ                  ! time level index
+  real(rl),           intent(in)            :: dt                       ! time-step size
+  type(TimeLevel_t),  intent(in)            :: tl                       ! time level structure
+
+  integer :: i,j,k,kk,ie,qind,d_ind, ii, jj
+  real(rl), dimension(np,np,nlev) :: u,v,w,T,p,dp,rho,zm,qv,qc,qr
+  real(rl), dimension(np,np,nlev) :: T0,qv0,qc0,qr0
+  real(rl), dimension(np,np)      :: ps 
+  real(rl), dimension(nlev)       :: p_c,qv_c,qc_c,qr_c,dp_c,T_c,ppi,dz_c, pprime
+  real(rl), dimension(nlev)       :: dpdry_c, massd_c
+  real(rl) :: max_w, max_precl, min_ps
+
+  real(rl) :: ptop
+  real(rl) :: loc_mass_p, mass_prect, loc_energy_p, energy_prect
+
+  real(rl) :: zi(np,np,nlevp), zi_c(nlevp), rstar(nlev), ttend(nlev)
+
+  real(rl) :: energy_before, energy_after, en2cp, en2cV, mass_before, mass_after, discrepancy, encl
+  real(rl) :: en1glob_cp, en1glob_cv, en2glob_cp, en2glob_cv, mass1global, mass2global, rstar_new, olddphi
+  logical :: wasiactive
+
+  real(rl), dimension(np,np,nets:nete)      :: prect_mass_forint,prect_en_forint,cl_en_forint,en_leak_forint,&
+                                               mass_leak_forint, mass_forint, energy_forint
+
+  if (qsize .ne. 3) call abortmp('ERROR: moist bubble test requires qsize=3')
+
+  max_w     = -huge(rl)
+  max_precl = -huge(rl)
+  min_ps    = +huge(rl)
+
+  prect_mass_forint = 0; prect_en_forint = 0; cl_en_forint = 0; en_leak_forint = 0; mass_leak_forint = 0;
+  mass_forint = 0; energy_forint = 0;
+ 
+  do ie = nets,nete
+
+    precl(:,:,ie) = 0.0d0
+    ttend = 0.0
+
+    ! get current element state
+    ! returns p at midlevels just like we need for pprime
+    ! we do not need p at interfaces and at surface, only pi
+    ! 'g' here is gravity
+    call get_state(u,v,w,T,p,dp,ps,rho,zm,zi,g,elem(ie),hvcoord,nt,ntQ)
+
+    ! get mixing ratios
+    ! use qind to avoid compiler warnings when qsize_d<5
+    qind=1;  qv  = elem(ie)%state%Qdp(:,:,:,qind,ntQ)/dp
+    qind=2;  qc  = elem(ie)%state%Qdp(:,:,:,qind,ntQ)/dp
+    qind=3;  qr  = elem(ie)%state%Qdp(:,:,:,qind,ntQ)/dp
+
+    ! ensure positivity
+    where(qv<0); qv=0; endwhere
+    where(qc<0); qc=0; endwhere
+    where(qr<0); qr=0; endwhere
+
+    ! save un-forced prognostics
+    T0=T; qv0=qv; qc0=qc; qr0=qr;
+
+    ! apply forcing to columns
+    do j=1,np; do i=1,np
+
+      !column values
+      qv_c = qv(i,j,:); qc_c = qc(i,j,:); qr_c = qr(i,j,:); 
+      dp_c = dp(i,j,:); T_c = T(i,j,:); zi_c = zi(i,j,:);
+
+      !T, p, dp, phi from homme won't be concistent with full water loading
+      !redo p here
+      do k=1,nlev
+        rstar_new = rdry * (1.0 - qv_c(k) - qc_c(k) - qr_c(k)) + rvapor * qv_c(k)
+        olddphi = gravit*(zi_c(k) - zi_c(k+1))
+        p_c(k) = rstar_new * dp_c(k) * T_c(k) / olddphi
+      enddo 
+
+      !also needed, pressure-derived values
+      ptop = hvcoord%hyai(1) * hvcoord%ps0
+
+      !compute current energy and mass
+      call energycp_nh_via_mass(dp_c*(1-qv_c-qc_c-qr_c), dp_c*qv_c,dp_c*qc_c,dp_c*qr_c,T_c,ptop,zi_c(nlevp),p_c,en1glob_cp)  
+      call energycV_nh_via_mass(dp_c*(1-qv_c-qc_c-qr_c), dp_c*qv_c,dp_c*qc_c,dp_c*qr_c,T_c,ptop,zi_c,p_c,en1glob_cv)  
+      mass1global = sum( dp_c )
+
+      dpdry_c = dp_c*(1.0 - qv_c - qc_c - qr_c)
+
+      !set them here in case physics is not activated
+      mass_prect = 0.0; energy_prect = 0.0;
+      wasiactive = .false.
+
+!!!
+!#define DIAGN
+#undef DIAGN
+
+      ! if RJ precipitation
+      if(bubble_prec_type == 1) then
+
+        if(bubble_rj_cpstar_hy .or. bubble_rj_cpstar_nh) then
+
+          call rj_new(qv_c,qc_c,T_c,dp_c,p_c,zi_c,ptop,mass_prect,energy_prect,&
+                          energy_before,en2cp,en2cv,energy_after,encl,wasiactive,ttend)
+
+        elseif(bubble_rj_eamcpdry .or. bubble_rj_eamcpstar) then
+
+          !returns new T, qv, new!!! dp, mass
+          call rj_new_eam(qv_c,qc_c,T_c,dp_c,p_c,zi_c,ptop,mass_prect,energy_prect,&
+               energy_before,en2cp,en2cv,energy_after,encl,wasiactive,ttend)
+
+        elseif(bubble_rj_cVstar) then
+
+          !returns new T, qv, new!!! dp, mass
+          call rj_new_volume(qv_c,qc_c,T_c,dp_c,p_c,zi_c,ptop,mass_prect,energy_prect,&
+               energy_before,en2cp,en2cv,energy_after,encl,wasiactive)
+
+        !elseif(bubble_rj_cpdry) then
+
+          !this one conserves with const dp
+          !returns new T, new wet qv, prect mass (dp*delta_qv), new dp_c
+          !call rj_old(qv_c,T_c,dp_c,p_c,zi_c,ptop,mass_prect,wasiactive)
+        endif
+
+      elseif(bubble_prec_type == 0) then
+        print *, 'kessler planar bubble not done';  stop
+      endif ! RJ or Kessler choice
+
+
+#ifdef DIAGN
+if(wasiactive)then
+!if(bubble_rj_cpstar_nh) then
+
+print *, 'rof for nh, v, not rof for hy (small), eamcpdry, eamcpstar'
+print *, 'en_before-en1globV rel', (energy_before-en1glob_cv)/en1glob_cv
+print *, 'rof for nh, v, not rof for hy, eamcpdry, eamcpstar'
+print *, 'en_before-en1globP rel', (energy_before-en1glob_cp)/en1glob_cp
+print *, '  '
+
+if(bubble_rj_cpstar_nh .or. bubble_rj_cVstar) then
+print *, 'rof for cpstarnh, v'
+print *, 'condens update en_before-en2cv rel', (energy_before-en2cv)/en2cv
+print *, '  '
+endif
+
+!wont be rof for eamcpstar, cause used cpstar frozen
+print *, 'rof for nh, v, hy, eamcpdry, not eamcpstar'
+print *, 'condens update en_before-en2cp rel', (energy_before-en2cp)/en2cp
+print *, '  '
+
+!eam code uses either cpdry or cpstar hy functional. for eamcpstar condensation leaks
+!for both eams en_precipitation contains only L term, so this cannot pass
+print *, 'rof for all except eam'
+print *, 'TOTAL en_before-(en3+enout) rel', (energy_before-(energy_after+energy_prect))/energy_after
+print *, '  '
+
+print *, "    "
+endif
+#endif
+
+      call energycp_nh_via_mass(dp_c*(1-qv_c-qc_c-qr_c), dp_c*qv_c,dp_c*qc_c,dp_c*qr_c,T_c,ptop,zi_c(nlevp),p_c,en2glob_cp)
+      call energycV_nh_via_mass(dp_c*(1-qv_c-qc_c-qr_c), dp_c*qv_c,dp_c*qc_c,dp_c*qr_c,T_c,ptop,zi_c,p_c,en2glob_cv)
+
+      mass2global = sum( dp_c )
+
+#ifdef DIAGN
+if(wasiactive)then
+
+print *, 'rof for all'
+print *, 'before check consistent energy/EOS',(en1glob_cp-en1glob_cv)/en1glob_cp
+print *, 'rof for all'
+print *, 'after check consistent energy/EOS',(en2glob_cp-en2glob_cv)/en2glob_cp
+print *, " "
+
+!print *, 'en prect', energy_prect
+!in case of HY update, TOTAL here won't be the same as TOTAL above with energies
+!from routine, because to control HY update, en_before was computed for HY formulation
+print *, 'rof for NH, V, not for HY. small for P HY, not small for EAM'
+print *, 'TOTAL en1glob_cp-(en2glob_cp+prect) rel', (en1glob_cp-(en2glob_cp+energy_prect))/en1glob_cp
+!print *, 'TOTAL en1glob_cp,en2glob_cp,prect', en1glob_cp,en2glob_cp,energy_prect
+print *, 'rof for all'
+print *, 'TOTAL m1g-m2g, rel', mass1global-(mass2global+mass_prect), ( mass1global-mass2global-mass_prect)/mass1global
+
+print *, 'CL TOTAL (encl-enprect)/englob rel', (encl-energy_prect)/en1glob_cp
+print *, 'CL no L, (encl-enprect)/encl rel', (en1glob_cp-en2glob_cp-latice*mass_prect)/(encl-latice*mass_prect)
+print *, "  ------------------------------  "
+endif
+#endif
+
+      !do not use homme rstar routine here
+
+      precl(i,j,ie) = mass_prect / (dt * rhow) / g
+      mass_forint(i,j,ie) = mass1global/gravit/dt
+      energy_forint(i,j,ie) = en1glob_cp/gravit/dt
+
+      if(wasiactive)then
+
+!regarding en_before, en2, en_after as returned by RJ routines:
+!in case of cpstarHY update, en_before and en2 are HY functionals and wont match en1global.
+!this was done to check that the update is conserving.
+!therefore energy_prect will also be based on HY functional.
+!in case of EAM updates, energy_prect is even less of dE, it is only an L=latice*PRECT term.
+!we won't do analysis based on energy_prect, we will only use en1glob - en2glob and compare it
+!with E cl.
+
+        !above neither mass not energy have factor 1/gravit
+        prect_mass_forint(i,j,ie) = mass_prect/gravit/dt
+        prect_en_forint(i,j,ie) = energy_prect/gravit/dt
+        cl_en_forint(i,j,ie) = encl/gravit/dt
+        !make sure sign of dE matches sigh of energy_prect
+        en_leak_forint(i,j,ie) = (en1glob_cp - en2glob_cp - energy_prect)/gravit/dt
+        !make sure sign of dM matches sigh of mass_prect
+        mass_leak_forint(i,j,ie) = (mass1global - mass2global - mass_prect)/gravit/dt
+
+      endif
+
+      !update states assuming cam_ routines are off
+      qind=1;  elem(ie)%state%Qdp(i,j,:,qind,ntQ) = dp_c*qv_c
+               elem(ie)%state%Q  (i,j,:,qind)     =      qv_c
+      qind=2;  elem(ie)%state%Qdp(i,j,:,qind,ntQ) = dp_c*qc_c
+               elem(ie)%state%Q  (i,j,:,qind)     =      qc_c
+      qind=3;  elem(ie)%state%Qdp(i,j,:,qind,ntQ) = dp_c*qr_c
+               elem(ie)%state%Q  (i,j,:,qind)     =      qr_c
+
+      elem(ie)%state%dp3d(i,j,:,nt) = dp_c
+      elem(ie)%state%phinh_i(i,j,:,nt) = gravit*zi_c
+
+      !was used for diagnostics before
+      elem(ie)%derived%FM(i,j,1,:) = ttend(:)
+
+      !dpdry_c should be conserved
+      rstar = rdry * dpdry_c + rvapor * dp_c*qv_c
+
+      !rstar has dp factor in it
+      elem(ie)%state%vtheta_dp(i,j,:,nt) = rstar/rdry * &
+                    T_c * (p0/p_c)**kappa
+
+    enddo; enddo; !j,i loop
+
+    ! perform measurements of max w, and max prect
+    max_w     = max( max_w    , maxval(w    ) )
+    max_precl = max( max_precl, maxval(precl(:,:,ie)) )
+    min_ps    = min( min_ps,    minval(ps) )
+
+  enddo !ie loop
+
+  call dcmip2016_append_measurements2(elem,prect_mass_forint,prect_en_forint,cl_en_forint,en_leak_forint,mass_leak_forint,&
+                                      mass_forint, energy_forint, tl,hybrid,nets,nete)
+
+end subroutine bubble_new_forcing
+
+
+
+
 
 subroutine toy_init(rcd)
   real(rl), intent(inout) :: rcd(6)
@@ -1095,5 +1415,22 @@ subroutine dcmip2016_test3_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl)
   call dcmip2016_append_measurements(max_w,max_precl,min_ps,tl,hybrid)
 
 end subroutine
+
+
+subroutine qsat_kessler(p, T, qsat)
+  real(rl),         intent(out):: qsat
+  real(rl),         intent(in) :: p, T
+  qsat = bubble_const1 / p * exp( bubble_const2 * (T - bubble_const3) / ( T - bubble_const4 ) )
+end subroutine qsat_kessler
+
+
+subroutine qsat_rj(p, T, qsat)
+  real(rl),         intent(out):: qsat
+  real(rl),         intent(in) :: p, T
+  qsat = bubble_epsilo * bubble_e0 / p * &
+         exp(-(latvap/Rwater_vapor) * ((1.0/T)-(1.0/bubble_t0_const)))
+end subroutine qsat_rj
+
+
 end module dcmip16_wrapper
 #endif

@@ -1,0 +1,102 @@
+#instructions for the paper results/figures
+
+need files
+5 files create-namelists*sh
+5 files *TEMPLATE //nl templates
+1 dump-area.nl file
+1 files make-convergence-remap.ncl
+compute-ref-solns-difference-using-remap.ncl
+compute-CP-ref-solns-difference-using-remap.ncl
+convergence-rates.py
+total-precipitation-plots
+parse-precip.py
+parse-5files.py
+plot-in-height.ncl
+plot-many-for-panels
+
+#not used in the paper
+compute-diffs-between-ref-solns
+
+running homme: -------------------------------------------------------
+
+build planar homme theta-l-nlev128-native
+run create-namelists-and-run*sh for all 5 updates (10 hours on 8 chrys nodes)
+they use templated namelists *TEMPLATE to build nl files for each update and time step
+
+for a small *nc file with area:
+srun -n 1  --cpu_bind=cores test_execs/theta-l-nlev128-native/theta-l-nlev128-native <dump-area.nl
+rename the file to 'area.nc'
+
+making convergence plots: --------------------------------------------
+use ncl:
+
+
+compute difference between CP and CV ref solutions at 0.0001:
+run
+>>>ncl compute-ref-solns-difference-using-remap.ncl fff=\"Th\" tt=8
+and extract from the output line like
+(0)	dt=0.0001 NOerr 39032.78224291373 nerr = 0.002624088197179717
+use nerr value to add it to convergence-rates.py to lines
+
+#make hor line
+hline=np.array(seriesV)-np.array(seriesV)+0.0026 <-- this number, 0.0026, is rounded nerr number form above
+
+this will give the horizontal "uncertainty" line in the convergence plot
+
+for CP-HY vs CP-NH error, run (used in text)
+ncl compute-CP-ref-solns-difference-using-remap.ncl tt=8 fff=\"Th\"
+
+
+For self-convergence, do
+
+>>> ncl make-convergence-remap.ncl fff=\"Th\" tt=8 myname=\"cpstarnh\" mynameShort=\"P\"
+>>> ncl make-convergence-remap.ncl fff=\"Th\" tt=8 myname=\"cpstarhy\" mynameShort=\"Phy\"
+>>> ncl make-convergence-remap.ncl fff=\"Th\" tt=8 myname=\"cv\" mynameShort=\"V\"
+>>> ncl make-convergence-remap.ncl fff=\"Th\" tt=8 myname=\"eamcpdry\" mynameShort=\"Edry\"
+>>> ncl make-convergence-remap.ncl fff=\"Th\" tt=8 myname=\"eamcpstar\" mynameShort=\"Estar\"
+
+and extract from the output lines like
+seriesP=[ 0.003470219900093927,0.003409600138394569,0.002999268555545242,0.002003238327450248,0.001259866170997827,0.0006784205117481457,0.0002865313909660209,0.0001397353066118329 ]
+seriesPhy=[ 0.00348026000624766,0.003410699232002172,0.002997358686058668,0.002003334688997635,0.001259811057794131,0.0006779506324187278,0.0002862759612438212,0.0001395234378750366 ]
+seriesV=[ 0.008099264907336133,0.007440089835241521,0.006131482487330701,0.002154116427663535,0.001026479812111427,0.0007995946160644042,0.0003073213851727845,0.0001987616843327972 ]
+seriesEdry=[ 0.006962328352674943,0.008317725221624302,0.008139471108749049,0.003090257122566238,0.001304576973127931,0.0004519860341391564,0.001263328930838435,0.0003842799495964573 ]
+seriesEstar=[ 0.007059505857799219,0.007972185219984801,0.007853645681927235,0.003082155175314198,0.00152380480096253,0.0004252325971472421,0.00156793355264248,0.0011246447542791 ]
+
+
+edit file convergence-rates.py to add/replace the lines above
+load python module (on chrysalis, can be python3)
+run:
+>> python convergence-rates.py
+
+it produces plot p-v-convergence.pdf (figure 1)
+
+make precipitation plots: ---------------------------------------------
+
+now check that ${pp} variable is set to where text output from 5 updates and all time steps was saved (pp is folder) in file total-precipitation-plots 
+
+then on anvil with unified and python 2 (module load anaconda) do
+
+>>source total-precipitation-plots 
+
+this produces 5 files precl-mass*pdf and 5 of precl-mass*png
+
+Figure 2 uses 4 of them, since CP NH and CP HY updates are very similar
+
+make Energy CL plots: -------------------------------------------------
+
+python 2 on anvil
+
+>>python parse-5files.py output-cpstarnh-l128-dt0.0001 output-cpstarhy-l128-dt0.0001 output-cv-l128-dt0.0001 output-eamcpdry-l128-dt0.0001 output-eamcpstar-l128-dt0.0001 "CP-VL-NH" "CP-VL-HY" "CV-VL-NH" "CP-CL-HY" "CP-AL-HY"
+
+it produces a few files, but we need only mass-for5.pdf and encl-diagn-for5.pdf
+
+for Figure 3.
+
+make bubble plots: ----------------------------------------------------
+
+on machine with ncl edit plot-many-for-panels for options: "eamcpstar" (cp hy approx lat), "cpstarnh" (cp nh var lat),"cv" (cv nh var lat)
+for each option, execute
+>> source plot-many-for-panels
+
+total will be 12 panels for Figure 4
+

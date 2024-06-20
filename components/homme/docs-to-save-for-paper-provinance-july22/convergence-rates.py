@@ -1,0 +1,78 @@
+#!/usr/bin/env python
+from string import *
+import os, getopt, sys
+import matplotlib.pyplot as plot
+import numpy as np
+from cmcrameri import cm
+
+############# run on chrysalis with python 3, python 2 on anvil does not work
+
+ddt=20.0*np.array([0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.002, 0.001])
+
+seriesP=[ 0.003470219900093927,0.003409600138394569,0.002999268555545242,0.002003238327450248,0.001259866170997827,0.0006784205117481457,0.0002865313909660209,0.0001397353066118329 ]
+seriesPhy=[ 0.00348026000624766,0.003410699232002172,0.002997358686058668,0.002003334688997635,0.001259811057794131,0.0006779506324187278,0.0002862759612438212,0.0001395234378750366 ]
+seriesV=[ 0.008099264907336133,0.007440089835241521,0.006131482487330701,0.002154116427663535,0.001026479812111427,0.0007995946160644042,0.0003073213851727845,0.0001987616843327972 ]
+seriesEdry=[ 0.006962328352674943,0.008317725221624302,0.008139471108749049,0.003090257122566238,0.001304576973127931,0.0004519860341391564,0.001263328930838435,0.0003842799495964573 ]
+seriesEstar=[ 0.007059505857799219,0.007972185219984801,0.007853645681927235,0.003082155175314198,0.00152380480096253,0.0004252325971472421,0.00156793355264248,0.0011246447542791 ]
+
+
+#not remapped
+#seriesP=[ 0.003077509496527265,0.002971564287359151,0.00263778452855153,0.001755425382169638,0.001118177876390719,0.0006099010453942045,0.0002608441075285435,0.0001272050274434055 ]
+#seriesPhy=[ 0.003086108128760258,0.002972611990412168,0.002636010412023117,0.00175533930861668,0.001118370217551115,0.0006091090534282601,0.0002605342125618298,0.0001270081037904339 ]
+#seriesV=[ 0.00693267677466352,0.006481375979017358,0.005289501660810096,0.001935662595967612,0.0009215228580399363,0.0007046734778502718,0.0002752273001902675,0.00017930304565655 ]
+#seriesEdry=[ 0.006129476690641761,0.007223143634597555,0.00708357263368673,0.002762966755376245,0.001217748855692548,0.0004386992155546833,0.001146164225601199,0.00035028576305705 ]
+#seriesEstar=[ 0.006212394002788509,0.006912952061895793,0.006839840418866516,0.002742073244445472,0.001390152505598283,0.0004116095426320242,0.001410724895259956,0.001009662491319665 ]
+
+
+
+#make hor line
+hline=np.array(seriesV)-np.array(seriesV)+0.0026
+
+
+seriesPerf=np.asarray(ddt)*seriesP[7]*25
+
+MS=10
+FS=14
+
+bblue='#377eb8'
+oorange='#ff7f00'
+ggreen='#4daf4a'
+ppink='#f781bf'
+bbrown='#a65628'
+ppurple='#984ea3'
+ggray='#999999'
+rred='#e41a1c'
+yyellow='#dede00'
+
+
+#plot.axes().set_aspect('equal','datalim')
+#fig, ax = plot.subplots(1)
+
+plot.loglog(ddt, seriesPhy,  label="CP-VL-HY",      color="black", linewidth=3,marker='s',markersize=MS )
+plot.loglog(ddt, seriesP,    label="CP-VL-NH",     color=rred, linewidth=3,marker='o',markersize=MS )
+plot.loglog(ddt, seriesV,    label="CV-VL-NH",       color=ggreen, linewidth=3,marker='^',markersize=MS )
+plot.loglog(ddt, seriesEdry, label="CP-CL-HY", color=yyellow, linewidth=3,marker='v',markersize=MS )
+plot.loglog(ddt, seriesEstar,label="CP-AL-HY", color=bblue, linewidth=3,marker='p',markersize=MS )
+plot.loglog(ddt, seriesPerf, label="1st order scaling", color=ggray, linewidth=1.5 )
+plot.loglog(ddt, hline, label="CV-VL-NH vs CP-VL-NH", color=ggray, linewidth=1.5, linestyle='--')
+
+plot.tick_params(labelsize=FS)
+plot.legend(loc='lower left',fontsize=FS)
+plot.xlabel("time step", fontsize=FS)
+plot.ylabel("normalized error", fontsize=FS)
+plot.gca().invert_xaxis()
+plot.ylim([6e-5,2e-2])
+
+#works but cuts left label a little, while 5,5 cuts it completely!
+#plot.gcf().set_size_inches((6.2,6.2))
+plot.gcf().set_size_inches((6.2,6.2))
+
+#ax.set_aspect("equal")
+
+plot.savefig('p-v-convergence.pdf')
+
+
+
+
+
+

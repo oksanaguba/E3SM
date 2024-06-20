@@ -266,6 +266,13 @@ module control_mod
   integer,               public :: bubble_prec_type = 0       !0 kessler, 1 rj
   logical,               protected :: case_planar_bubble = .FALSE.
 
+  logical,               public :: bubble_rj_cpdry = .FALSE.
+  logical,               public :: bubble_rj_cpstar_hy = .FALSE.
+  logical,               public :: bubble_rj_cpstar_nh = .FALSE.
+  logical,               public :: bubble_rj_cVstar = .FALSE.
+  logical,               public :: bubble_rj_eamcpdry = .FALSE.
+  logical,               public :: bubble_rj_eamcpstar = .FALSE.
+
   public :: set_planar_defaults
 
 contains
@@ -703,6 +710,14 @@ use physical_constants, only: Lx, Ly, Sx, Sy
 
     if (test_case == "planar_rising_bubble" ) then
        case_planar_bubble = .TRUE.
+       !check which thermo we are running
+         print *, 'ONLY ONE SHOULD BE TRUE'
+         print *, 'bubble_rj_cpdry', bubble_rj_cpdry
+         print *, 'bubble_rj_cpstar_hy', bubble_rj_cpstar_hy
+         print *, 'bubble_rj_cpstar_nh', bubble_rj_cpstar_nh
+         print *, 'bubble_rj_cVstar', bubble_rj_cVstar
+         print *, 'bubble_rj_eamcpdry', bubble_rj_eamcpdry
+         print *, 'bubble_rj_eamcpstar', bubble_rj_eamcpstar
     end if
 
 end subroutine set_planar_defaults
