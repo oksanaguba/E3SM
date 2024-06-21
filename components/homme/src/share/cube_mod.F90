@@ -774,6 +774,7 @@ contains
   subroutine coriolis_init_atomic(elem)
     use element_mod, only : element_t
     use physical_constants, only : omega
+    use control_mod, only: atm_is_deep
 
     type (element_t) :: elem
 
@@ -785,7 +786,10 @@ contains
     rangle = rotate_grid*DD_PI/180
     do j=1,np
        do i=1,np
-             if ( rotate_grid /= 0) then
+             if ( rotate_grid /= 0 ) then
+                if (atm_is_deep) then
+                  call abortmp('Rotated grid not yet supported in deep atmosphere')
+                end if
                 lat = elem%spherep(i,j)%lat
                 lon = elem%spherep(i,j)%lon
              	elem%fcor(i,j)= 2*omega* &

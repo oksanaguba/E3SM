@@ -82,7 +82,7 @@ contains
   subroutine set_state(s, nt1, nt2, ntq, elem)
     ! Convenience wrapper to set_elem_state.
 
-    use physical_constants, only: g
+    use physical_constants, only: gravit
     use element_ops, only: set_elem_state
 
     type (State_t), intent(in) :: s
@@ -90,7 +90,7 @@ contains
     type (element_t), intent(inout) :: elem
 
     call set_elem_state(s%u, s%v, s%w, s%wi, s%T, s%ps, s%phis, s%p, s%dp, s%z, s%zi, &
-         g, elem, nt1, nt2, ntq)
+         gravit, elem, nt1, nt2, ntq) !DA_CHANGE
   end subroutine set_state
 
   subroutine set_gll_state(hvcoord, elem, nt1, nt2)
@@ -102,10 +102,11 @@ contains
     ! function on the sphere.
 
     use dimensions_mod, only: nlev, qsize
-    use physical_constants, only: g, dd_pi
+    use physical_constants, only: gravit, dd_pi
     use coordinate_systems_mod, only: cartesian3D_t, change_coordinates
     use hybvcoord_mod, only: hvcoord_t
     use element_ops, only: get_field
+    use deep_atm_mod, only: g_from_phi
 
     type (hvcoord_t) , intent(in) :: hvcoord
     type (element_t), intent(inout) :: elem
@@ -156,7 +157,7 @@ contains
     ! a bit of a kludge
     call set_state(s1, nt1, nt2, nt1, elem)
     call get_field(elem, 'rho', wr(:,:,:,1), hvcoord, nt1, nt1)
-    s1%w = -elem%derived%omega_p/(wr(:,:,:,1)*g)
+    s1%w = -elem%derived%omega_p/(wr(:,:,:,1)*gravit) ! WARNING: NOT ADAPTED TO DEEP ATMOSPHERE
     s1%wi(:,:,:nlev) = s1%w
     s1%wi(:,:,nlevp) = s1%w(:,:,nlev)
     call set_state(s1, nt1, nt2, nt1, elem)
@@ -182,7 +183,7 @@ contains
     use parallel_mod, only: global_shared_buf, global_shared_sum
     use global_norms_mod, only: wrap_repro_sum
     use reduction_mod, only: ParallelMin, ParallelMax
-    use physical_constants, only: g, p0, kappa
+    use physical_constants, only: gravit, p0, kappa
     use edge_mod, only: edgevpack_nlyr, edgevunpack_nlyr, edge_g
     use bndry_mod, only: bndry_exchangev
     use control_mod, only: ftype

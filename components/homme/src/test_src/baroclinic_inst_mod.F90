@@ -22,7 +22,7 @@ module baroclinic_inst_mod
     ! ====================
     use kinds, only : real_kind, iulog
     ! ====================
-    use physical_constants, only : omega, rearth, rgas, p0, dd_pi, Cp,g
+    use physical_constants, only : omega, rearth, rgas, p0, dd_pi, Cp,g=>gravit
     ! ====================
     use dimensions_mod, only : nlev,np, qsize
     ! ====================

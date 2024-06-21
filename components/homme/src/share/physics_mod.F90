@@ -9,7 +9,7 @@ module physics_mod
   ! =======================
   use kinds,              only : real_kind
   ! =======================
-  use physical_constants, only : rgas, Rwater_vapor, kappa, g, Rd_on_Rv, Cp, Cpd_on_Cpv, cpwater_vapor
+  use physical_constants, only : rgas, Rwater_vapor, kappa, gravit, Rd_on_Rv, Cp, Cpd_on_Cpv, cpwater_vapor
   ! =======================
   use physical_constants, only : rearth,p0
   ! =======================

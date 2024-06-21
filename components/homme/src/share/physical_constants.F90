@@ -13,7 +13,7 @@ module physical_constants
   ! set physical constants from CAM variables
   use physconst, only:    &
     pi,                   &  ! _EXTERNAL
-    g => gravit,          &
+    gravit=>gravit,          &
     rearth,               &
     omega,                &
     Rgas => rair,         &
@@ -38,7 +38,7 @@ module physical_constants
   real (kind=real_kind), public, parameter :: DD_PI = pi
   real (kind=longdouble_kind), public, parameter :: QQ_PI = 3.141592653589793238462643383279_longdouble_kind
   public                                   :: rearth                    ! m
-  public                                   :: g                         ! m s^-2
+  public                                   :: gravit                         ! m s^-2
   public                                   :: omega                     ! s^-1
   public                                   :: Rgas
   real (kind=real_kind), public, parameter :: Cp           = cpair
@@ -57,8 +57,8 @@ module physical_constants
   real (kind=longdouble_kind), public, parameter :: QQ_PI  = 3.141592653589793238462643383279_longdouble_kind
   real (kind=real_kind), public, parameter :: rearth0      = 6.376D6    ! m
   real (kind=real_kind), public            :: rearth       = rearth0    ! m
-  real (kind=real_kind), public, parameter :: g            = 9.80616D0  ! m s^-2
-  real (kind=real_kind), public            :: ginv         = 1.0_real_kind/g
+  real (kind=real_kind), public, parameter :: gravit            = 9.80616D0  ! m s^-2
+  real (kind=real_kind), public            :: gravitinv         = 1.0_real_kind/gravit
   real (kind=real_kind), public, parameter :: omega0       = 7.292D-5   ! s^-1
   real (kind=real_kind), public            :: omega        = omega0
   real (kind=real_kind), public, parameter :: Rgas         = 287.04D0        

@@ -10,7 +10,7 @@ module imex_mod
   use element_mod,        only: element_t
   use derivative_mod,     only: derivative_t
   use time_mod,           only: timelevel_t, timelevel_qdp
-  use physical_constants, only: g, kappa
+  use physical_constants, only: gravit, kappa, rearth
   use eos,                only: pnh_and_exner_from_eos, pnh_and_exner_from_eos2, phi_from_eos
   use element_state,      only: max_itercnt, max_deltaerr, max_reserr
   use control_mod,        only: theta_hydrostatic_mode, qsplit
@@ -59,6 +59,7 @@ contains
 
   subroutine compute_stage_value_dirk(nm1,alphadt_nm1,n0,alphadt_n0,np1,dt2,elem,hvcoord,hybrid,&
        deriv,nets,nete,itercount,itererr,verbosity_in)
+    use deep_atm_mod, only: r_hat_from_phi, g_from_phi, z_from_phi
     !===================================================================================
     ! this subroutine solves a stage value equation for a DIRK method which takes the form
     !
@@ -116,6 +117,7 @@ contains
     real (kind=real_kind) :: Fn(np,np,nlev),x(np,np,nlev)
     real (kind=real_kind) :: gwh_i(np,np,nlevp)  ! w hydrostatic
     real (kind=real_kind) :: v_i(np,np,2,nlevp)  ! w hydrostatic
+    real (kind=real_kind) :: recip_r_hat(np,np,nlev)    
 
     real (kind=real_kind) :: Jac2D(np,np,nlev)  , Jac2L(np,np,nlev-1)
     real (kind=real_kind) :: Jac2U(np,np,nlev-1)
@@ -143,7 +145,7 @@ contains
        itercount=0
        itererr=0
        do ie=nets,nete
-          call phi_from_eos(hvcoord,elem(ie)%state%phis,elem(ie)%state%vtheta_dp(:,:,:,np1),&
+          call phi_from_eos(hvcoord,elem(ie)%state%phis, elem(ie)%state%ps_v(:,:,np1),elem(ie)%state%vtheta_dp(:,:,:,np1),&
                elem(ie)%state%dp3d(:,:,:,np1),elem(ie)%state%phinh_i(:,:,:,np1))
           elem(ie)%state%w_i(:,:,:,np1)=0
        enddo
@@ -179,13 +181,13 @@ contains
           call pnh_and_exner_from_eos(hvcoord,elem(ie)%state%vtheta_dp(:,:,:,nt), &
                elem(ie)%state%dp3d(:,:,:,nt),elem(ie)%state%phinh_i(:,:,:,nt),pnh,   &
                exner,dpnh_dp_i,caller='dirkn0')
-          w_n0(:,:,1:nlev)     = w_n0(:,:,1:nlev) + &
-               dt3*g*(dpnh_dp_i(:,:,1:nlev)-1)
+          recip_r_hat = 1.0_real_kind/r_hat_from_phi(elem(ie)%state%phinh_i(:,:,1:nlev,nt), nlev)! DA_CHANGE
+          w_n0(:,:,1:nlev)     = w_n0(:,:,1:nlev) + dt3*(g_from_phi(elem(ie)%state%phinh_i(:,:,1:nlev,nt), nlev))*(dpnh_dp_i(:,:,1:nlev)-1) ! DA_CHANGE
 
           call compute_gwphis(gwh_i,elem(ie)%state%dp3d(:,:,:,nt),elem(ie)%state%v(:,:,:,:,nt),&
                elem(ie)%derived%gradphis,hvcoord)
           phi_n0(:,:,1:nlev) = phi_n0(:,:,1:nlev) + &
-               dt3*g*elem(ie)%state%w_i(:,:,1:nlev,nt) -  dt3*gwh_i(:,:,1:nlev)
+               dt3*(g_from_phi(elem(ie)%state%phinh_i(:,:,1:nlev,nt),nlev))*elem(ie)%state%w_i(:,:,1:nlev,nt) -  dt3*gwh_i(:,:,1:nlev) !DA_CHANGE
        end if
 
 
@@ -196,12 +198,12 @@ contains
                elem(ie)%state%dp3d(:,:,:,nt),elem(ie)%state%phinh_i(:,:,:,nt),pnh,   &
                exner,dpnh_dp_i,caller='dirknm1')
           w_n0(:,:,1:nlev)     = w_n0(:,:,1:nlev) + &
-               dt3*g*(dpnh_dp_i(:,:,1:nlev)-1)
+               dt3*(g_from_phi(elem(ie)%state%phinh_i(:,:,1:nlev,nt),nlev))*(dpnh_dp_i(:,:,1:nlev)-1) ! DA_CHANGE
 
           call compute_gwphis(gwh_i,elem(ie)%state%dp3d(:,:,:,nt),elem(ie)%state%v(:,:,:,:,nt),&
                elem(ie)%derived%gradphis,hvcoord)
           phi_n0(:,:,1:nlev) = phi_n0(:,:,1:nlev) + &
-               dt3*g*elem(ie)%state%w_i(:,:,1:nlev,nt) -  dt3*gwh_i(:,:,1:nlev)
+               dt3*g_from_phi(elem(ie)%state%phinh_i(:,:,1:nlev,nt),nlev)*elem(ie)%state%w_i(:,:,1:nlev,nt) -  dt3*gwh_i(:,:,1:nlev) ! DA_CHANGE
        end if
 
        ! add just the wphis(np1) term to the RHS
@@ -225,9 +227,9 @@ contains
 #endif
 #if 1
        ! use hydrostatic for initial guess
-       call phi_from_eos(hvcoord,elem(ie)%state%phis,elem(ie)%state%vtheta_dp(:,:,:,np1),&
+       call phi_from_eos(hvcoord,elem(ie)%state%phis,elem(ie)%state%ps_v(:,:,np1),elem(ie)%state%vtheta_dp(:,:,:,np1),&
             elem(ie)%state%dp3d(:,:,:,np1),phi_np1)
-       w_np1(:,:,1:nlev) = (phi_np1(:,:,1:nlev) -  phi_n0(:,:,1:nlev) )/(dt2*g)
+       w_np1(:,:,1:nlev) = (z_from_phi(phi_np1(:,:,1:nlev), nlev) -  z_from_phi(phi_n0(:,:,1:nlev), nlev ))/(dt2) ! DA_CHANGE
 #endif
 
        ! initial residual
@@ -240,12 +242,12 @@ contains
        do k=1,nlev
           do j=1,np
              do i=1,np
-                if ( dphi(i,j,k)  > -g) then
+                if ( dphi(i,j,k)  > -gravit) then ! DA_CHANGE WARNING: not adapted to Deep Atmosphere
                    if (verbosity > 0) then
                    write(iulog,*) 'WARNING:IMEX limiting initial guess. ie,i,j,k=',ie,i,j,k
                    write(iulog,*) 'dphi(i,j,k)=  ',dphi(i,j,k)
                    endif
-                   dphi(i,j,k)=-g
+                   dphi(i,j,k)=-gravit ! DA_CHANGE
                    nsafe=1
                 endif
              enddo
@@ -256,20 +258,24 @@ contains
           do k=nlev,1,-1  ! scan
              phi_np1(:,:,k) = phi_np1(:,:,k+1)-dphi(:,:,k)
           enddo
-          w_np1(:,:,1:nlev) = (phi_np1(:,:,1:nlev) -  phi_n0(:,:,1:nlev) )/(dt2*g)
+          w_np1(:,:,1:nlev) = (z_from_phi(phi_np1(:,:,1:nlev), nlev) -  z_from_phi(phi_n0(:,:,1:nlev), nlev) )/(dt2) !DA_CHANGE
        endif
        call pnh_and_exner_from_eos2(hvcoord,elem(ie)%state%vtheta_dp(:,:,:,np1),elem(ie)%state%dp3d(:,:,:,np1),&
-            dphi,pnh,exner,dpnh_dp_i,'dirk1')
+                                    dphi,phi_np1,pnh,exner,dpnh_dp_i,'dirk1')
        Fn(:,:,1:nlev) = w_np1(:,:,1:nlev) - &
-            (w_n0(:,:,1:nlev) + g*dt2 * (dpnh_dp_i(:,:,1:nlev)-1))
+            (w_n0(:,:,1:nlev) + g_from_phi(elem(ie)%state%phinh_i(:,:,1:nlev,np1),nlev)*dt2 * (dpnh_dp_i(:,:,1:nlev)-1))
 
 
        itercount=0
        do while (itercount < maxiter) 
+          do k=nlev,1,-1  ! scan
+             phi_np1(:,:,k) = phi_np1(:,:,k+1)-dphi(:,:,k)
+          enddo
+ 
           ! numerical J:
-          !call get_dirk_jacobian(JacL,JacD,JacU,dt2,elem(ie)%state%dp3d(:,:,:,np1),dphi,pnh,0,1d-4,hvcoord,dpnh_dp_i,vtheta_dp) 
+          !call get_dirk_jacobian(JacL,JacD,JacU,dt2,elem(ie)%state%dp3d(:,:,:,np1),dphi, phi_np1,pnh,0,1d-4,hvcoord,dpnh_dp_i,elem(ie)%state%vtheta_dp(:,:,:,np1)) 
           ! analytic J:
-          call get_dirk_jacobian(JacL,JacD,JacU,dt2,elem(ie)%state%dp3d(:,:,:,np1),dphi,pnh,1) 
+          call get_dirk_jacobian(JacL,JacD,JacU,dt2,elem(ie)%state%dp3d(:,:,:,np1),dphi,phi_np1,pnh,1) 
 
           x(:,:,1:nlev) = -Fn(:,:,1:nlev)
 
@@ -277,10 +283,11 @@ contains
 
           do k = 1,nlev-1
              dphi(:,:,k) = dphi_n0(:,:,k) + &
-                  dt2*g*((w_np1(:,:,k+1) - w_np1(:,:,k)) + &
+                  dt2*g_from_phi((elem(ie)%state%phinh_i(:,:,k,nt) + elem(ie)%state%phinh_i(:,:,k+1,nt))/2)*((w_np1(:,:,k+1) - w_np1(:,:,k)) + & !DA_CHANGE
                           (x(:,:,k+1) - x(:,:,k)))
           end do
-          dphi(:,:,nlev) = dphi_n0(:,:,nlev) - dt2*g*(w_np1(:,:,nlev) + x(:,:,nlev))
+          dphi(:,:,nlev) = dphi_n0(:,:,nlev) - dt2*g_from_phi((elem(ie)%state%phinh_i(:,:,nlev,nt) + &
+          elem(ie)%state%phinh_i(:,:,nlev+1,nt))/2)*(w_np1(:,:,nlev) + x(:,:,nlev)) ! DA_CHANGE
 
           alphas = 1
           if (any(dphi(:,:,1:nlev) >= 0)) then
@@ -299,7 +306,9 @@ contains
                          dw = -w_np1(i,j,k)
                       end if
                       if (dx /= 0) then
-                         alpha_k = -(dphi_n0(i,j,k) + dt2*g*dw)/(dt2*g*dx)
+                         alpha_k = -(dphi_n0(i,j,k) + dt2*g_from_phi((elem(ie)%state%phinh_i(i,j,k,nt)+ &
+                         elem(ie)%state%phinh_i(i,j,k+1,nt))/2.0)*dw)/(dt2*g_from_phi((elem(ie)%state%phinh_i(i,j,k,nt)+ &
+                         elem(ie)%state%phinh_i(i,j,k+1,nt))/2.0)*dx) ! DA_CHANGE
                          if (alpha_k >= 0) alpha = min(alpha, alpha_k)
                       end if
                    end do
@@ -310,25 +319,28 @@ contains
 
                    do k = 1,nlev-1
                       dphi(i,j,k) = dphi_n0(i,j,k) + &
-                           dt2*g*((w_np1(i,j,k+1) - w_np1(i,j,k)) + &
-                           alpha*(x(i,j,k+1) - x(i,j,k)))
+                           dt2*g_from_phi((elem(ie)%state%phinh_i(i,j,k,nt)+&
+                         elem(ie)%state%phinh_i(i,j,k+1,nt))/2.0)*((w_np1(i,j,k+1) - w_np1(i,j,k)) + alpha*(x(i,j,k+1) - x(i,j,k))) !DA_CHANGE
                    end do
-                   dphi(i,j,nlev) = dphi_n0(i,j,nlev) - dt2*g*(w_np1(i,j,nlev) + alpha*x(i,j,nlev))
+                   dphi(i,j,nlev) = dphi_n0(i,j,nlev) - dt2*g_from_phi((elem(ie)%state%phinh_i(i,j,k,nt)+  elem(ie)%state%phinh_i(i,j,k+1,nt))/2.0)*(w_np1(i,j,nlev) + alpha*x(i,j,nlev)) !DA_CHANGE
                 end do
              end do
           end if
           do k = 1,nlev
              w_np1(:,:,k) = w_np1(:,:,k) + alphas*x(:,:,k)
           end do
-
+          do k=nlev,1,-1  ! scan
+             phi_np1(:,:,k) = phi_np1(:,:,k+1)-dphi(:,:,k)
+          enddo
+ 
           call pnh_and_exner_from_eos2(hvcoord,elem(ie)%state%vtheta_dp(:,:,:,np1),&
-               elem(ie)%state%dp3d(:,:,:,np1),dphi,pnh,exner,dpnh_dp_i,'dirk2')
-          Fn(:,:,1:nlev) = w_np1(:,:,1:nlev) - (w_n0(:,:,1:nlev) + g*dt2 * (dpnh_dp_i(:,:,1:nlev)-1))
+               elem(ie)%state%dp3d(:,:,:,np1),dphi,phi_np1,pnh,exner,dpnh_dp_i,'dirk2')
+          Fn(:,:,1:nlev) = w_np1(:,:,1:nlev) - (w_n0(:,:,1:nlev) + g_from_phi((elem(ie)%state%phinh_i(:,:,1:nlev,nt)+ &
+                         elem(ie)%state%phinh_i(:,:,2:nlevp,nt))/2.0, nlev)*dt2 * (dpnh_dp_i(:,:,1:nlev)-1)) ! DA_CHANGE
 
           ! this is not used in this loop, so move out of loop
           !reserr=maxval(abs(Fn))/(wmax*abs(dt2)) 
           deltaerr=maxval(abs(x))/wmax
-
           ! update iteration count and error measure
           itercount=itercount+1
           !if (reserr < restol) exit
@@ -336,7 +348,7 @@ contains
        end do ! end do for the do while loop
 
        ! update phi:
-       phi_np1(:,:,1:nlev) =  phi_n0(:,:,1:nlev) +  dt2*g*w_np1(:,:,1:nlev)
+       phi_np1(:,:,1:nlev) =  phi_n0(:,:,1:nlev) +  dt2*g_from_phi(phi_n0(:,:,1:nlev), nlev)*w_np1(:,:,1:nlev) !DA_CHANGE
 
 
        ! keep track of running  max iteraitons and max error (reset after each diagnostics output)
@@ -364,8 +376,9 @@ contains
   end subroutine compute_stage_value_dirk
 
 
-  subroutine get_dirk_jacobian(JacL,JacD,JacU,dt2,dp3d,dphi,pnh,exact,&
+  subroutine get_dirk_jacobian(JacL,JacD,JacU,dt2,dp3d,dphi,phi_i,pnh,exact,&
      epsie,hvcoord,dpnh_dp_i,vtheta_dp)
+  use deep_atm_mod, only: r_hat_from_phi, g_from_phi
   !================================================================================
   ! compute Jacobian of F(phi) = sum(dphi) +const + (dt*g)^2 *(1-dp/dpi) column wise
   ! with respect to phi
@@ -390,6 +403,7 @@ contains
     real (kind=real_kind), intent(in)  :: dp3d(np,np,nlev)
     real (kind=real_kind), intent(inout) :: pnh(np,np,nlev)
     real (kind=real_kind), intent(in)  :: dphi(np,np,nlev)
+    real (kind=real_kind), intent(in)  :: phi_i(np,np,nlevp)
     real (kind=real_kind), intent(in)  :: dt2
 
     real (kind=real_kind), intent(in), optional :: epsie ! epsie is the differencing size in the approx. Jacobian
@@ -401,36 +415,44 @@ contains
 
     ! local
     real (kind=real_kind) :: alpha1(np,np),alpha2(np,np)
-    real (kind=real_kind) :: e(np,np,nlev),dphi_temp(np,np,nlev),exner(np,np,nlev)
+    real (kind=real_kind) :: e(np,np,nlev),dphi_temp(np,np,nlev),exner(np,np,nlev),phi_i_tmp(np,np,nlevp)
     real (kind=real_kind) :: dpnh2(np,np,nlev),dpnh_dp_i_epsie(np,np,nlevp)
-    real (kind=real_kind) :: ds(np,np,nlev),delta_mu(np,np,nlevp)
-    real (kind=real_kind) :: a,b(np,np),ck(np,np),ckm1(np,np)
+    real (kind=real_kind) :: ds(np,np,nlev),delta_mu(np,np,nlevp),r_hat(np,np,nlevp)
+    real (kind=real_kind) :: a(np,np),b(np,np),ck(np,np),ckm1(np,np)
     !
     integer :: k,l,k2
-    if (exact.eq.1) then ! use exact Jacobian
+    if (exact.eq.1) then ! use exact JacobianA
+
        ! this code will need to change when the equation of state is changed.
        ! add special cases for k==1 and k==nlev+1
-
-       a  = (dt2*g)**2/(1-kappa)
+       phi_i_tmp = phi_i
        k  = 1 ! Jacobian row 1
+       r_hat(:,:,k) = r_hat_from_phi(phi_i_tmp(:,:,k)) ! DA_CHANGE
+       a  = (dt2*(g_from_phi(phi_i_tmp(:,:,k))))**2/(1-kappa) ! DA_CHANGE
        b  = a/dp3d(:,:,k)
        ck = pnh(:,:,k)/dphi(:,:,k)
-       JacU(:,:,k) = 2*b*ck
+       JacU(:,:,k) = 0 * r_hat(:,:,k)**2 * 2*b*ck ! Neumann upper boundary sets \mu \equiv 1
        JacD(:,:,k) = 1 - JacU(:,:,k)
        ckm1 = ck
        do k = 2,nlev-1 ! Jacobian row k
+          r_hat(:,:,k) = r_hat_from_phi(phi_i_tmp(:,:,k)) ! DA_CHANGE
+          a  = (dt2*(g_from_phi(phi_i_tmp(:,:,k))))**2/(1-kappa) ! DA_CHANGE
           b  = 2*a/(dp3d(:,:,k-1) + dp3d(:,:,k))
           ck = pnh(:,:,k)/dphi(:,:,k)
-          JacL(:,:,k-1) = b*ckm1
-          JacU(:,:,k  ) = b*ck
+          JacL(:,:,k-1) = r_hat(:,:,k)**2 * b*ckm1 ! TODO: this disagrees with definition of b that comes from Neumann 
+          JacU(:,:,k  ) = r_hat(:,:,k)**2 * b*ck
           JacD(:,:,k  ) = 1 - JacL(:,:,k-1) - JacU(:,:,k)
           ckm1 = ck
        end do
+
+       !JacL(:,:,1) = 0
        k  = nlev ! Jacobian row nlev
+       r_hat(:,:,k) = r_hat_from_phi( phi_i_tmp(:,:,k)) !DA_CHANGE
+       a  = (dt2*(g_from_phi(phi_i_tmp(:,:,k))))**2/(1-kappa) !DA_CHANGE
        b  = 2*a/(dp3d(:,:,k) + dp3d(:,:,k-1))
        ck = pnh(:,:,k)/dphi(:,:,k)
-       JacL(:,:,k-1) = b*ckm1
-       JacD(:,:,k  ) = 1 - JacL(:,:,k-1) - b*ck
+       JacL(:,:,k-1) = r_hat(:,:,k)**2 * b*ckm1
+       JacD(:,:,k  ) = 1 - JacL(:,:,k-1) - r_hat(:,:,k)**2 * b*ck
 
     else ! use finite difference approximation to Jacobian with differencing size espie
       ! compute Jacobian of F(dphi) = phi +const + (dt*g)^2 *(1-dp/dpi) column wise
@@ -439,6 +461,7 @@ contains
       ! we only form the tridagonal entries and this code can easily be modified to
       ! accomodate sparse non-tridigonal and dense Jacobians, however, testing only
       ! the tridiagonal of a Jacobian is probably sufficient for testing purpose
+      phi_i_tmp = phi_i
       do k=1,nlev
         e=0
         e(:,:,k)=1
@@ -452,8 +475,13 @@ contains
            !dpnh_dp_i_epsie(:,:,:)=1.d0
            delta_mu=0
         else
-           call pnh_and_exner_from_eos2(hvcoord,vtheta_dp,dp3d,dphi_temp,pnh,exner,dpnh_dp_i_epsie,'get_dirk_jacobian')
-           delta_mu(:,:,:)=(g*dt2)**2*(dpnh_dp_i(:,:,:)-dpnh_dp_i_epsie(:,:,:))/epsie
+           do k2=nlev,1,-1  ! scan
+              phi_i_tmp(:,:,k2) = phi_i_tmp(:,:,k2+1)-dphi_temp(:,:,k2)
+           enddo
+ 
+           call pnh_and_exner_from_eos2(hvcoord,vtheta_dp,dp3d,dphi_temp,phi_i_tmp, pnh,exner,dpnh_dp_i_epsie,'get_dirk_jacobian')
+           r_hat = r_hat_from_phi(phi_i_tmp, nlevp) !DA_CHANGE
+           delta_mu(:,:,:)= (g_from_phi(phi_i_tmp,nlevp)*dt2)**2*(dpnh_dp_i(:,:,:)-dpnh_dp_i_epsie(:,:,:))/epsie ! DA_CHANGE
         end if
 
         JacD(:,:,k) = 1 +  delta_mu(:,:,k)
@@ -510,7 +538,7 @@ contains
        do k=1,nlev
           dphi(:,:,k)=phi_i(:,:,k+1)-phi_i(:,:,k)
        enddo
-       call get_dirk_jacobian(JacL,JacD,JacU,dt,dp3d,dphi,pnh,1)
+       call get_dirk_jacobian(JacL,JacD,JacU,dt,dp3d,dphi,phi_i,pnh,1)
 
       ! compute infinity norm of the initial Jacobian 
        norminfJ0=0.d0
@@ -546,7 +574,7 @@ contains
           do k=1,nlev
              dphi(:,:,k)=phi_i(:,:,k+1)-phi_i(:,:,k)
           enddo
-          call get_dirk_jacobian(Jac2L,Jac2D,Jac2U,dt,dp3d,dphi,pnh,0,&
+          call get_dirk_jacobian(Jac2L,Jac2D,Jac2U,dt,dp3d,dphi,phi_i,pnh,0,&
              epsie,hvcoord,dpnh_dp_i,vtheta_dp)
 
           if (maxval(abs(JacD(:,:,:)-Jac2D(:,:,:))) > jacerrorvec(j)) then 

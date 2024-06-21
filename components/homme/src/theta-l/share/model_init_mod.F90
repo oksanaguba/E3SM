@@ -25,7 +25,7 @@ module model_init_mod
   use control_mod,        only: qsplit,theta_hydrostatic_mode, hv_ref_profiles, &
        hv_theta_correction, tom_sponge_start
   use time_mod,           only: timelevel_qdp, timelevel_t
-  use physical_constants, only: g, TREF, Rgas, kappa
+  use physical_constants, only: gravit, TREF, Rgas, kappa, rearth
   use imex_mod,           only: test_imex_jacobian
   use eos,                only: phi_from_eos
 
@@ -34,6 +34,7 @@ module model_init_mod
 contains
 
   subroutine model_init2(elem,hybrid,deriv,hvcoord,tl,nets,nete )
+    use deep_atm_mod, only: r_hat_from_phi, g_from_phi
 
     type(element_t)   , intent(inout) :: elem(:)
     type(hybrid_t)    , intent(in)    :: hybrid
@@ -45,13 +46,17 @@ contains
     ! local variables
     integer :: ie,t,k
     real (kind=real_kind) :: gradtemp(np,np,2,nets:nete)
+    real (kind=real_kind) :: recip_r_hat(np, np)
     real (kind=real_kind) :: temp(np,np,nlev),ps_ref(np,np)
     real (kind=real_kind) :: ptop_over_press
 
 
     ! other theta specific model initialization should go here
     do ie=nets,nete
+       recip_r_hat = 1.0_real_kind/r_hat_from_phi(elem(ie)%state%phis(:,:)) !DA_CHANGE
        gradtemp(:,:,:,ie) = gradient_sphere( elem(ie)%state%phis(:,:), deriv, elem(ie)%Dinv)
+       gradtemp(:,:,1,ie) = recip_r_hat * gradtemp(:,:,1,ie) 
+       gradtemp(:,:,2,ie) = recip_r_hat * gradtemp(:,:,2,ie) 
     enddo
     call make_C0_vector(gradtemp,elem,hybrid,nets,nete)
 
@@ -63,7 +68,7 @@ contains
       else
         elem(ie)%state%w_i(:,:,nlevp,tl%n0) = (&
            elem(ie)%state%v(:,:,1,nlev,tl%n0)*elem(ie)%derived%gradphis(:,:,1) + &
-           elem(ie)%state%v(:,:,2,nlev,tl%n0)*elem(ie)%derived%gradphis(:,:,2))/g
+           elem(ie)%state%v(:,:,2,nlev,tl%n0)*elem(ie)%derived%gradphis(:,:,2))/g_from_phi(elem(ie)%state%phis(:,:)) ! DA_CHANGE
       endif
 
       ! assign phinh_i(nlevp) to be phis at all timelevels

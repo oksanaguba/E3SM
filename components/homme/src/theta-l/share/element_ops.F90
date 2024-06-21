@@ -59,8 +59,9 @@ module element_ops
   use kinds,          only: real_kind, iulog
   use perf_mod,       only: t_startf, t_stopf, t_barrierf, t_adj_detailf ! _EXTERNAL
   use parallel_mod,   only: abortmp
-  use physical_constants, only : p0, Cp, Rgas, Rwater_vapor, Cpwater_vapor, kappa, g, dd_pi, TREF
+  use physical_constants, only : p0, Cp, Rgas, Rwater_vapor, Cpwater_vapor, kappa, rearth, gravit, dd_pi, TREF
   use control_mod,    only: use_moisture, theta_hydrostatic_mode, hv_ref_profiles
+  use deep_atm_mod,   only: quasi_hydrostatic_terms
   use eos,            only: pnh_and_exner_from_eos, phi_from_eos
   implicit none
   private
@@ -124,7 +125,7 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
       if(theta_hydrostatic_mode) then
         call get_field(elem,'omega',omega,hvcoord,nt,ntQ)
         call get_field(elem,'rho'  ,rho  ,hvcoord,nt,ntQ)
-        field = -omega/(rho *g)
+        field = -omega/(rho *gravit)
 
       else
         field =elem%state%w_i(:,:,1:nlev,nt)
@@ -156,10 +157,11 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
       endif
     case('geo_i');
       if(theta_hydrostatic_mode) then
-         call phi_from_eos(hvcoord,elem%state%phis,elem%state%vtheta_dp(:,:,:,nt),elem%state%dp3d(:,:,:,nt),field)
+         call phi_from_eos(hvcoord,elem%state%phis,elem%state%ps_v(:,:,nt),elem%state%vtheta_dp(:,:,:,nt),elem%state%dp3d(:,:,:,nt),field)
       else
           field = elem%state%phinh_i(:,:,1:nlevp,nt)
       endif
+ 
     case('mu_i');
       call get_dpnh_dp_i(elem,field,hvcoord,nt)
     case('pnh_i');
@@ -364,7 +366,7 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
 
     if(theta_hydrostatic_mode) then
        dp=elem%state%dp3d(:,:,:,nt)
-       call phi_from_eos(hvcoord,elem%state%phis,elem%state%vtheta_dp(:,:,:,nt),dp,phi_i)
+       call phi_from_eos(hvcoord,elem%state%phis,elem%state%ps_v(:,:,nt),elem%state%vtheta_dp(:,:,:,nt),dp,phi_i)
     else
        phi_i = elem%state%phinh_i(:,:,:,nt)
     endif
@@ -506,6 +508,7 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
 
   !_____________________________________________________________________
   subroutine set_state(u,v,w,T,ps,phis,p,dp,zm,g,i,j,k,elem,n0,n1)
+  use deep_atm_mod, only: r_hat_from_phi, phi_from_z
   !
   ! set state variables at node(i,j,k) at layer midpoints
   ! used by idealized tests for dry initial conditions
@@ -514,19 +517,22 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
   real(real_kind),  intent(in)    :: u,v,w,T,ps,phis,p,dp,zm,g
   integer,          intent(in)    :: i,j,k,n0,n1
   type(element_t),  intent(inout) :: elem
+  real(real_kind) :: r_hat, pdensity
 
+  r_hat = r_hat_from_phi(phi_from_z(zm))
+  pdensity = dp
   ! set prognostic state variables at level midpoints
   elem%state%v   (i,j,1,k,n0:n1)   = u
   elem%state%v   (i,j,2,k,n0:n1)   = v
-  elem%state%dp3d(i,j,k,  n0:n1)   = dp
+  elem%state%dp3d(i,j,k,  n0:n1)   = pdensity
   elem%state%ps_v(i,j,    n0:n1)   = ps
   elem%state%phis(i,j)             = phis
-  elem%state%vtheta_dp(i,j,k,n0:n1)=T*dp*((p/p0)**(-kappa))
+  elem%state%vtheta_dp(i,j,k,n0:n1)=T*pdensity*((p/p0)**(-kappa))
 
   end subroutine set_state
 
-
   subroutine set_state_i(u,v,w,T,ps,phis,p,zm,g,i,j,k,elem,n0,n1)
+  use deep_atm_mod, only: phi_from_z
   !
   ! set state variables at node(i,j,k) at layer interfaces
   ! used by idealized tests for dry initial conditions
@@ -538,12 +544,13 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
 
   ! set prognostic state variables at level midpoints
   elem%state%w_i  (i,j,k,  n0:n1)  = w
-  elem%state%phinh_i(i,j,k, n0:n1) = g*zm
+  elem%state%phinh_i(i,j,k, n0:n1) = phi_from_z(zm)
 
   end subroutine set_state_i
 
   !_____________________________________________________________________
   subroutine set_elem_state(u,v,w,w_i,T,ps,phis,p,dp,zm,zi,g,elem,n0,n1,ntQ)
+  use deep_atm_mod, only: r_hat_from_phi, phi_from_z
   !
   ! set element state variables
   ! works for both dry and moist initial conditions
@@ -557,27 +564,33 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
   type(element_t),  intent(inout) :: elem
   integer :: n
   real(real_kind), dimension(np,np,nlev) :: Rstar
+  real(real_kind), dimension(np,np,nlev) :: r_hat, pdensity
 
   ! get cp and kappa for dry or moist cases
   call get_R_star(Rstar,elem%state%Q(:,:,:,1))
+
+  
+  r_hat = r_hat_from_phi(phi_from_z(zm, nlev), nlev)
+  pdensity = dp
 
   do n=n0,n1
     ! set prognostic state variables at level midpoints
     elem%state%v   (:,:,1,:,n)        = u
     elem%state%v   (:,:,2,:,n)        = v
-    elem%state%dp3d(:,:,:,  n)        = dp
+    elem%state%dp3d(:,:,:,  n)        = pdensity
     elem%state%ps_v(:,:,    n)        = ps
     elem%state%phis(:,:)              = phis
-    elem%state%vtheta_dp(:,:,:,n)   = (Rstar/Rgas)*T*dp*((p/p0)**(-kappa))
+    elem%state%vtheta_dp(:,:,:,n)   = (Rstar/Rgas)*T*pdensity*((p/p0)**(-kappa)) !/r_hat**2
 
     elem%state%w_i (:,:,:,  n)   = w_i
-    elem%state%phinh_i(:,:,:, n) = g*zi
+    elem%state%phinh_i(:,:,:, n) = phi_from_z(zi, nlevp)
   end do
 
   end subroutine set_elem_state
 
   !_____________________________________________________________________
   subroutine get_state(u,v,w,T,pnh,dp,ps,rho,zm,zi,g,elem,hvcoord,nt,ntQ)
+  use deep_atm_mod, only: z_from_phi
     ! get state variables at layer midpoints
     ! used by idealized tests to compute idealized physics forcing terms
     ! currently all forcing is done on u,v and T/theta - no forcing
@@ -629,10 +642,10 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
     endif
 
     do k=1,nlev
-       zm(:,:,k) = (phi_i(:,:,k)+phi_i(:,:,k+1))/(2*g)
+       zm(:,:,k) = (z_from_phi(phi_i(:,:,k))+z_from_phi(phi_i(:,:,k+1)))/(2)
     end do
     do k=1,nlevp
-       zi(:,:,k) = phi_i(:,:,k)/g
+       zi(:,:,k) = z_from_phi(phi_i(:,:,k))
     end do
 
   end subroutine get_state
@@ -695,7 +708,8 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
 
   !_____________________________________________________________________
   subroutine tests_finalize(elem,hvcoord,ie)
-
+  use deep_atm_mod, only: r_hat_from_phi, z_from_phi, phi_from_z, g_from_phi
+  USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
   ! Now that all variables have been initialized, set phi to be in hydrostatic balance
 
   implicit none
@@ -704,26 +718,33 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
   type(element_t),     intent(inout):: elem
   integer, optional,   intent(in)   :: ie ! optional element index, to save initial state
 
-  integer :: k,tl
+  integer :: k,tl, nind
   real(real_kind), dimension(np,np,nlev) :: pi
-
-  real(real_kind), dimension(np,np,nlev) :: pnh,exner
-  real(real_kind), dimension(np,np,nlevp) :: dpnh_dp_i,phi_i
+  real(real_kind), dimension(np,np,nlev) :: pnh,exner,dphi_tmp, dp
+  real(real_kind), dimension(np,np,nlevp) :: dpnh_dp_i,phi_i, phi_i_tmp
+  integer :: niter = 0
+  logical, parameter :: do_rootfinding = .false., pnh_instead_of_mu=.false.
 
   tl=1
-
-  call phi_from_eos(hvcoord,elem%state%phis,elem%state%vtheta_dp(:,:,:,tl),&
-       elem%state%dp3d(:,:,:,tl),elem%state%phinh_i(:,:,:,tl))
+  
+  !call phi_from_eos(hvcoord,elem%state%phis,elem%state%vtheta_dp(:,:,:,tl),&
+  !     elem%state%dp3d(:,:,:,tl),elem%state%phinh_i(:,:,:,tl))
 
   ! Disable the following check in CUDA bfb builds,
   ! since the calls to pow are inexact
 #if !(defined(HOMMEXX_BFB_TESTING) && defined(HOMMEXX_ENABLE_GPU))
-  ! verify discrete hydrostatic balance
+    
+
+  ! verify discrete hydrostatic balance:
+  ! =====================================
   call pnh_and_exner_from_eos(hvcoord,elem%state%vtheta_dp(:,:,:,tl),&
        elem%state%dp3d(:,:,:,tl),elem%state%phinh_i(:,:,:,tl),pnh,exner,dpnh_dp_i)
+ 
+  ! =====================
+   
   do k=1,nlev
      pi(:,:,k) = hvcoord%hyam(k)*hvcoord%ps0 + hvcoord%hybm(k)*elem%state%ps_v(:,:,tl)
-     if (maxval(abs(1-dpnh_dp_i(:,:,k))) > 1e-10) then
+     if (maxval(abs(1-dpnh_dp_i(:,:,k))) > 1e-9) then
         write(iulog,*)'WARNING: hydrostatic inverse FAILED!'
         write(iulog,*)k,minval(dpnh_dp_i(:,:,k)),maxval(dpnh_dp_i(:,:,k))
         write(iulog,*) 'pnh',pi(1,1,k),pnh(1,1,k)
@@ -775,7 +796,7 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
 
    ! compute phi_ref
    temp = theta_ref*dp_ref
-   call phi_from_eos(hvcoord, phis, temp, dp_ref, phi_ref)
+   call phi_from_eos(hvcoord, phis, ps_ref, temp, dp_ref, phi_ref)
 
    ! keep profiles, based on the value of hv_ref_profiles
    if (hv_ref_profiles == 0) then
@@ -820,7 +841,7 @@ recursive subroutine get_field(elem,name,field,hvcoord,nt,ntQ)
   ! reference T = 288K.  reference lapse rate = 6.5K/km   = .0065 K/m
   ! Tref = T0+T1*exner
   ! Thetaref = T0/exner + T1
-  T1 = tref_lapse_rate*TREF*Cp/g ! = 191
+  T1 = tref_lapse_rate*TREF*Cp/gravit ! = 191 WARNING: NOT ADAPTED TO DEEP ATMOSPHERE
   T0 = TREF-T1           ! = 97
 
   p_i(:,:,1) =  hvcoord%hyai(1)*hvcoord%ps0

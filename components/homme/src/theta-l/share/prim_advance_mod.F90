@@ -5,7 +5,7 @@
 !
 !  Man dynamics routines for "theta" nonhydrostatic model
 !  Original version: Mark Taylor 2017/1
-!  
+! call  
 !  2018/8 TOM sponge layer scaling from P. Lauritzen
 !  09/2018: O. Guba  code for new ftypes
 !  2018/12: M. Taylor apply forcing assuming nearly constant p 
@@ -34,7 +34,7 @@ module prim_advance_mod
   use kinds,              only: iulog, real_kind
   use perf_mod,           only: t_adj_detailf, t_barrierf, t_startf, t_stopf ! _EXTERNAL
   use parallel_mod,       only: abortmp, global_shared_buf, global_shared_sum, iam, parallel_t
-  use physical_constants, only: Cp, cp, cpwater_vapor, g, kappa, Rgas, Rwater_vapor, p0, TREF
+  use physical_constants, only: Cp, cp, cpwater_vapor, gravit, kappa, Rgas, Rwater_vapor, p0, TREF, rearth, omega_earth => omega
   use physics_mod,        only: virtual_specific_heat, virtual_temperature
   use prim_si_mod,        only: preq_vertadv_v1
   use reduction_mod,      only: parallelmax, reductionbuffer_ordered_1d_t
@@ -82,6 +82,7 @@ contains
   !_____________________________________________________________________
   subroutine prim_advance_exp(elem, deriv, hvcoord, hybrid,dt, tl,  nets, nete, compute_diagnostics)
     use imex_mod, only: compute_stage_value_dirk
+    use deep_atm_mod, only: g_from_phi
 #ifdef ARKODE
     use arkode_mod,     only: parameter_list, evolve_solution, &
                               calc_nonlinear_stats, update_nonlinear_stats, &
@@ -104,6 +105,7 @@ contains
     real (kind=real_kind) :: itertol,a1,a2,a3,a4,a5,a6,ahat1,ahat2
     real (kind=real_kind) :: ahat3,ahat4,ahat5,ahat6,dhat1,dhat2,dhat3,dhat4
     real (kind=real_kind) ::  gamma,delta,ap,aphat,dhat5,offcenter
+    real (kind=real_kind) :: pnh(np, np, nlev), exner(np, np, nlev), dpnh_i(np,np,nlevp)
 
     integer :: ie,nm1,n0,np1,nstep,qsplit_stage,k
     integer :: n,i,j,maxiter
@@ -141,7 +143,7 @@ contains
 !   this should not be needed, but in case physics update u without updating w b.c.:
     do ie=nets,nete
        elem(ie)%state%w_i(:,:,nlevp,n0) = (elem(ie)%state%v(:,:,1,nlev,n0)*elem(ie)%derived%gradphis(:,:,1) + &
-            elem(ie)%state%v(:,:,2,nlev,n0)*elem(ie)%derived%gradphis(:,:,2))/g
+            elem(ie)%state%v(:,:,2,nlev,n0)*elem(ie)%derived%gradphis(:,:,2))/g_from_phi(elem(ie)%state%phis(:,:)) !DA_CHANGE
     enddo
  
 #if !defined(CAM) && !defined(SCREAM)
@@ -152,6 +154,7 @@ contains
        return
     endif
 #endif
+
 
     ! ==================================
     ! Take timestep
@@ -517,7 +520,7 @@ contains
 !----------------------------- APPLYCAMFORCING-DYNAMICS ----------------------------
 
   subroutine applyCAMforcing_dynamics(elem,hvcoord,np1,dt,nets,nete)
-
+  use deep_atm_mod, only: g_from_phi
   type (element_t)     ,  intent(inout) :: elem(:)
   real (kind=real_kind),  intent(in)    :: dt
   type (hvcoord_t),       intent(in)    :: hvcoord
@@ -537,7 +540,7 @@ contains
 
      ! finally update w at the surface: 
      elem(ie)%state%w_i(:,:,nlevp,np1) = (elem(ie)%state%v(:,:,1,nlev,np1)*elem(ie)%derived%gradphis(:,:,1) + &
-          elem(ie)%state%v(:,:,2,nlev,np1)*elem(ie)%derived%gradphis(:,:,2))/g
+          elem(ie)%state%v(:,:,2,nlev,np1)*elem(ie)%derived%gradphis(:,:,2))/g_from_phi(elem(ie)%state%phis(:,:)) !DA_CHANGE
   enddo
   
   end subroutine applyCAMforcing_dynamics
@@ -546,6 +549,7 @@ contains
 !----------------------------- ADVANCE-HYPERVIS ----------------------------
 
   subroutine advance_hypervis(elem,hvcoord,hybrid,deriv,nt,nets,nete,dt2,eta_ave_w)
+  use deep_atm_mod, only: g_from_phi, quasi_hydrostatic_terms
   !
   !  take one timestep of:
   !          u(:,:,:,np) = u(:,:,:,np) +  dt2*nu*laplacian**order ( u )
@@ -770,7 +774,7 @@ contains
     
      ! finally update w at the surface: 
      elem(ie)%state%w_i(:,:,nlevp,nt) = (elem(ie)%state%v(:,:,1,nlev,nt)*elem(ie)%derived%gradphis(:,:,1) + &
-          elem(ie)%state%v(:,:,2,nlev,nt)*elem(ie)%derived%gradphis(:,:,2))/g
+          elem(ie)%state%v(:,:,2,nlev,nt)*elem(ie)%derived%gradphis(:,:,2))/g_from_phi(elem(ie)%state%phis(:,:)) ! DA_CHANGE
   enddo
 
 
@@ -866,6 +870,7 @@ contains
 
 
   subroutine advance_physical_vis(elem,hvcoord,hybrid,deriv,nt,nets,nete,dt,mu_s,mu)
+  use deep_atm_mod, only: g_from_phi
   !
   !  take one timestep of of physical viscosity (single laplace operator) for
   !  all state variables in both horizontal and vertical
@@ -1006,7 +1011,7 @@ contains
 
      ! finally update w at the surface: 
      elem(ie)%state%w_i(:,:,nlevp,nt) = (elem(ie)%state%v(:,:,1,nlev,nt)*elem(ie)%derived%gradphis(:,:,1) + &
-          elem(ie)%state%v(:,:,2,nlev,nt)*elem(ie)%derived%gradphis(:,:,2))/g
+          elem(ie)%state%v(:,:,2,nlev,nt)*elem(ie)%derived%gradphis(:,:,2))/g_from_phi(elem(ie)%state%phis(:,:)) !DA_CHANGE
   enddo
 
 
@@ -1022,6 +1027,9 @@ contains
 
  subroutine compute_andor_apply_rhs(np1,nm1,n0,dt2,elem,hvcoord,hybrid,&
        deriv,nets,nete,compute_diagnostics,eta_ave_w,scale1,scale2,scale3)
+  use deep_atm_mod, only: r_hat_from_phi, z_from_phi, g_from_phi, quasi_hydrostatic_terms
+  use baroclinic_wave, only: baroclinic_wave_test
+  use control_mod, only: atm_is_deep
   ! ===================================
   ! compute the RHS, accumulate into u(np1) and apply DSS
   !
@@ -1088,7 +1096,18 @@ contains
   real (kind=real_kind) :: w_tens(np,np,nlevp)  ! need to update w at surface as well
   real (kind=real_kind) :: theta_tens(np,np,nlev)
   real (kind=real_kind) :: phi_tens(np,np,nlevp)
-                                               
+
+  real (kind=real_kind) :: recip_r_hat(np,np,nlev)
+  real (kind=real_kind) :: recip_r_hat_vec(np,np,2,nlev)
+  real (kind=real_kind) :: recip_r_hat_i_vec(np,np,2,nlevp)
+  real (kind=real_kind) :: recip_r_hat_i(np,np,nlevp)
+  real (kind=real_kind) :: fcos(np, np)
+  real (kind=real_kind) :: w_deep_metric_term(np,np,nlevp)
+  real (kind=real_kind) :: w_deep_coriolis_term(np,np,nlevp)
+
+  real (kind=real_kind) :: u_deep_metric_term(np,np,nlev)
+  real (kind=real_kind) :: v_deep_metric_term(np,np,nlev)
+  real (kind=real_kind) :: u_deep_coriolis_term(np,np,nlev)
 
   real (kind=real_kind) :: pi(np,np,nlev)                ! hydrostatic pressure
   real (kind=real_kind) :: pi_i(np,np,nlevp)             ! hydrostatic pressure interfaces
@@ -1098,6 +1117,7 @@ contains
   real (kind=real_kind) ::  vtemp(np,np,2,nlev)       ! generic gradient storage
   real (kind=real_kind), dimension(np,np) :: sdot_sum ! temporary field
   real (kind=real_kind) ::  v1,v2,w,d_eta_dot_dpdn_dn, T0
+  real (kind=real_kind) :: u_tmp, v_tmp, t_tmp, p_tmp, phis_tmp, rho_tmp, theta_tmp, q_tmp, psv_tmp, lon_tmp, lat_tmp, z_tmp, maxdiff 
   integer :: i,j,k,kptr,ie, nlyr_tot
 
   call t_startf('compute_andor_apply_rhs')
@@ -1114,43 +1134,42 @@ contains
      vtheta(:,:,:) = vtheta_dp(:,:,:)/dp3d(:,:,:)
      phi_i => elem(ie)%state%phinh_i(:,:,:,n0)
 
-#ifdef ENERGY_DIAGNOSTICS
-     if (.not. theta_hydrostatic_mode) then
-        ! check w b.c.
-        temp(:,:,1) =  (elem(ie)%state%v(:,:,1,nlev,n0)*elem(ie)%derived%gradphis(:,:,1) + &
-             elem(ie)%state%v(:,:,2,nlev,n0)*elem(ie)%derived%gradphis(:,:,2))/g
-        do j=1,np
-        do i=1,np
-           if ( abs(temp(i,j,1)-elem(ie)%state%w_i(i,j,nlevp,n0)) >1e-10) then
-              write(iulog,*) 'WARNING:CAAR w(n0) does not satisfy b.c.',ie,i,j,k
-              write(iulog,*) 'val1 = ',temp(i,j,1)
-              write(iulog,*) 'val2 = ',elem(ie)%state%w_i(i,j,nlevp,n0)
-              write(iulog,*) 'diff: ',temp(i,j,1)-elem(ie)%state%w_i(i,j,nlevp,n0)
-           endif
-        enddo
-        enddo
-        ! w boundary condition. just in case:
-        !elem(ie)%state%w_i(:,:,nlevp,n0) = (elem(ie)%state%v(:,:,1,nlev,n0)*elem(ie)%derived%gradphis(:,:,1) + &
-        !     elem(ie)%state%v(:,:,2,nlev,n0)*elem(ie)%derived%gradphis(:,:,2))/g
-
-        ! check for layer spacing <= 1m
-        do k=1,nlev
-        do j=1,np
-        do i=1,np
-           if ((phi_i(i,j,k)-phi_i(i,j,k+1)) < g) then
-              write(iulog,*) 'WARNING:CAAR before ADV, delta z < 1m. ie,i,j,k=',ie,i,j,k
-              write(iulog,*) 'phi(i,j,k)=  ',phi_i(i,j,k)
-              write(iulog,*) 'phi(i,j,k+1)=',phi_i(i,j,k+1)
-           endif
-        enddo
-        enddo
-        enddo
-     endif
-#endif
+!#ifdef ENERGY_DIAGNOSTICS
+!     if (.not. theta_hydrostatic_mode) then
+!        ! check w b.c.
+!        temp(:,:,1) =  (elem(ie)%state%v(:,:,1,nlev,n0)*elem(ie)%derived%gradphis(:,:,1) + &
+!             elem(ie)%state%v(:,:,2,nlev,n0)*elem(ie)%derived%gradphis(:,:,2))/g
+!        do j=1,np
+!        do i=1,np
+!           if ( abs(temp(i,j,1)-elem(ie)%state%w_i(i,j,nlevp,n0)) >1e-10) then
+!              write(iulog,*) 'WARNING:CAAR w(n0) does not satisfy b.c.',ie,i,j,k
+!              write(iulog,*) 'val1 = ',temp(i,j,1)
+!              write(iulog,*) 'val2 = ',elem(ie)%state%w_i(i,j,nlevp,n0)
+!              write(iulog,*) 'diff: ',temp(i,j,1)-elem(ie)%state%w_i(i,j,nlevp,n0)
+!           endif
+!        enddo
+!        enddo
+!        ! w boundary condition. just in case:
+!        !elem(ie)%state%w_i(:,:,nlevp,n0) = (elem(ie)%state%v(:,:,1,nlev,n0)*elem(ie)%derived%gradphis(:,:,1) + &
+!        !     elem(ie)%state%v(:,:,2,nlev,n0)*elem(ie)%derived%gradphis(:,:,2))/g
+!
+!        ! check for layer spacing <= 1m
+!        do k=1,nlev
+!        do j=1,np
+!        do i=1,np
+!           if ((phi_i(i,j,k)-phi_i(i,j,k+1)) < g) then
+!              write(iulog,*) 'WARNING:CAAR before ADV, delta z < 1m. ie,i,j,k=',ie,i,j,k
+!              write(iulog,*) 'phi(i,j,k)=  ',phi_i(i,j,k)
+!              write(iulog,*) 'phi(i,j,k+1)=',phi_i(i,j,k+1)
+!           endif
+!        enddo
+!        enddo
+!        enddo
+!     endif
+!#endif
      ! this routine will set dpnh_dp_i(nlevp)=1 - a very good approximation, that will
      ! then be corrected below, after the DSS.  
      call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_i,pnh,exner,dpnh_dp_i,caller='CAAR')
-
      dp3d_i(:,:,1) = dp3d(:,:,1)
      dp3d_i(:,:,nlevp) = dp3d(:,:,nlev)
      do k=2,nlev
@@ -1176,10 +1195,15 @@ contains
         ! set to zero so H and NH can share code and reduce if statements
         elem(ie)%state%w_i(:,:,:,n0)=0   
      endif
+     recip_r_hat_i = 1.0_real_kind/r_hat_from_phi(phi_i, nlevp) ! DA_CHANGE
+     recip_r_hat_i_vec(:,:,1,:) = recip_r_hat_i ! DA_CHANGE
+     recip_r_hat_i_vec(:,:,1,:) = recip_r_hat_i ! DA_CHANGE
 
      do k=1,nlev
         phi(:,:,k) = (phi_i(:,:,k)+phi_i(:,:,k+1))/2  ! for diagnostics
-
+        recip_r_hat(:,:,k) = 1.0_real_kind/r_hat_from_phi(phi(:,:,k)) !DA_CHANGE
+        recip_r_hat_vec(:,:,1,k) = recip_r_hat(:,:,k)
+        recip_r_hat_vec(:,:,2,k) = recip_r_hat(:,:,k)
         ! ================================
         ! Accumulate mean Vel_rho flux in vn0
         ! ================================
@@ -1187,8 +1211,8 @@ contains
         vtemp(:,:,2,k) = elem(ie)%state%v(:,:,2,k,n0)*dp3d(:,:,k)
         elem(ie)%derived%vn0(:,:,:,k)=elem(ie)%derived%vn0(:,:,:,k)+eta_ave_w*vtemp(:,:,:,k)
 
-        divdp(:,:,k)=divergence_sphere(vtemp(:,:,:,k),deriv,elem(ie))
-        vort(:,:,k)=vorticity_sphere(elem(ie)%state%v(:,:,:,k,n0),deriv,elem(ie))
+        divdp(:,:,k)=divergence_sphere(recip_r_hat_vec(:,:,:,k)*vtemp(:,:,:,k),deriv,elem(ie))
+        vort(:,:,k)=recip_r_hat(:,:,k)*vorticity_sphere(elem(ie)%state%v(:,:,:,k,n0),deriv,elem(ie))
      enddo
 
      ! Compute omega =  Dpi/Dt   Used only as a DIAGNOSTIC
@@ -1204,7 +1228,7 @@ contains
 #else
         pi(:,:,k)=pi_i(:,:,k) + dp3d(:,:,k)/2
 #endif
-        vtemp(:,:,:,k) = gradient_sphere( pi(:,:,k), deriv, elem(ie)%Dinv);
+        vtemp(:,:,:,k) = recip_r_hat_vec(:,:,:,k)* gradient_sphere( pi(:,:,k), deriv, elem(ie)%Dinv);
         vgrad_p(:,:,k) = elem(ie)%state%v(:,:,1,k,n0)*vtemp(:,:,1,k)+&
              elem(ie)%state%v(:,:,2,k,n0)*vtemp(:,:,2,k)
         omega(:,:,k) = (vgrad_p(:,:,k) - ( omega_i(:,:,k)+omega_i(:,:,k+1))/2) 
@@ -1222,6 +1246,9 @@ contains
         theta_vadv=0
         v_vadv=0
      else
+        if (atm_is_deep) then
+          call abortmp('ERROR: deep atmosphere not implemented for eulerian configurations')
+        end if
         sdot_sum=0
         do k=1,nlev
            ! ==================================================
@@ -1312,26 +1339,40 @@ contains
      enddo
      elem(ie)%derived%eta_dot_dpdn(:,:,nlev+1) = &
              elem(ie)%derived%eta_dot_dpdn(:,:,nlev+1) + eta_ave_w*eta_dot_dpdn(:,:,nlev+1)
-
+     do j=1,np
+       do i=1,np
+         fcos(i,j) = 2.0D0*omega_earth*cos(elem(ie)%spherep(i,j)%lat)
+       end do
+     end do
+ 
      ! ================================================
      ! w,phi tendencies including surface
      ! ================================================  
      do k=1,nlev
         ! compute gradphi at interfaces and then average to levels
-        gradphinh_i(:,:,:,k)   = gradient_sphere(phi_i(:,:,k),deriv,elem(ie)%Dinv)   
-           
-        gradw_i(:,:,:,k)   = gradient_sphere(elem(ie)%state%w_i(:,:,k,n0),deriv,elem(ie)%Dinv)
+        gradphinh_i(:,:,:,k)   = recip_r_hat_vec(:,:,:,k)*gradient_sphere(phi_i(:,:,k),deriv,elem(ie)%Dinv)   
+        gradw_i(:,:,:,k)   = recip_r_hat_vec(:,:,:,k)*gradient_sphere(elem(ie)%state%w_i(:,:,k,n0),deriv,elem(ie)%Dinv)
         v_gradw_i(:,:,k) = v_i(:,:,1,k)*gradw_i(:,:,1,k) + v_i(:,:,2,k)*gradw_i(:,:,2,k)
+        if ( atm_is_deep .and. (k /=  1)) then
+          w_deep_metric_term(:,:,k) = (v_i(:,:,1,k)**2 + v_i(:,:,2,k)**2)/(rearth + z_from_phi(phi_i(:,:,k))) ! DA_CHANGE
+          w_deep_coriolis_term(:,:,k) = fcos * v_i(:,:,1,k)
+        else
+          w_deep_metric_term(:, :, k) = 0.0_real_kind
+          w_deep_coriolis_term(:,:,k) = 0.0_real_kind
+        end if
         ! w - tendency on interfaces 
-        w_tens(:,:,k) = (-w_vadv_i(:,:,k) - v_gradw_i(:,:,k))*scale1 - scale2*g*(1-dpnh_dp_i(:,:,k) )
+        w_tens(:,:,k) = (-w_vadv_i(:,:,k) - v_gradw_i(:,:,k))*scale1 & 
+                                          + scale1*(w_deep_metric_term(:,:,k) + w_deep_coriolis_term(:,:,k)) & 
+                                          - scale2*g_from_phi((phi_i(:,:,k) + phi_i(:,:,k+1))/2.0)*(1-dpnh_dp_i(:,:,k) ) ! DA_CHANGE
 
+        !write(*,*) "max 1-mu at lev", k, ": ",  maxval(abs(1- dpnh_dp_i(:,:,k)))
         ! phi - tendency on interfaces
         ! vtemp(:,:,:,k) = gradphinh_i(:,:,:,k) + &
         !    (scale2-1)*hvcoord%hybi(k)*elem(ie)%derived%gradphis(:,:,:)
         v_gradphinh_i(:,:,k) = v_i(:,:,1,k)*gradphinh_i(:,:,1,k) &
              +v_i(:,:,2,k)*gradphinh_i(:,:,2,k) 
         phi_tens(:,:,k) =  (-phi_vadv_i(:,:,k) - v_gradphinh_i(:,:,k))*scale1 &
-          + scale2*g*elem(ie)%state%w_i(:,:,k,n0)
+          + scale2*(g_from_phi((phi_i(:,:,k) + phi_i(:,:,k+1))/2.0))*elem(ie)%state%w_i(:,:,k,n0) ! DA_CHANGE
         if (scale1/=scale2) then
            ! add imex phi_h splitting 
            ! use approximate phi_h = hybi*phis 
@@ -1345,18 +1386,22 @@ contains
 
      ! k =nlevp case, all terms in the imex methods are treated explicitly at the boundary
      k =nlevp 
+     w_deep_metric_term(:,:,k) =  (v_i(:,:,1,k)**2 + v_i(:,:,2,k)**2)/(rearth + z_from_phi(phi_i(:,:,k))) ! DA_CHANGE
+  
+    w_deep_coriolis_term(:,:,k) = fcos * v_i(:,:,1,k)
     ! compute gradphi at interfaces and then average to levels
-    gradphinh_i(:,:,:,k)   = gradient_sphere(phi_i(:,:,k),deriv,elem(ie)%Dinv)
-    gradw_i(:,:,:,k)   = gradient_sphere(elem(ie)%state%w_i(:,:,k,n0),deriv,elem(ie)%Dinv)
+    gradphinh_i(:,:,:,k)   = recip_r_hat_vec(:,:,:,k)*gradient_sphere(phi_i(:,:,k),deriv,elem(ie)%Dinv)
+    gradw_i(:,:,:,k)   = recip_r_hat_vec(:,:,:,k)*gradient_sphere(elem(ie)%state%w_i(:,:,k,n0),deriv,elem(ie)%Dinv)
     v_gradw_i(:,:,k) = v_i(:,:,1,k)*gradw_i(:,:,1,k) + v_i(:,:,2,k)*gradw_i(:,:,2,k)
     ! w - tendency on interfaces
-    w_tens(:,:,k) = (-w_vadv_i(:,:,k) - v_gradw_i(:,:,k))*scale1 - scale1*g*(1-dpnh_dp_i(:,:,k) )
+    w_tens(:,:,k) = (-w_vadv_i(:,:,k) - v_gradw_i(:,:,k))*scale1 - scale1*(g_from_phi((phi_i(:,:,k) + phi_i(:,:,k+1)))/2.0)*(1-dpnh_dp_i(:,:,k) ) & !DA_CHANGE
+          - scale1*(w_deep_metric_term(:,:,k) + w_deep_coriolis_term(:,:,k))
 
     ! phi - tendency on interfaces
     v_gradphinh_i(:,:,k) = v_i(:,:,1,k)*gradphinh_i(:,:,1,k) &
      +v_i(:,:,2,k)*gradphinh_i(:,:,2,k)
     phi_tens(:,:,k) =  (-phi_vadv_i(:,:,k) - v_gradphinh_i(:,:,k))*scale1 &
-    + scale1*g*elem(ie)%state%w_i(:,:,k,n0)
+    + scale1*(g_from_phi((phi_i(:,:,k)  + phi_i(:,:,k+1))/2.0))*elem(ie)%state%w_i(:,:,k,n0) !DA_CHANGE
     
 
 
@@ -1370,10 +1415,10 @@ contains
         if (theta_advect_form==0) then
            v_theta(:,:,1,k)=elem(ie)%state%v(:,:,1,k,n0)*vtheta_dp(:,:,k)
            v_theta(:,:,2,k)=elem(ie)%state%v(:,:,2,k,n0)*vtheta_dp(:,:,k)
-           div_v_theta(:,:,k)=divergence_sphere(v_theta(:,:,:,k),deriv,elem(ie))
+           div_v_theta(:,:,k)=divergence_sphere(recip_r_hat_vec(:,:,:,k) * v_theta(:,:,:,k),deriv,elem(ie))
         else
            ! alternate form, non-conservative, better HS topography results
-           v_theta(:,:,:,k) = gradient_sphere(vtheta(:,:,k),deriv,elem(ie)%Dinv)
+           v_theta(:,:,:,k) = recip_r_hat_vec(:, :, :, k) * gradient_sphere(vtheta(:,:,k),deriv,elem(ie)%Dinv)
            div_v_theta(:,:,k)=vtheta(:,:,k)*divdp(:,:,k) + &
                 dp3d(:,:,k)*elem(ie)%state%v(:,:,1,k,n0)*v_theta(:,:,1,k) + &
                 dp3d(:,:,k)*elem(ie)%state%v(:,:,2,k,n0)*v_theta(:,:,2,k) 
@@ -1387,21 +1432,21 @@ contains
         ! w vorticity correction term
         temp(:,:,k) = (elem(ie)%state%w_i(:,:,k,n0)**2 + &
              elem(ie)%state%w_i(:,:,k+1,n0)**2)/4
-        wvor(:,:,:,k) = gradient_sphere(temp(:,:,k),deriv,elem(ie)%Dinv)
+        wvor(:,:,:,k) = recip_r_hat_vec(:,:,:,k) * gradient_sphere(temp(:,:,k),deriv,elem(ie)%Dinv)
         wvor(:,:,1,k) = wvor(:,:,1,k) - (elem(ie)%state%w_i(:,:,k,n0)*gradw_i(:,:,1,k) +&
              elem(ie)%state%w_i(:,:,k+1,n0)*gradw_i(:,:,1,k+1))/2
         wvor(:,:,2,k) = wvor(:,:,2,k) - (elem(ie)%state%w_i(:,:,k,n0)*gradw_i(:,:,2,k) +&
              elem(ie)%state%w_i(:,:,k+1,n0)*gradw_i(:,:,2,k+1))/2
 
         KE(:,:,k) = ( elem(ie)%state%v(:,:,1,k,n0)**2 + elem(ie)%state%v(:,:,2,k,n0)**2)/2
-        gradKE(:,:,:,k) = gradient_sphere(KE(:,:,k),deriv,elem(ie)%Dinv)
-        gradexner(:,:,:,k) = gradient_sphere(exner(:,:,k),deriv,elem(ie)%Dinv)
+        gradKE(:,:,:,k) = recip_r_hat_vec(:,:,:,k)*gradient_sphere(KE(:,:,k),deriv,elem(ie)%Dinv)
+        gradexner(:,:,:,k) = recip_r_hat_vec(:,:,:,k)*gradient_sphere(exner(:,:,k),deriv,elem(ie)%Dinv)
 #if 0
         ! another form: (good results in dcmip2012 test2.0)  max=0.195
         ! but bad results with HS topo
         !  grad(exner) =( grad(theta*exner) - exner*grad(theta))/theta
-        vtemp(:,:,:,k) = gradient_sphere(vtheta(:,:,k)*exner(:,:,k),deriv,elem(ie)%Dinv)
-        v_theta(:,:,:,k) = gradient_sphere(vtheta(:,:,k),deriv,elem(ie)%Dinv)
+        vtemp(:,:,:,k) = recip_r_hat(:,:,k)*gradient_sphere(vtheta(:,:,k)*exner(:,:,k),deriv,elem(ie)%Dinv)
+        v_theta(:,:,:,k) = recip_r_hat(:,:,k)*gradient_sphere(vtheta(:,:,k),deriv,elem(ie)%Dinv)
         gradexner(:,:,1,k) = (vtemp(:,:,1,k)-exner(:,:,k)*v_theta(:,:,1,k))/&
              vtheta(:,:,k)
         gradexner(:,:,2,k) = (vtemp(:,:,2,k)-exner(:,:,k)*v_theta(:,:,2,k))/&
@@ -1409,8 +1454,8 @@ contains
 #endif
 #if 0
         ! entropy form: dcmip2012 test2.0 best: max=0.130  (0.124 with conservation form theta)
-        vtemp(:,:,:,k) = gradient_sphere(vtheta(:,:,k)*exner(:,:,k),deriv,elem(ie)%Dinv)
-        v_theta(:,:,:,k) = gradient_sphere(log(vtheta(:,:,k)),deriv,elem(ie)%Dinv)
+        vtemp(:,:,:,k) = recip_r_hat(:,:,k)*gradient_sphere(vtheta(:,:,k)*exner(:,:,k),deriv,elem(ie)%Dinv)
+        v_theta(:,:,:,k) = recip_r_hat(:,:,k)gradient_sphere(log(vtheta(:,:,k)),deriv,elem(ie)%Dinv)
         gradexner(:,:,1,k) = (vtemp(:,:,1,k)-exner(:,:,k)*vtheta(:,:,k)*v_theta(:,:,1,k))/&
              vtheta(:,:,k)
         gradexner(:,:,2,k) = (vtemp(:,:,2,k)-exner(:,:,k)*vtheta(:,:,k)*v_theta(:,:,2,k))/&
@@ -1419,7 +1464,7 @@ contains
 #if 0
         ! another form:  terrible results in dcmip2012 test2.0
         ! grad(exner) = grad(p) * kappa * exner / p
-        gradexner(:,:,:,k) = gradient_sphere(pnh(:,:,k),deriv,elem(ie)%Dinv)
+        gradexner(:,:,:,k) = recip_r_hat(:,:,k)*gradient_sphere(pnh(:,:,k),deriv,elem(ie)%Dinv)
         gradexner(:,:,1,k) = gradexner(:,:,1,k)*(Rgas/Cp)*exner(:,:,k)/pnh(:,:,k)
         gradexner(:,:,2,k) = gradexner(:,:,2,k)*(Rgas/Cp)*exner(:,:,k)/pnh(:,:,k)
 #endif
@@ -1431,7 +1476,7 @@ contains
               dpnh_dp_i(:,:,k+1)*gradphinh_i(:,:,2,k+1))/2
 
         if (pgrad_correction==1) then
-           T0 = TREF-tref_lapse_rate*TREF*Cp/g     ! = 97  
+           T0 = TREF-tref_lapse_rate*TREF*Cp/gravit     ! = 97  DA_CHANGE
 #ifdef HOMMEXX_BFB_TESTING
            ! For BFB testing, calculate log(exner) using cxx_log()
            ! and then call gradient sphere.
@@ -1441,14 +1486,28 @@ contains
              end do
            end do
 
-           vtemp(:,:,:,k)=gradient_sphere(temp(:,:,k),deriv,elem(ie)%Dinv)
+           vtemp(:,:,:,k)=recip_r_hat(:,:,k)*gradient_sphere(temp(:,:,k),deriv,elem(ie)%Dinv)
 #else
-           vtemp(:,:,:,k)=gradient_sphere(log(exner(:,:,k)),deriv,elem(ie)%Dinv)
+           vtemp(:,:,:,k)=recip_r_hat_vec(:,:,:,k)*gradient_sphere(log(exner(:,:,k)),deriv,elem(ie)%Dinv)
 #endif
            mgrad(:,:,1,k)=mgrad(:,:,1,k) + Cp*T0*(vtemp(:,:,1,k)-gradexner(:,:,1,k)/exner(:,:,k))
            mgrad(:,:,2,k)=mgrad(:,:,2,k) + Cp*T0*(vtemp(:,:,2,k)-gradexner(:,:,2,k)/exner(:,:,k))
         endif
+        if (atm_is_deep) then
+          u_deep_metric_term(:,:,k) = elem(ie)%state%v(:,:,1,k,n0) * &
+                                      (elem(ie)%state%w_i(:,:,k,n0)+elem(ie)%state%w_i(:,:,k+1,n0))/2 &
+                                      /(rearth + z_from_phi(phi(:,:,k))) !DA_CHANGE
+          v_deep_metric_term(:,:,k) = elem(ie)%state%v(:,:,2,k,n0) * &
+                                      (elem(ie)%state%w_i(:,:,k,n0)+elem(ie)%state%w_i(:,:,k+1,n0))/2 &
+                                      /(rearth + z_from_phi(phi(:,:,k))) ! DA_CHANGE
+          u_deep_coriolis_term(:,:,k) = fcos * &
+                               (elem(ie)%state%w_i(:,:,k,n0)+elem(ie)%state%w_i(:,:,k+1,n0))/2
+        else 
+          u_deep_metric_term(:,:,k) = 0
+          v_deep_metric_term(:,:,k) = 0
+          u_deep_coriolis_term(:,:,k)  = 0
 
+        end if
 
         do j=1,np
            do i=1,np
@@ -1470,6 +1529,8 @@ contains
                    + v2*(elem(ie)%fcor(i,j) + vort(i,j,k))        &
                    - gradKE(i,j,1,k) - mgrad(i,j,1,k) &
                   -Cp*vtheta(i,j,k)*gradexner(i,j,1,k)&
+                  -u_deep_metric_term(i,j,k) &
+                  -u_deep_coriolis_term(i,j,k) &
                   -wvor(i,j,1,k) )*scale1
 
 
@@ -1477,6 +1538,7 @@ contains
                    - v1*(elem(ie)%fcor(i,j) + vort(i,j,k)) &
                    - gradKE(i,j,2,k) - mgrad(i,j,2,k) &
                   -Cp*vtheta(i,j,k)*gradexner(i,j,2,k) &
+                  -v_deep_metric_term(i,j,k) &
                   -wvor(i,j,2,k) )*scale1
 #endif
            end do
@@ -1484,145 +1546,144 @@ contains
      end do 
 
 
-
      
-#ifdef ENERGY_DIAGNOSTICS
-     ! =========================================================
-     ! diagnostics. not performance critical, dont thread
-     ! =========================================================
-     if (compute_diagnostics) then
-        elem(ie)%accum%KEu_horiz1=0
-        elem(ie)%accum%KEu_horiz2=0
-        elem(ie)%accum%KEu_vert1=0
-        elem(ie)%accum%KEu_vert2=0
-        elem(ie)%accum%KEw_horiz1=0
-        elem(ie)%accum%KEw_horiz2=0
-        elem(ie)%accum%KEw_horiz3=0
-        elem(ie)%accum%KEw_vert1=0
-        elem(ie)%accum%KEw_vert2=0
-
-        elem(ie)%accum%PEhoriz1=0
-        elem(ie)%accum%PEhoriz2=0
-        elem(ie)%accum%IEvert1=0
-        elem(ie)%accum%IEvert2=0
-        elem(ie)%accum%PEvert1=0
-        elem(ie)%accum%PEvert2=0
-        elem(ie)%accum%T01=0
-        elem(ie)%accum%T2=0
-        elem(ie)%accum%S1=0
-        elem(ie)%accum%S2=0
-        elem(ie)%accum%P1=0
-        elem(ie)%accum%P2=0
-
-        do k =1,nlev
-          do j=1,np
-            do i=1,np                
-               d_eta_dot_dpdn_dn=(eta_dot_dpdn(i,j,k+1)-eta_dot_dpdn(i,j,k))
-               !  Form horiz advection of KE-u
-               elem(ie)%accum%KEu_horiz1(i,j)=elem(ie)%accum%KEu_horiz1(i,j) &
-                    -dp3d(i,j,k)*( &
-                    elem(ie)%state%v(i,j,1,k,n0)*gradKE(i,j,1,k) + &
-                    elem(ie)%state%v(i,j,2,k,n0)*gradKE(i,j,2,k) )
-               elem(ie)%accum%KEu_horiz2(i,j)=elem(ie)%accum%KEu_horiz2(i,j)              &
-                    -KE(i,j,k)*divdp(i,j,k)
-               !  Form horiz advection of KE-w
-               elem(ie)%accum%KEw_horiz1(i,j)=elem(ie)%accum%KEw_horiz1(i,j)-   &
-                    dp3d(i,j,k) * (&
-                    elem(ie)%state%w_i(i,j,k,n0) * v_gradw_i(i,j,k)    + &
-                    elem(ie)%state%w_i(i,j,k+1,n0) * v_gradw_i(i,j,k+1) )/2
-               elem(ie)%accum%KEw_horiz2(i,j)=elem(ie)%accum%KEw_horiz2(i,j)-   &
-                    divdp(i,j,k)*(elem(ie)%state%w_i(i,j,k,n0)**2 + &
-                    elem(ie)%state%w_i(i,j,k+1,n0)**2 ) /4
-               elem(ie)%accum%KEw_horiz3(i,j)=elem(ie)%accum%KEw_horiz3(i,j)   &
-                    -dp3d(i,j,k) * (elem(ie)%state%v(i,j,1,k,n0) * wvor(i,j,1,k) +  &
-                    elem(ie)%state%v(i,j,2,k,n0) * wvor(i,j,2,k))
-               !  Form vertical advection of KE-u 
-               elem(ie)%accum%KEu_vert1(i,j)=elem(ie)%accum%KEu_vert1(i,j)- &
-                    (elem(ie)%state%v(i,j,1,k,n0) * v_vadv(i,j,1,k) +            &
-                    elem(ie)%state%v(i,j,2,k,n0) *v_vadv(i,j,2,k))*dp3d(i,j,k)
-               elem(ie)%accum%KEu_vert2(i,j)=elem(ie)%accum%KEu_vert2(i,j)- &
-                    0.5*((elem(ie)%state%v(i,j,1,k,n0))**2 +                     &
-                    (elem(ie)%state%v(i,j,2,k,n0))**2)*d_eta_dot_dpdn_dn
-               !  Form vertical advection of KE-w
-               elem(ie)%accum%KEw_vert1(i,j)=elem(ie)%accum%KEw_vert1(i,j) - &
-                    dp3d(i,j,k) * &
-                    (w_vadv_i(i,j,k)*elem(ie)%state%w_i(i,j,k,n0)+ &
-                    w_vadv_i(i,j,k+1)*elem(ie)%state%w_i(i,j,k+1,n0))/2
-               
-               elem(ie)%accum%KEw_vert2(i,j)=elem(ie)%accum%KEw_vert2(i,j)      &
-                    -d_eta_dot_dpdn_dn* &
-                    (.5*elem(ie)%state%w_i(i,j,k,n0)**2 +&
-                    .5*elem(ie)%state%w_i(i,j,k+1,n0)**2)/2
-               
-               !  Form IEvert1
-               elem(ie)%accum%IEvert1(i,j)=elem(ie)%accum%IEvert1(i,j)      &
-                    -Cp*exner(i,j,k)*theta_vadv(i,j,k)                        
-               ! Form IEvert2 
-               ! here use of dpnh_dp_i on boundry (with incorrect data)
-               ! is harmess becuase eta_dot_dpdn=0
-               elem(ie)%accum%IEvert2(i,j)=elem(ie)%accum%IEvert2(i,j)      &
-                    + ( dpnh_dp_i(i,j,k)*eta_dot_dpdn(i,j,k)+ &
-                        dpnh_dp_i(i,j,k+1)*eta_dot_dpdn(i,j,k+1)) &
-                    *(phi_i(i,j,k+1)-phi_i(i,j,k))/2
-               
-               !  Form PEhoriz1
-               elem(ie)%accum%PEhoriz1(i,j)=(elem(ie)%accum%PEhoriz1(i,j))  &
-                    -phi(i,j,k)*divdp(i,j,k) 
-               !  Form PEhoriz2
-               elem(ie)%accum%PEhoriz2(i,j)=elem(ie)%accum%PEhoriz2(i,j)    &
-                    -dp3d(i,j,k)* &
-                    (elem(ie)%state%v(i,j,1,k,n0)*                          &
-                    (gradphinh_i(i,j,1,k)+gradphinh_i(i,j,1,k+1))/2  +      &
-                    elem(ie)%state%v(i,j,2,k,n0)*                           &
-                    (gradphinh_i(i,j,2,k)+gradphinh_i(i,j,2,k+1))/2  )
-               
-               !  Form PEvert1
-               elem(ie)%accum%PEvert1(i,j) = elem(ie)%accum%PEvert1(i,j)    &
-                    -phi(i,j,k)*d_eta_dot_dpdn_dn                                 
-               elem(ie)%accum%PEvert2(i,j) = elem(ie)%accum%PEvert2(i,j)     &
-                    -dp3d(i,j,k)*(phi_vadv_i(i,j,k)+phi_vadv_i(i,j,k+1))/2
-               
-               !  Form T01
-               elem(ie)%accum%T01(i,j)=elem(ie)%accum%T01(i,j)               &
-                    -(Cp*elem(ie)%state%vtheta_dp(i,j,k,n0))                       &
-                    *(gradexner(i,j,1,k)*elem(ie)%state%v(i,j,1,k,n0) +           &
-                    gradexner(i,j,2,k)*elem(ie)%state%v(i,j,2,k,n0))              
-               !  Form S1 
-               elem(ie)%accum%S1(i,j)=elem(ie)%accum%S1(i,j)                 &
-                    -Cp*exner(i,j,k)*div_v_theta(i,j,k)
-
-               !  Form P1  = -P2  (no reason to compute P2?)
-               elem(ie)%accum%P1(i,j)=elem(ie)%accum%P1(i,j) -g*dp3d(i,j,k)* &
-                    ( elem(ie)%state%w_i(i,j,k,n0) + &
-                    elem(ie)%state%w_i(i,j,k+1,n0) )/2
-               !  Form P2
-               elem(ie)%accum%P2(i,j)=elem(ie)%accum%P2(i,j) + g*dp3d(i,j,k)*&
-                    ( elem(ie)%state%w_i(i,j,k,n0) + &
-                    elem(ie)%state%w_i(i,j,k+1,n0) )/2
-            enddo
-         enddo
-      enddo
-
-      ! these terms are better easier to compute by summing interfaces
-      do k=2,nlev
-         elem(ie)%accum%T2(:,:)=elem(ie)%accum%T2(:,:)+                &
-              (g*elem(ie)%state%w_i(:,:,k,n0)-v_gradphinh_i(:,:,k)) &
-               * dpnh_dp_i(:,:,k)*dp3d_i(:,:,k)
-      enddo
-      ! boundary terms
-      do k=1,nlevp,nlev
-         elem(ie)%accum%T2(:,:)=elem(ie)%accum%T2(:,:)+                &
-           (g*elem(ie)%state%w_i(:,:,k,n0)-v_gradphinh_i(:,:,k)) &
-           * dpnh_dp_i(:,:,k)*dp3d_i(:,:,k)/2
-      enddo
-      ! boundary term is incorrect.  save the term so we can correct it
-      ! once we have coorect value of dpnh_dp_i:
-      elem(ie)%accum%T2_nlevp_term(:,:)=&
-           (g*elem(ie)%state%w_i(:,:,nlevp,n0)-v_gradphinh_i(:,:,nlevp)) &
-           * dp3d_i(:,:,nlevp)/2
-
-   endif
-#endif
+!#ifdef ENERGY_DIAGNOSTICS
+!     ! =========================================================
+!     ! diagnostics. not performance critical, dont thread
+!     ! =========================================================
+!     if (compute_diagnostics) then
+!        elem(ie)%accum%KEu_horiz1=0
+!        elem(ie)%accum%KEu_horiz2=0
+!        elem(ie)%accum%KEu_vert1=0
+!        elem(ie)%accum%KEu_vert2=0
+!        elem(ie)%accum%KEw_horiz1=0
+!        elem(ie)%accum%KEw_horiz2=0
+!        elem(ie)%accum%KEw_horiz3=0
+!        elem(ie)%accum%KEw_vert1=0
+!        elem(ie)%accum%KEw_vert2=0
+!
+!        elem(ie)%accum%PEhoriz1=0
+!        elem(ie)%accum%PEhoriz2=0
+!        elem(ie)%accum%IEvert1=0
+!        elem(ie)%accum%IEvert2=0
+!        elem(ie)%accum%PEvert1=0
+!        elem(ie)%accum%PEvert2=0
+!        elem(ie)%accum%T01=0
+!        elem(ie)%accum%T2=0
+!        elem(ie)%accum%S1=0
+!        elem(ie)%accum%S2=0
+!        elem(ie)%accum%P1=0
+!        elem(ie)%accum%P2=0
+!
+!        do k =1,nlev
+!          do j=1,np
+!            do i=1,np                
+!               d_eta_dot_dpdn_dn=(eta_dot_dpdn(i,j,k+1)-eta_dot_dpdn(i,j,k))
+!               !  Form horiz advection of KE-u
+!               elem(ie)%accum%KEu_horiz1(i,j)=elem(ie)%accum%KEu_horiz1(i,j) &
+!                    -dp3d(i,j,k)*( &
+!                    elem(ie)%state%v(i,j,1,k,n0)*gradKE(i,j,1,k) + &
+!                    elem(ie)%state%v(i,j,2,k,n0)*gradKE(i,j,2,k) )
+!               elem(ie)%accum%KEu_horiz2(i,j)=elem(ie)%accum%KEu_horiz2(i,j)              &
+!                    -KE(i,j,k)*divdp(i,j,k)
+!               !  Form horiz advection of KE-w
+!               elem(ie)%accum%KEw_horiz1(i,j)=elem(ie)%accum%KEw_horiz1(i,j)-   &
+!                    dp3d(i,j,k) * (&
+!                    elem(ie)%state%w_i(i,j,k,n0) * v_gradw_i(i,j,k)    + &
+!                    elem(ie)%state%w_i(i,j,k+1,n0) * v_gradw_i(i,j,k+1) )/2
+!               elem(ie)%accum%KEw_horiz2(i,j)=elem(ie)%accum%KEw_horiz2(i,j)-   &
+!                    divdp(i,j,k)*(elem(ie)%state%w_i(i,j,k,n0)**2 + &
+!                    elem(ie)%state%w_i(i,j,k+1,n0)**2 ) /4
+!               elem(ie)%accum%KEw_horiz3(i,j)=elem(ie)%accum%KEw_horiz3(i,j)   &
+!                    -dp3d(i,j,k) * (elem(ie)%state%v(i,j,1,k,n0) * wvor(i,j,1,k) +  &
+!                    elem(ie)%state%v(i,j,2,k,n0) * wvor(i,j,2,k))
+!               !  Form vertical advection of KE-u 
+!               elem(ie)%accum%KEu_vert1(i,j)=elem(ie)%accum%KEu_vert1(i,j)- &
+!                    (elem(ie)%state%v(i,j,1,k,n0) * v_vadv(i,j,1,k) +            &
+!                    elem(ie)%state%v(i,j,2,k,n0) *v_vadv(i,j,2,k))*dp3d(i,j,k)
+!               elem(ie)%accum%KEu_vert2(i,j)=elem(ie)%accum%KEu_vert2(i,j)- &
+!                    0.5*((elem(ie)%state%v(i,j,1,k,n0))**2 +                     &
+!                    (elem(ie)%state%v(i,j,2,k,n0))**2)*d_eta_dot_dpdn_dn
+!               !  Form vertical advection of KE-w
+!               elem(ie)%accum%KEw_vert1(i,j)=elem(ie)%accum%KEw_vert1(i,j) - &
+!                    dp3d(i,j,k) * &
+!                    (w_vadv_i(i,j,k)*elem(ie)%state%w_i(i,j,k,n0)+ &
+!                    w_vadv_i(i,j,k+1)*elem(ie)%state%w_i(i,j,k+1,n0))/2
+!               
+!               elem(ie)%accum%KEw_vert2(i,j)=elem(ie)%accum%KEw_vert2(i,j)      &
+!                    -d_eta_dot_dpdn_dn* &
+!                    (.5*elem(ie)%state%w_i(i,j,k,n0)**2 +&
+!                    .5*elem(ie)%state%w_i(i,j,k+1,n0)**2)/2
+!               
+!               !  Form IEvert1
+!               elem(ie)%accum%IEvert1(i,j)=elem(ie)%accum%IEvert1(i,j)      &
+!                    -Cp*exner(i,j,k)*theta_vadv(i,j,k)                        
+!               ! Form IEvert2 
+!               ! here use of dpnh_dp_i on boundry (with incorrect data)
+!               ! is harmess becuase eta_dot_dpdn=0
+!               elem(ie)%accum%IEvert2(i,j)=elem(ie)%accum%IEvert2(i,j)      &
+!                    + ( dpnh_dp_i(i,j,k)*eta_dot_dpdn(i,j,k)+ &
+!                        dpnh_dp_i(i,j,k+1)*eta_dot_dpdn(i,j,k+1)) &
+!                    *(phi_i(i,j,k+1)-phi_i(i,j,k))/2
+!               
+!               !  Form PEhoriz1
+!               elem(ie)%accum%PEhoriz1(i,j)=(elem(ie)%accum%PEhoriz1(i,j))  &
+!                    -phi(i,j,k)*divdp(i,j,k) 
+!               !  Form PEhoriz2
+!               elem(ie)%accum%PEhoriz2(i,j)=elem(ie)%accum%PEhoriz2(i,j)    &
+!                    -dp3d(i,j,k)* &
+!                    (elem(ie)%state%v(i,j,1,k,n0)*                          &
+!                    (gradphinh_i(i,j,1,k)+gradphinh_i(i,j,1,k+1))/2  +      &
+!                    elem(ie)%state%v(i,j,2,k,n0)*                           &
+!                    (gradphinh_i(i,j,2,k)+gradphinh_i(i,j,2,k+1))/2  )
+!               
+!               !  Form PEvert1
+!               elem(ie)%accum%PEvert1(i,j) = elem(ie)%accum%PEvert1(i,j)    &
+!                    -phi(i,j,k)*d_eta_dot_dpdn_dn                                 
+!               elem(ie)%accum%PEvert2(i,j) = elem(ie)%accum%PEvert2(i,j)     &
+!                    -dp3d(i,j,k)*(phi_vadv_i(i,j,k)+phi_vadv_i(i,j,k+1))/2
+!               
+!               !  Form T01
+!               elem(ie)%accum%T01(i,j)=elem(ie)%accum%T01(i,j)               &
+!                    -(Cp*elem(ie)%state%vtheta_dp(i,j,k,n0))                       &
+!                    *(gradexner(i,j,1,k)*elem(ie)%state%v(i,j,1,k,n0) +           &
+!                    gradexner(i,j,2,k)*elem(ie)%state%v(i,j,2,k,n0))              
+!               !  Form S1 
+!               elem(ie)%accum%S1(i,j)=elem(ie)%accum%S1(i,j)                 &
+!                    -Cp*exner(i,j,k)*div_v_theta(i,j,k)
+!
+!               !  Form P1  = -P2  (no reason to compute P2?)
+!               elem(ie)%accum%P1(i,j)=elem(ie)%accum%P1(i,j) -gravit*dp3d(i,j,k)* & !DA_CHANGE
+!                    ( elem(ie)%state%w_i(i,j,k,n0) + &
+!                    elem(ie)%state%w_i(i,j,k+1,n0) )/2
+!               !  Form P2
+!               elem(ie)%accum%P2(i,j)=elem(ie)%accum%P2(i,j) + gravit*dp3d(i,j,k)*& !DA_CHANGE
+!                    ( elem(ie)%state%w_i(i,j,k,n0) + &
+!                    elem(ie)%state%w_i(i,j,k+1,n0) )/2
+!            enddo
+!         enddo
+!      enddo
+!
+!      ! these terms are better easier to compute by summing interfaces
+!      do k=2,nlev
+!         elem(ie)%accum%T2(:,:)=elem(ie)%accum%T2(:,:)+                &
+!              (gravit*elem(ie)%state%w_i(:,:,k,n0)-v_gradphinh_i(:,:,k)) & !DA_CHANGE
+!               * dpnh_dp_i(:,:,k)*dp3d_i(:,:,k)
+!      enddo
+!      ! boundary terms
+!      do k=1,nlevp,nlev
+!         elem(ie)%accum%T2(:,:)=elem(ie)%accum%T2(:,:)+                &
+!           (gravit*elem(ie)%state%w_i(:,:,k,n0)-v_gradphinh_i(:,:,k)) & ! DA_CHANGE
+!           * dpnh_dp_i(:,:,k)*dp3d_i(:,:,k)/2
+!      enddo
+!      ! boundary term is incorrect.  save the term so we can correct it
+!      ! once we have coorect value of dpnh_dp_i:
+!      elem(ie)%accum%T2_nlevp_term(:,:)=&
+!           (gravit*elem(ie)%state%w_i(:,:,nlevp,n0)-v_gradphinh_i(:,:,nlevp)) & !DA_CHANGE
+!           * dp3d_i(:,:,nlevp)/2
+!
+!   endif
+!#endif
 
 
      do k=1,nlev
@@ -1732,56 +1793,56 @@ contains
         ! solve for (dpnh_dp_i-1)
         dpnh_dp_i(:,:,nlevp) = 1 + (  &
              ((elem(ie)%state%v(:,:,1,nlev,np1)*elem(ie)%derived%gradphis(:,:,1) + &
-             elem(ie)%state%v(:,:,2,nlev,np1)*elem(ie)%derived%gradphis(:,:,2))/g - &
+             elem(ie)%state%v(:,:,2,nlev,np1)*elem(ie)%derived%gradphis(:,:,2))/g_from_phi(elem(ie)%state%phis(:,:)) - & ! DA_CHANGE
              elem(ie)%state%w_i(:,:,nlevp,np1)) / &
-             (g + ( elem(ie)%derived%gradphis(:,:,1)**2 + &
-             elem(ie)%derived%gradphis(:,:,2)**2)/(2*g))   )  / dt2
+             (g_from_phi(elem(ie)%state%phis(:,:)) + ( elem(ie)%derived%gradphis(:,:,1)**2 + &
+             elem(ie)%derived%gradphis(:,:,2)**2)/(2*g_from_phi(elem(ie)%state%phis(:,:)))   )  )/ dt2 !DA_CHANGE
 
         ! update solution with new dpnh_dp_i value:
         elem(ie)%state%w_i(:,:,nlevp,np1) = elem(ie)%state%w_i(:,:,nlevp,np1) +&
-             scale1*dt2*g*(dpnh_dp_i(:,:,nlevp)-1)
+             scale1*dt2*g_from_phi(elem(ie)%state%phis(:,:))*(dpnh_dp_i(:,:,nlevp)-1) !DA_CHANGE
         elem(ie)%state%v(:,:,1,nlev,np1) =  elem(ie)%state%v(:,:,1,nlev,np1) -&
              scale1*dt2*(dpnh_dp_i(:,:,nlevp)-1)*elem(ie)%derived%gradphis(:,:,1)/2
         elem(ie)%state%v(:,:,2,nlev,np1) =  elem(ie)%state%v(:,:,2,nlev,np1) -&
              scale1*dt2*(dpnh_dp_i(:,:,nlevp)-1)*elem(ie)%derived%gradphis(:,:,2)/2
 
-#ifdef ENERGY_DIAGNOSTICS
-        ! add in boundary term to T2 and S2 diagnostics:
-        if (compute_diagnostics) then
-           elem(ie)%accum%T2(:,:)=elem(ie)%accum%T2(:,:)+                &
-                elem(ie)%accum%T2_nlevp_term(:,:)*(dpnh_dp_i(:,:,nlevp)-1)
-           elem(ie)%accum%S2(:,:)=-elem(ie)%accum%T2(:,:)      
-        endif
-
-        ! check w b.c.
-        temp(:,:,1) =  (elem(ie)%state%v(:,:,1,nlev,np1)*elem(ie)%derived%gradphis(:,:,1) + &
-             elem(ie)%state%v(:,:,2,nlev,np1)*elem(ie)%derived%gradphis(:,:,2))/g
-        do j=1,np
-        do i=1,np
-           if ( abs(temp(i,j,1)-elem(ie)%state%w_i(i,j,nlevp,np1)) >1e-10) then
-              write(iulog,*) 'WARNING:CAAR w(np1) does not satisfy b.c.',ie,i,j,k
-              write(iulog,*) 'val1 = ',temp(i,j,1)
-              write(iulog,*) 'val2 = ',elem(ie)%state%w_i(i,j,nlevp,np1)
-              write(iulog,*) 'diff: ',temp(i,j,1)-elem(ie)%state%w_i(i,j,nlevp,np1)
-           endif
-        enddo
-        enddo
-
-        ! check for layer spacing <= 1m
-        if (scale3 /= 0) then
-        do k=1,nlev
-        do j=1,np
-        do i=1,np
-           if ((elem(ie)%state%phinh_i(i,j,k,np1)-elem(ie)%state%phinh_i(i,j,k+1,np1)) < g) then
-              write(iulog,*) 'WARNING:CAAR after ADV, delta z < 1m. ie,i,j,k=',ie,i,j,k
-              write(iulog,*) 'phi(i,j,k)=  ',elem(ie)%state%phinh_i(i,j,k,np1)
-              write(iulog,*) 'phi(i,j,k+1)=',elem(ie)%state%phinh_i(i,j,k+1,np1)
-           endif
-        enddo
-        enddo
-        enddo
-        endif
-#endif
+!#ifdef ENERGY_DIAGNOSTICS
+!        ! add in boundary term to T2 and S2 diagnostics:
+!        if (compute_diagnostics) then
+!           elem(ie)%accum%T2(:,:)=elem(ie)%accum%T2(:,:)+                &
+!                elem(ie)%accum%T2_nlevp_term(:,:)*(dpnh_dp_i(:,:,nlevp)-1)
+!           elem(ie)%accum%S2(:,:)=-elem(ie)%accum%T2(:,:)      
+!        endif
+!
+!      ! check w b.c.
+!      temp(:,:,1) =  (elem(ie)%state%v(:,:,1,nlev,np1)*elem(ie)%derived%gradphis(:,:,1) + &
+!           elem(ie)%state%v(:,:,2,nlev,np1)*elem(ie)%derived%gradphis(:,:,2))/gravit ! DA_CHANGE
+!      do j=1,np
+!      do i=1,np
+!         if ( abs(temp(i,j,1)-elem(ie)%state%w_i(i,j,nlevp,np1)) >1e-10) then
+!            write(iulog,*) 'WARNING:CAAR w(np1) does not satisfy b.c.',ie,i,j,k
+!            write(iulog,*) 'val1 = ',temp(i,j,1)
+!            write(iulog,*) 'val2 = ',elem(ie)%state%w_i(i,j,nlevp,np1)
+!            write(iulog,*) 'diff: ',temp(i,j,1)-elem(ie)%state%w_i(i,j,nlevp,np1)
+!         endif
+!      enddo
+!      enddo
+!
+!      ! check for layer spacing <= 1m
+!      if (scale3 /= 0) then
+!      do k=1,nlev
+!      do j=1,np
+!      do i=1,np
+!         if ((elem(ie)%state%phinh_i(i,j,k,np1)-elem(ie)%state%phinh_i(i,j,k+1,np1)) < gravit) then !DA_CHANGE
+!              write(iulog,*) 'WARNING:CAAR after ADV, delta z < 1m. ie,i,j,k=',ie,i,j,k
+!              write(iulog,*) 'phi(i,j,k)=  ',elem(ie)%state%phinh_i(i,j,k,np1)
+!              write(iulog,*) 'phi(i,j,k+1)=',elem(ie)%state%phinh_i(i,j,k+1,np1)
+!           endif
+!        enddo
+!        enddo
+!        enddo
+!        endif
+!#endif
      endif
      if (scale3 /= 0) then
        call limiter_dp3d_k(elem(ie)%state%dp3d(:,:,:,np1),elem(ie)%state%vtheta_dp(:,:,:,np1),&

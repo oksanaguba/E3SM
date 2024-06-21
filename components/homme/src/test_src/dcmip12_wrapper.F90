@@ -91,7 +91,7 @@ subroutine dcmip2012_test1_1(elem,hybrid,hvcoord,nets,nete,time,n0,n1)
 
       dp = pressure_thickness(ps,k,hvcoord)
       call set_state(u,v,w,T,ps,phis,p,dp,zm(k),g, i,j,k,elem(ie),n0,n1)
-      if(time==0) call set_tracers(q,qsize,dp,i,j,k,lat,lon,elem(ie))
+      if(time==0) call set_tracers(q,qsize,dp,zm(k),i,j,k,lat,lon,elem(ie))
 
   enddo; enddo; enddo; enddo
 
@@ -167,7 +167,7 @@ subroutine dcmip2012_test1_1_conv(elem,hybrid,hvcoord,nets,nete,time,n0,n1)
 
       dp = pressure_thickness(ps,k,hvcoord)
       call set_state(u,v,w,T,ps,phis,p,dp,zm(k),g, i,j,k,elem(ie),n0,n1)
-      if(time==0) call set_tracers(q,qsize,dp,i,j,k,lat,lon,elem(ie))
+      if(time==0) call set_tracers(q,qsize,dp,zm(k),i,j,k,lat,lon,elem(ie))
 
   enddo; enddo; enddo; enddo
 
@@ -235,7 +235,7 @@ subroutine dcmip2012_test1_2(elem,hybrid,hvcoord,nets,nete,time,n0,n1)
       call test1_advection_hadley(time,lon,lat,p,z,zcoords,u,v,w,t,phis,ps,rho,q(1),q(2))
       dp = pressure_thickness(ps,k,hvcoord)
       call set_state(u,v,w,T,ps,phis,p,dp,zm(k),g, i,j,k,elem(ie),n0,n1)
-      if(time==0) call set_tracers(q,qsize,dp,i,j,k,lat,lon,elem(ie))
+      if(time==0) call set_tracers(q,qsize,dp,zm(k),i,j,k,lat,lon,elem(ie))
 
   enddo; enddo; enddo; enddo
 
@@ -306,7 +306,7 @@ subroutine dcmip2012_test1_3(elem,hybrid,hvcoord,nets,nete,time,n0,n1,deriv)
       call test1_advection_orography(lon,lat,p,z,zcoords,cfv,use_eta,hyam,hybm,gc,u,v,w,t,phis,ps,rho,q(1),q(2),q(3),q(4))
       dp = pressure_thickness(ps,k,hvcoord)
       call set_state(u,v,w,T,ps,phis,p,dp,zm(k),g, i,j,k,elem(ie),n0,n1)
-      if(time==0) call set_tracers(q,qsize,dp,i,j,k,lat,lon,elem(ie))
+      if(time==0) call set_tracers(q,qsize,dp,zm(k),i,j,k,lat,lon,elem(ie))
 
   enddo; enddo; enddo; enddo
 
@@ -373,7 +373,7 @@ subroutine dcmip2012_test2_0(elem,hybrid,hvcoord,nets,nete)
         !let's get an analytical \phi
         he = (T0 - T)/gamma
         call set_state(u,v,w,T,ps,phis,p,dp,he,g, i,j,k,elem(ie),1,nt)
-        call set_tracers(q,qsize,dp,i,j,k,lat,lon,elem(ie))
+        call set_tracers(q,qsize,dp,he,i,j,k,lat,lon,elem(ie))
      enddo; enddo; enddo; 
      do k=1,nlevp; do j=1,np; do i=1,np
         call get_coordinates(lat,lon,hyai,hybi, i,j,k,elem(ie),hvcoord)
@@ -432,7 +432,7 @@ subroutine dcmip2012_test2_x(elem,hybrid,hvcoord,nets,nete,shear)
         !    call set_state(u,v,w,T,ps,phis,p,dp,zm(k),g, i,j,k,elem(ie),1,nt)
         ! This test obtains analytical height and returns it, so, we use it for \phi ...
         call set_state(u,v,w,T,ps,phis,p,dp,z,g, i,j,k,elem(ie),1,nt)
-        call set_tracers(q,qsize,dp,i,j,k,lat,lon,elem(ie))
+        call set_tracers(q,qsize,dp,z,i,j,k,lat,lon,elem(ie))
         ! ... or we can use discrete hydro state to init \phi. 
         
      enddo; enddo; enddo; 
@@ -602,7 +602,7 @@ subroutine dcmip2012_test3(elem,hybrid,hvcoord,nets,nete)
         call test3_gravity_wave(lon,lat,p,z,zcoords,use_eta,hyam,hybm,u,v,w,T,T_mean,phis,ps,rho,rho_mean,q(1))
         dp = pressure_thickness(ps,k,hvcoord)
         call set_state(u,v,w,T,ps,phis,p,dp,zm(k),g, i,j,k,elem(ie),1,nt)
-        call set_tracers(q,qsize, dp,i,j,k,lat,lon,elem(ie))
+        call set_tracers(q,qsize, dp,z,i,j,k,lat,lon,elem(ie))
      enddo; enddo; enddo; 
      do k=1,nlevp; do j=1,np; do i=1,np
         call get_coordinates(lat,lon,hyai,hybi, i,j,k,elem(ie),hvcoord)
@@ -662,7 +662,7 @@ subroutine dcmip2012_test4_init(elem,hybrid,hvcoord,nets,nete)
 
         !init only <=qsize tracers
         qs = min(qsize,3)
-        call set_tracers(qarray(1:qs),qs, dp,i,j,k,lat,lon,elem(ie))
+        call set_tracers(qarray(1:qs),qs, dp,z,i,j,k,lat,lon,elem(ie))
       enddo; enddo; enddo; 
 
     do k=1,nlevp
@@ -785,16 +785,20 @@ end function
 
 
 !_____________________________________________________________________
-subroutine set_tracers(q,nq, dp,i,j,k,lat,lon,elem)
-
+subroutine set_tracers(q,nq, dp,zm,i,j,k,lat,lon,elem)
+  use physical_constants, only: rearth
+  use deep_atm_mod, only: r_hat_from_phi, phi_from_z
   ! set tracer values at node(i,j,k)
 
-  real(rl),         intent(in)    :: q(nq), dp, lat, lon
+  real(rl),         intent(in)    :: q(nq), dp,zm, lat, lon
   integer,          intent(in)    :: i,j,k,nq
   type(element_t),  intent(inout) :: elem
-
+  real(rl) :: r_hat, pdensity
   real(rl), parameter :: wl = 1.0 ! checkerboard wavelength in dg
   integer :: qi
+
+  r_hat = r_hat_from_phi(phi_from_z(zm))
+  pdensity =  dp
 
   if (nq>qsize) call abortmp('qsize set too small for dcmip test case')
   ! set known tracers to q and the rest to a checkerboard pattern
@@ -802,13 +806,13 @@ subroutine set_tracers(q,nq, dp,i,j,k,lat,lon,elem)
 
   ! compute tracer mass qdp from mixing ratio q
   do qi = 1,nq
-    elem%state%Qdp (i,j,k,qi,:) = q(qi)*dp
+    elem%state%Qdp (i,j,k,qi,:) = q(qi)*pdensity
   enddo
 
   ! set any remaining tracers to 1
   do qi = nq+1,qsize
      elem%state%Q(i,j,k,qi)    = 1
-     elem%state%Qdp (i,j,k,qi,:) = elem%state%Q(i,j,k,qi)*dp
+     elem%state%Qdp (i,j,k,qi,:) = elem%state%Q(i,j,k,qi)*pdensity
   enddo
 
 

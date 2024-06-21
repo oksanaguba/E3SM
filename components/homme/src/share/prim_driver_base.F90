@@ -748,6 +748,7 @@ contains
     use prim_advection_mod,   only: prim_advec_init2
     use model_init_mod,       only: model_init2
     use time_mod,             only: timelevel_t, tstep, timelevel_init, nendstep, smooth, nsplit, TimeLevel_Qdp
+    use deep_atm_mod,         only: r_hat_from_phi
     use control_mod,          only: smooth_phis_numcycle
 
 #ifdef TRILINOS
@@ -775,6 +776,7 @@ contains
 
     real (kind=real_kind) :: dp
     real (kind=real_kind) :: ps(np,np)          ! surface pressure
+    real (kind=real_kind) :: r_hat(np,np)
 
     character(len=80)     :: fname
     character(len=8)      :: njusn
@@ -929,7 +931,7 @@ contains
 !      enddo
 
     endif !runtype
-
+    
 #endif
 !$OMP MASTER
     if (runtype==2) then
@@ -947,13 +949,11 @@ contains
     ! have access to hvcoord to compute dp3d:
     do ie=nets,nete
        do k=1,nlev
-          elem(ie)%state%dp3d(:,:,k,tl%n0)=&
-               ( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
+          elem(ie)%state%dp3d(:,:,k,tl%n0)= ( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
                ( hvcoord%hybi(k+1) - hvcoord%hybi(k) )*elem(ie)%state%ps_v(:,:,tl%n0)
        enddo
     end do
 #endif
-
 
     ! For new runs, and branch runs, convert state variable Q to (Qdp)
     ! because initial conditon reads in Q, not Qdp
@@ -978,7 +978,6 @@ contains
           enddo
        enddo
     endif
-
     call model_init2(elem(:), hybrid,deriv1,hvcoord,tl,nets,nete)
 
     ! advective and viscious CFL estimates
@@ -1060,6 +1059,7 @@ contains
     use hybvcoord_mod,      only: hvcoord_t
     use parallel_mod,       only: abortmp
     use prim_state_mod,     only: prim_printstate
+use eos, only: pnh_and_exner_from_eos
     use vertremap_mod,      only: vertical_remap
     use reduction_mod,      only: parallelmax
     use time_mod,           only: TimeLevel_t, timelevel_update, timelevel_qdp, nsplit, tstep
@@ -1083,6 +1083,7 @@ contains
     real(kind=real_kind) :: dp_np1(np,np)
     integer :: ie,i,j,k,n,q,t,scm_dum
     integer :: n0_qdp,np1_qdp,r,nstep_end,nets_in,nete_in,step_factor
+         real (kind=real_kind) :: pnh(np, np, nlev), exner(np, np, nlev), dpnh_i(np,np,nlevp)
     logical :: compute_diagnostics
 
     ! compute timesteps for tracer transport and vertical remap
@@ -1107,7 +1108,8 @@ contains
     ! compute scalar diagnostics if currently active
     if (compute_diagnostics) call run_diagnostics(elem,hvcoord,tl,3,.true.,nets,nete)
 
-    if (prim_step_type == 1) then
+
+   if (prim_step_type == 1) then
        call TimeLevel_Qdp(tl, dt_tracer_factor, n0_qdp, np1_qdp)
 
 #if !defined(CAM) && !defined(SCREAM)
@@ -1116,8 +1118,8 @@ contains
        ! homme.
        call compute_test_forcing(elem,hybrid,hvcoord,tl%n0,n0_qdp,dt_remap,nets,nete,tl)
 #endif
-
-       call applyCAMforcing_remap(elem,hvcoord,tl%n0,n0_qdp,dt_remap,nets,nete)
+ 
+       !call applyCAMforcing_remap(elem,hvcoord,tl%n0,n0_qdp,dt_remap,nets,nete)
 
        ! E(1) Energy after CAM forcing
        if (compute_diagnostics) call run_diagnostics(elem,hvcoord,tl,1,.true.,nets,nete)
@@ -1175,7 +1177,7 @@ contains
         nets_in=nets
         nete_in=nete
       endif
-
+      
       call vertical_remap(hybrid,elem,hvcoord,dt_remap,tl%np1,np1_qdp,nets_in,nete_in)
     elseif(prim_step_type == 2) then
       ! This time stepping routine permits the vertical remap time
@@ -1257,7 +1259,6 @@ contains
     real (kind=real_kind)                          :: maxcflx, maxcfly
     real (kind=real_kind) :: dp_np1(np,np)
     logical :: compute_diagnostics
-
     dt_q = dt*dt_tracer_factor
 
     call set_tracer_transport_derived_values(elem, nets, nete, tl)
@@ -1322,6 +1323,8 @@ contains
     use prim_state_mod,     only: prim_printstate
     use vertremap_mod,      only: vertical_remap
     use sl_advection,       only: sl_vertically_remap_tracers
+    use physical_constants, only: rearth, gravit
+    use deep_atm_mod,       only: r_hat_from_phi
 
     type(element_t),      intent(inout) :: elem(:)
     type(hybrid_t),       intent(in)    :: hybrid   ! distributed parallel structure (shared)
@@ -1333,6 +1336,7 @@ contains
     logical,              intent(in)    :: compute_diagnostics
 
     real(kind=real_kind) :: dt_q, dt_remap, dp(np,np,nlev)
+    real(kind=real_kind) :: r_hat(np,np)
     integer :: ie, q, k, n, n0_qdp, np1_qdp
     logical :: compute_diagnostics_it, apply_forcing
 
@@ -1404,7 +1408,7 @@ contains
                 ! Prescribed winds are evaluated on reference levels,
                 ! not floating levels, so don't remap, just update dp3d.
                 do ie = nets,nete
-                   elem(ie)%state%ps_v(:,:,tl%np1) = hvcoord%hyai(1)*hvcoord%ps0 + &
+                   elem(ie)%state%ps_v(:,:,tl%np1) =  hvcoord%hyai(1)*hvcoord%ps0 + &
                         sum(elem(ie)%state%dp3d(:,:,:,tl%np1),3)
                    do k=1,nlev
                       dp(:,:,k) = (hvcoord%hyai(k+1) - hvcoord%hyai(k))*hvcoord%ps0 + &
@@ -1569,9 +1573,10 @@ contains
   !
   use control_mod,        only : use_moisture, dt_remap_factor
   use hybvcoord_mod,      only : hvcoord_t
+  use deep_atm_mod, only: r_hat_from_phi, quasi_hydrostatic_terms
 #ifdef MODEL_THETA_L
   use control_mod,        only : theta_hydrostatic_mode
-  use physical_constants, only : cp, g, kappa, Rgas, p0
+  use physical_constants, only : cp, gravit, kappa, Rgas, p0, rearth
   use element_ops,        only : get_temperature, get_r_star, get_hydro_pressure
   use eos,                only : pnh_and_exner_from_eos
 #ifdef HOMMEXX_BFB_TESTING
@@ -1600,6 +1605,7 @@ contains
   real (kind=real_kind)  :: rstarn1(np,np,nlev)
   real (kind=real_kind)  :: exner(np,np,nlev)
   real (kind=real_kind)  :: dpnh_dp_i(np,np,nlevp)
+  real (kind=real_kind)  :: r_hat(np,np)
 #endif
 
 #ifdef HOMMEXX_BFB_TESTING
@@ -1720,8 +1726,8 @@ contains
       if (adjust_ps) then
          ! compute new dp3d from adjusted ps()
          do k=1,nlev
-            dp_adj(:,:,k) = ( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
-                 ( hvcoord%hybi(k+1) - hvcoord%hybi(k))*ps(:,:)
+            dp_adj(:,:,k) = (( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
+                 ( hvcoord%hybi(k+1) - hvcoord%hybi(k))*ps(:,:))
          enddo
       endif
       elem%state%dp3d(:,:,:,np1)=dp_adj(:,:,:)

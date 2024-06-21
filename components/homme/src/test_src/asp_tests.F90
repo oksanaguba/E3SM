@@ -982,7 +982,7 @@ use cube_mod,       only: rotate_grid
 use jw,             only: u_wind, v_wind, temperature, surface_geopotential, tracer_q1_q2,&
                           tracer_q3, perturbation_longitude, perturbation_latitude, deg2rad ! _EXTERNAL
 use parallel_mod,   only: abortmp
-use physical_constants, only: p0, g
+use physical_constants, only: p0, g=>gravit
 
 implicit none
 

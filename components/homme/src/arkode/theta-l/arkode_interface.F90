@@ -248,7 +248,7 @@ function FColumnSolSolve(b, t, y, gamma, x) result(ierr)
   use kinds,              only: real_kind
   use HommeNVector,       only: NVec_t
   use hybvcoord_mod,      only: hvcoord_t
-  use physical_constants, only: g
+  use physical_constants, only: gravit
   use dimensions_mod,     only: np, nlev, nlevp
   use parallel_mod,       only: abortmp
   use iso_c_binding

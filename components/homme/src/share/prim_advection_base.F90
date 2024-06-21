@@ -47,7 +47,7 @@ module prim_advection_base
 !
   use kinds, only              : real_kind
   use dimensions_mod, only     : nlev, nlevp, np, qsize
-  use physical_constants, only : rgas, Rwater_vapor, kappa, g, rearth, rrearth, cp
+  use physical_constants, only : rgas, Rwater_vapor, kappa, gravit, rearth, rrearth, cp
   use derivative_mod, only     : derivative_t, gradient_sphere, divergence_sphere
   use element_mod, only        : element_t
   use hybvcoord_mod, only      : hvcoord_t
@@ -229,6 +229,7 @@ contains
     real(kind=real_kind) , intent(in   ) :: dt
     integer              , intent(in   ) :: nets , nete , n0_qdp
     integer :: ie , k
+   
 
     do ie = nets , nete 
       do k = 1 , nlev   ! div( U dp Q),
@@ -279,6 +280,7 @@ contains
                               limiter_optim_iter_full, limiter_clip_and_sum
   use bndry_mod      , only : bndry_exchangev
   use hybvcoord_mod  , only : hvcoord_t
+  use deep_atm_mod, only: r_hat_from_phi
   implicit none
   integer              , intent(in   )         :: np1_qdp, n0_qdp
   real (kind=real_kind), intent(in   )         :: dt
@@ -299,6 +301,7 @@ contains
   real(kind=real_kind), dimension(np,np  ,nlev                ) :: Qtens
   real(kind=real_kind), dimension(np,np  ,nlev                ) :: dp,dp_star
   real(kind=real_kind), dimension(np,np  ,nlev,qsize,nets:nete) :: Qtens_biharmonic
+  real(kind=real_kind), dimension(np,np)                        :: recip_r_hat
   real(kind=real_kind), pointer, dimension(:,:,:)               :: DSSvar
   integer :: ie,q,i,j,k, kptr
   integer :: rhs_viss
@@ -476,8 +479,9 @@ OMP_SIMD
     do q = 1 , qsize
       do k = 1 , nlev  !  dp_star used as temporary instead of divdp (AAM)
         ! div( U dp Q),
-        gradQ(:,:,1) = Vstar(:,:,1,k) * elem(ie)%state%Qdp(:,:,k,q,n0_qdp)
-        gradQ(:,:,2) = Vstar(:,:,2,k) * elem(ie)%state%Qdp(:,:,k,q,n0_qdp)
+        recip_r_hat = 1.0_real_kind/r_hat_from_phi((elem(ie)%state%phinh_i(:,:,k,n0_qdp) + elem(ie)%state%phinh_i(:,:,k+1,n0_qdp))/2) !DA_CHANGE
+        gradQ(:,:,1) = Vstar(:,:,1,k) * elem(ie)%state%Qdp(:,:,k,q,n0_qdp) * recip_r_hat
+        gradQ(:,:,2) = Vstar(:,:,2,k) * elem(ie)%state%Qdp(:,:,k,q,n0_qdp) * recip_r_hat
         dp_star(:,:,k) = divergence_sphere( gradQ , deriv , elem(ie) )
         Qtens(:,:,k) = elem(ie)%state%Qdp(:,:,k,q,n0_qdp) - dt * dp_star(:,:,k)
         ! optionally add in hyperviscosity computed above:

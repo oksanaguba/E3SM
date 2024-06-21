@@ -9,7 +9,7 @@ contains
     
     use kinds, only : real_kind
     use dimensions_mod, only : np, nlev, nvar
-    use physical_constants, only : g
+    use physical_constants, only : gravit
     use element_mod, only : element_t
     use parallel_mod, only : parallel_t, abortmp
     use edge_mod, only : edgevpack, edgevunpack
@@ -530,7 +530,7 @@ contains
     use ,intrinsic :: iso_c_binding
     use kinds, only : real_kind
     use dimensions_mod, only : np, nlev, nvar, nelem
-    use physical_constants, only : g
+    use physical_constants, only : gravit
     use element_mod, only : element_t
 !    use parallel_mod, only : parallel_t
     use edge_mod, only : edgevpack,  edgevunpack
@@ -630,7 +630,7 @@ contains
 
     use ,intrinsic :: iso_c_binding 
     use kinds, only : real_kind
-    use physical_constants, only : rearth, g
+    use physical_constants, only : rearth, gravit
     use dimensions_mod, only : np, nlev, nvar, nelem
     use element_mod, only : element_t
     use edge_mod, only : edgevpack,  edgevunpack
@@ -920,7 +920,7 @@ contains
     use bndry_mod, only : bndry_exchangev
     use derived_type_mod, only : derived_type
     use perf_mod, only : t_startf, t_stopf
-    use physical_constants, only : g
+    use physical_constants, only : gravit
 
     implicit none
     real (c_double) ,intent(in)        :: xs(nelemd)
@@ -1227,7 +1227,7 @@ contains
     use bndry_mod, only : bndry_exchangev
     use derived_type_mod, only : derived_type
     use perf_mod, only : t_startf, t_stopf
-    use physical_constants, only : g
+    use physical_constants, only : gravit
 
     implicit none
     real (c_double) ,intent(in)        :: xs(nelemd)
@@ -1405,7 +1405,7 @@ contains
     use bndry_mod, only : bndry_exchangev
     use derived_type_mod, only : derived_type
     use perf_mod, only : t_startf, t_stopf
-    use physical_constants, only : g
+    use physical_constants, only : gravit
 
     implicit none
     real (c_double) ,intent(in)        :: xs(nelemd)
@@ -1615,7 +1615,7 @@ contains
     use bndry_mod, only : bndry_exchangev
     use derived_type_mod, only : derived_type
     use perf_mod, only : t_startf, t_stopf
-    use physical_constants, only : g
+    use physical_constants, only : gravit
 
     implicit none
     real (c_double) ,intent(in)        :: xs(nelemd)
@@ -1789,7 +1789,7 @@ contains
     use bndry_mod, only : bndry_exchangev
     use derived_type_mod, only : derived_type
     use perf_mod, only : t_startf, t_stopf
-    use physical_constants, only : g
+    use physical_constants, only : gravit
     
     implicit none
     real (c_double) ,intent(in)        :: xs(nelemd)

@@ -38,7 +38,7 @@ MODULE supercell
 !
 !=======================================================================
 
-  use physical_constants, only: g,p0,kappa,Rgas,Cp,Rwater_vapor,rearth,omega0, dd_pi
+  use physical_constants, only: g=>gravit,p0,kappa,Rgas,Cp,Rwater_vapor,rearth,omega0, dd_pi
 
   IMPLICIT NONE
 
