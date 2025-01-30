@@ -20,10 +20,10 @@ module dry_planar_tests
 
 !OG take from physical const mod instead
 
-  real(rl), parameter :: Rd 	= 287.0d0,	&	! Ideal gas const dry air (J kg^-1 K^1)
-				                        g	= 9.80616d0,	&	! Gravity (m s^2)
-				                        cp	= 1004.5d0,	&	! Specific heat capacity (J kg^-1 K^1)
-                                p0	= 100000.d0, &! reference pressure (Pa)
+  real(rl), parameter :: Rd = 287.0d0,&! Ideal gas const dry air (J kg^-1 K^1)
+                         g = 9.80616d0,&! Gravity (m s^2)
+                        cp = 1004.5d0,&! Specific heat capacity (J kg^-1 K^1)
+                                p0= 100000.d0, &! reference pressure (Pa)
                                 kappa   = Rd/cp
 
 !consts for kessler-defined qsat
@@ -169,6 +169,203 @@ subroutine planar_density_current_init(elem,hybrid,hvcoord,nets,nete)
   call abortmp('planar density current not yet implemented')
 
 end subroutine planar_density_current_init
+
+! planar pure advection
+subroutine planar_padvection_init(elem,hybrid,hvcoord,nets,nete)
+
+  type(element_t),    intent(inout), target :: elem(:)                  ! element array
+  type(hybrid_t),     intent(in)            :: hybrid                   ! hybrid parallel structure
+  type(hvcoord_t),    intent(inout)         :: hvcoord                  ! hybrid vertical coordinates
+  integer,            intent(in)            :: nets,nete                ! start, end element index
+
+  !last input is coriolis parameter
+  call padvection_init(elem,hybrid,hvcoord,nets,nete,0.d0)
+
+end subroutine planar_padvection_init
+
+
+
+subroutine bubble_init(elem,hybrid,hvcoord,nets,nete,f)
+
+  use control_mod, only: bubble_T0, bubble_dT, bubble_xycenter, bubble_zcenter, bubble_ztop, &
+                         bubble_xyradius,bubble_zradius, bubble_cosine, &
+                         bubble_moist, bubble_moist_drh, bubble_prec_type, bubble_rh_background
+  use physical_constants, only: Lx, Ly, Sx, Sy
+  use element_ops, only: set_elem_state
+
+  type(element_t),    intent(inout), target :: elem(:)                  ! element array
+  type(hybrid_t),     intent(in)            :: hybrid                   ! hybrid parallel structure
+  type(hvcoord_t),    intent(inout)         :: hvcoord                  ! hybrid vertical coordinates
+  integer,            intent(in)            :: nets,nete                ! start, end element index
+  real(rl),           intent(in)            :: f                        ! (const) Coriolis force
+
+  integer :: i,j,k,ie,ii
+  real(rl):: x,y,offset
+  real(rl):: pi(nlevp), pm(nlev), dpm(nlev), th0(nlevp), th0m(nlev), ai(nlevp), bi(nlevp), rr, &
+             qi_s(nlevp), Ti(nlevp), Tm(nlev), qi(nlevp)
+
+  real(rl):: zero_mid_init(np,np,nlev),zero_int_init(np,np,nlevp), &
+             dp_init(np,np,nlev),ps_init(np,np), &
+             phis_init(np,np,nlevp),t_init(np,np,nlev),p_init(np,np,nlev), &
+             zi_init(np,np,nlevp), zm_init(np,np,nlev), &
+             rh
+
+  if (qsize < 1 .and. bubble_moist) then
+    call abortmp('planar padvection requires at least 1 tracer')
+  endif
+
+  if (hybrid%masterthread) then
+     write(iulog,*) 'initializing hot bubble with'
+     print *, 'Lx, Ly =', Lx, Ly
+     print *, 'Sx, Sy =', Sx, Sy
+     print *, 'bubble_T0',  bubble_T0
+     print *, 'bubble_dT', bubble_dT
+     print *, 'bubble_xycenter', bubble_xycenter
+     print *, 'bubble_zcenter', bubble_zcenter
+     print *, 'bubble_ztop', bubble_ztop
+     print *, 'bubble_xyradius', bubble_xyradius
+     print *, 'bubble_zradius', bubble_zradius
+     print *, 'bubble_cosine', bubble_cosine
+     print *, 'bubble_moist', bubble_moist
+     print *, 'bubble_moist_drh', bubble_moist_drh
+     print *, 'bubble_rh_background', bubble_rh_background
+     print *, 'bubble_prec_type (0 is Kessler (default), 1 is RJ)', bubble_prec_type
+  endif
+
+  call get_evenly_spaced_z(zi,zm,0.0_rl,bubble_ztop)
+
+  !for the background state
+  do k=1,nlevp
+    Ti(k) = bubble_T0 - zi(k)*g/cp
+    pi(k) = p0*( Ti(k)/bubble_T0  )**(1.0/kappa)
+  enddo
+  do k=1,nlev
+    Tm(k) = bubble_T0 - zm(k)*g/cp
+    pm(k) = p0*( Tm(k)/bubble_T0  )**(1.0/kappa)
+  enddo
+  ! this T, z, pressure, and q1 (set below) together do not obey 
+  ! homme's EOS, meaning if one to compute phi from EOS, it won't match z
+  ! one could have zi replaced with output from phi_from_eos(),
+  ! but it won't satisfy model-independent setup.
+  ! instead, we use uniform zi as above.
+
+  !create hybrid coords now from pi
+  !note that this code should not depend on partitioning
+  !it depends on ref pressure profile, whcih is init-ed in the same way for all elements/gll
+
+  !old version, hybrid
+  ai(:) = 0.0; bi(:) = 0.0
+  ai(1) = pi(1)/p0;  bi(nlevp) = 1.0
+
+  do k=2,nlev
+    bi(k) = 1.0 - zi(k)/zi(1)
+    !restore ai frop given pressure
+    ai(k)=(pi(k)-bi(k)*pi(nlevp))/p0
+  enddo
+
+  hvcoord%hyai = ai; hvcoord%hybi = bi
+
+  do k = 1,nlev
+    dpm(k) = pressure_thickness(pi(nlevp),k,hvcoord)
+  end do
+  !set : hyam hybm 
+  hvcoord%hyam = 0.5 *(ai(2:nlev+1) + ai(1:nlev))
+  hvcoord%hybm = 0.5 *(bi(2:nlev+1) + bi(1:nlev))
+
+  !call set_layer_locations: sets  etam, etai, dp0, checks that Am=ai/2+ai/2
+  call set_layer_locations(hvcoord, .true., hybrid%masterthread)
+
+!this is what s available
+!  qi_s(k) = bubble_const1 / pi(k) * exp( bubble_const2 * (Ti(k) - bubble_const3) / ( Ti(k) - bubble_const4 ) )
+
+  !set some of element-size arrays
+  zero_mid_init(:,:,:) = 0.0
+  zero_int_init(:,:,:) = 0.0
+  do j=1,np; do i=1,np;
+    zi_init(i,j,1:nlevp) = zi(1:nlevp)
+    zm_init(i,j,1:nlev)  = zm(1:nlev)
+    ps_init(i,j) = pi(nlevp)
+    p_init(i,j,1:nlev) = pm(1:nlev)
+    dp_init(i,j,1:nlev) = dpm(1:nlev)
+  enddo; enddo
+
+  ! set the rest of conditions for each element
+  do ie = nets,nete
+    do j=1,np; do i=1,np
+
+      ! get horizontal coordinates at column i,j
+      x  = elem(ie)%spherep(i,j)%lon; y  = elem(ie)%spherep(i,j)%lat
+
+      do k=1,nlevp
+
+        !intermediate value
+        rr=(x-bubble_xycenter)   *(x-bubble_xycenter) / bubble_xyradius / bubble_xyradius + &
+           (zi(k)-bubble_zcenter)*(zi(k)-bubble_zcenter) / bubble_zradius / bubble_zradius
+
+        if (planar_slice .eqv. .true.) then
+          !no y dependence
+          rr=sqrt(rr)
+        else
+          rr =sqrt( rr + &
+                   (y-bubble_xycenter) * (y-bubble_xycenter) / bubble_xyradius / bubble_xyradius )
+        endif
+        if ( rr < 1.0 ) then
+          if (bubble_cosine) then
+            offset = cos(rr*dd_pi / 2.0 )
+            qi(k) = bubble_const1 + bubble_const2 * offset
+          else
+            !0/1 nonsmooth function
+            qi(k) = bubble_const1 + bubble_const2
+          endif
+        else
+          !set to reference profile
+          qi(k) = bubble_const1
+        endif
+      enddo ! k loop
+
+
+??????
+      !set theta on midlevels and then T from theta, exner
+      th0m(1:nlev) = (th0(1:nlev) + th0(2:nlevp) ) / 2.0
+      t_init(i,j,1:nlev) = th0m(1:nlev) * ( pm(1:nlev)/p0 )**kappa
+
+      do k=1,nlev
+        elem(ie)%state%Q(i,j,k,1) =   ( qi(k) + qi(k+1) ) / 2.0
+      enddo
+
+      !call set_elem_state(u,v,w,w_i,T,ps,phis,p,dp,zm,zi,g,elem,n0,n1,ntQ)
+      call set_elem_state(zero_mid_init,zero_mid_init,zero_mid_init, &
+                          zero_int_init,t_init,ps_init,zero_mid_init(:,:,1), &
+                          p_init,dp_init,zm_init,zi_init,g,elem(ie),1,3,-1)
+
+    enddo; enddo !i,j loop
+  enddo !ie loop
+
+  !indexing of Q, Qdp
+  !Q   (np,np,nlev,qsize_d)   
+  !Qdp (np,np,nlev,qsize_d,2) 
+  if (bubble_moist) then
+     ii=2
+  else
+     ii=1
+  endif
+
+  do ie = nets,nete
+     elem(ie)%fcor(:,:) = f
+
+     !all but vapor
+     elem(ie)%state%Q(:,:,:,ii:qsize) = 0.0
+
+     !sets hydro phi from (perturbed) theta and pressure, checks for hydrostatic balance after that, saves a state
+     !call tests_finalize(elem(ie),hvcoord)
+  enddo
+
+end subroutine padvection_init
+
+
+
+
+
 
 ! planar rising bubble
 subroutine planar_rising_bubble_init(elem,hybrid,hvcoord,nets,nete)

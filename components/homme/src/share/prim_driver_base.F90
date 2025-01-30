@@ -1129,14 +1129,29 @@ contains
        call t_stopf("copy_qdp_h2d")
 #endif
 
+
+!because remap can mess up velocities, call velocities init each step
+!instead of disabling remap in another file
+
+aaa
+
+
+#define PLA
+
       if (.not. single_column) then 
 
+#ifdef PLA
         ! Loop over rsplit vertically lagrangian timesiteps
         call prim_step(elem, hybrid, nets, nete, dt, tl, hvcoord, compute_diagnostics)
+#endif
 
         do r=2,rsplit
           call TimeLevel_update(tl,"leapfrog")
+
+#ifdef PLA
           call prim_step(elem, hybrid, nets, nete, dt, tl, hvcoord, .false.)
+#endif
+
         enddo
 
       else 
