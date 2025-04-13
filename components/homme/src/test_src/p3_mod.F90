@@ -4,7 +4,7 @@
 module p3phys
 
 
-use control_mod,          only: theta_hydrostatic_mode,do_predict_nc, do_subgrid_clouds, &
+use control_mod,          only: do_predict_nc, do_subgrid_clouds, &
                                 do_prescribed_CCN, precip_off, micro_nccons, p3_autocon_coeff, &
                                 p3_accret_coeff, p3_qc_autocon_expon, p3_nc_autocon_expon, &
                                 p3_qc_accret_expon, p3_wbf_coeff, p3_mincdnc, p3_max_mean_rain_size, &

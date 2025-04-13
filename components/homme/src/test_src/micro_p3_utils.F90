@@ -127,6 +127,12 @@ module micro_p3_utils
     subroutine micro_p3_utils_init(cpair,rair,rh2o,rhoh2o,mwh2o,mwdry,gravit,latvap,latice, &
                    cpliq,tmelt,pi,iulog,masterproc)
 
+    use control_mod, only: do_predict_nc, do_subgrid_clouds, &
+                           do_prescribed_CCN, precip_off, micro_nccons, p3_autocon_coeff, &
+                           p3_accret_coeff, p3_qc_autocon_expon, p3_nc_autocon_expon, &
+                           p3_qc_accret_expon, p3_wbf_coeff, p3_mincdnc, p3_max_mean_rain_size, &
+                           p3_embryonic_rain_size 
+    
     real(rl), intent(in) :: cpair
     real(rl), intent(in) :: rair
     real(rl), intent(in) :: rh2o
@@ -206,7 +212,23 @@ module micro_p3_utils
     dnu(15) = -0.966
     dnu(16) = -0.966
 
-    
+    if (masterproc_e3sm) then
+     write(iulog,*) 'Autoconversion and accretion parameters:'
+     print *, "do_predict_nc=",do_predict_nc
+     print *, "do_subgrid_clouds=",do_subgrid_clouds
+     print *, "do_prescribed_CCN=",do_prescribed_CCN
+     print *, "precip_off=",precip_off
+     print *, "micro_nccons=",micro_nccons
+     print *, "p3_autocon_coeff=",p3_autocon_coeff
+     print *, "p3_accret_coeff=",p3_accret_coeff
+     print *, "p3_qc_autocon_expon=",p3_qc_autocon_expon
+     print *, "p3_nc_autocon_expon=",p3_nc_autocon_expon
+     print *, "p3_qc_accret_expon=",p3_qc_accret_expon
+     print *, "p3_wbf_coeff=",p3_wbf_coeff
+     print *, "p3_mincdnc=",p3_mincdnc
+     print *, "p3_max_mean_rain_size=",p3_max_mean_rain_size
+     print *, "p3_embryonic_rain_size=",p3_embryonic_rain_size
+    endif 
     return
     end subroutine micro_p3_utils_init
 !__________________________________________________________________________________________!

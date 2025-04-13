@@ -484,21 +484,6 @@ use physical_constants, only : Sx, Sy, Lx, Ly, dx, dy, dx_ref, dy_ref
     theta_hydrostatic_mode = .false.   ! default NH
 #endif
 
-    do_predict_nc     = .true.
-    do_subgrid_clouds = .false.
-    do_prescribed_CCN = .false.
-    precip_off = .false.
-    micro_nccons = 1.0 
-    p3_autocon_coeff    = 30500.0
-    p3_accret_coeff     = 117.25   
-    p3_qc_autocon_expon = 3.19     
-    p3_nc_autocon_expon = -1.1     
-    p3_qc_accret_expon  = 1.15     
-    p3_wbf_coeff        = 1.0      
-    p3_mincdnc          = 20000000.0     
-    p3_max_mean_rain_size  = 0.005 
-    p3_embryonic_rain_size = 0.000025 
-
     ! =======================
     ! Read namelist variables
     ! =======================
