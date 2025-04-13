@@ -34,6 +34,11 @@ use dry_planar_tests,     only: planar_rising_bubble_init, planar_density_curren
 use moist_planar_tests,   only: planar_moist_rising_bubble_init, planar_moist_density_current_init, planar_moist_baroclinic_instab_init
 use moist_planar_tests,   only: planar_tropical_cyclone_init, planar_supercell_init
 
+use p3phys
+
+use physical_constants,   only: Cp,Rgas,Rwater_vapor,rho_liquidH20,MWliquidH20,MWDAIR,g,latvap,latice,Cl,&
+                                bubble_const3,DD_PI
+
 implicit none
 
 public :: set_prescribed_wind
@@ -91,10 +96,19 @@ subroutine set_test_initial_conditions(elem, deriv, hybrid, hvcoord, tl, nets, n
     case('planar_nonhydro_mtn_wave');
     case('planar_schar_mtn_wave');
     case('planar_rising_bubble');
-           if (bubble_moist) then 
-              call dcmip2016_init();
-              test_with_forcing = .true. ;
-           endif
+       !if (bubble_moist) then 
+       !   call dcmip2016_init();
+       test_with_forcing = .true. ;
+       !pi type was incompatible
+!    rho_h2o   = rhoh2o ! Density of liquid water (STP) !997.
+!    ep_2   = mwh2o/mwdry  ! ratio of molecular mass of water to the molecular mass of dry air !0.622
+       ! call micro_p3_utils_init(1005.0d0,287.04d0,461.50d0,997.0d0,18.016d0,28.966d0,9.80616d0,2.501d6,3.337d5, &
+       !                         4188.0d0,273.0d0,3.14159265d0,0,hybrid%par%masterproc)
+       call micro_p3_utils_init(Cp,Rgas,Rwater_vapor,rho_liquidH20,MWliquidH20,MWDAIR,g,latvap,latice,Cl,&
+             bubble_const3,DD_PI,0,hybrid%par%masterproc)
+
+       call p3_init('.','4.1.1');
+       !endif
     case('planar_density_current');
     case('planar_baroclinic_instab');
     case('planar_moist_rising_bubble');
@@ -244,7 +258,8 @@ subroutine compute_test_forcing(elem,hybrid,hvcoord,nt,ntQ,dt,nets,nete,tl)
 
     case('planar_rising_bubble');  
             !if (bubble_moist) call dcmip2016_test1_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl)
-            if (bubble_moist) call bubble_new_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl)
+            !if (bubble_moist) call bubble_new_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl)
+            call interface_to_p3(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl)
 
     case('held_suarez0');
        do ie=nets,nete
