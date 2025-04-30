@@ -68,10 +68,10 @@ implicit none
   enddo
   if (present(caller)) then
      call pnh_and_exner_from_eos2(hvcoord,vtheta_dp,dp3d,dphi,pnh,exner,&
-          dpnh_dp_i,phi_i(:,:,nlevp),caller,pnh_i_out)
+          dpnh_dp_i,phi_i(:,:,nlevp),caller,pnh_i_out,phi_i_in=phi_i)
   else
      call pnh_and_exner_from_eos2(hvcoord,vtheta_dp,dp3d,dphi,pnh,exner,&
-          dpnh_dp_i,phi_i(:,:,nlevp),'not specified',pnh_i_out)
+          dpnh_dp_i,phi_i(:,:,nlevp),'not specified',pnh_i_out,phi_i_in=phi_i)
   endif
   end subroutine pnh_and_exner_from_eos
 
@@ -122,6 +122,11 @@ implicit none
   real (kind=real_kind) ::  rheighti(np,np,nlevp), rheightm(np,np,nlev), rhatm(np,np,nlev), r0
   real (kind=real_kind) ::  rhati(np,np,nlevp), invrhatm(np,np,nlev), invrhati(np,np,nlevp), &
                             newrhatsquared(np,np,nlev)
+#ifdef HOMMEXX_BFB_TESTING
+  real (kind=real_kind) ::  rheight_above(np,np,nlev), rhat_above(np, np, nlev)
+#endif
+
+
 #endif
 
 #ifdef HOMMEDA
@@ -146,9 +151,20 @@ implicit none
 
   newrhatsquared = (rhati(:,:,1:nlev)*rhati(:,:,1:nlev)   + &
                     rhati(:,:,2:nlevp)*rhati(:,:,2:nlevp) + &
-                    rhati(:,:,1:nlev)*rhati(:,:,2:nlevp))/3.0
-#endif
+                    rhati(:,:,1:nlev)*rhati(:,:,2:nlevp))/3.0_real_kind
+#ifdef HOMMEXX_BFB_TESTING
+  rheight_above = (phi_i(:, :, 1:nlev) + dphi)/g + r0
+  rhat_above = rheight_above/r0 ! r/r0
+  newrhatsquared = (rhati(:,:,1:nlev)*rhati(:,:,1:nlev)   + &
+                    rhat_above*rhat_above + &
+                    rhati(:,:,1:nlev)*rhat_above)/3.0_real_kind
+#else
+  newrhatsquared = (rhati(:,:,1:nlev)*rhati(:,:,1:nlev)   + &
+                    rhati(:,:,2:nlevp)*rhati(:,:,2:nlevp) + &
+                    rhati(:,:,1:nlev)*rhati(:,:,2:nlevp))/3.0_real_kind
+#endif 
 
+#endif
   ! check for bad state that will crash exponential function below
   if (theta_hydrostatic_mode) then
     ierr= any(dp3d(:,:,:) < 0 )

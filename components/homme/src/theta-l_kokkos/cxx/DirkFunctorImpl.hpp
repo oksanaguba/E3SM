@@ -615,8 +615,8 @@ struct DirkFunctorImpl {
       const auto rhat_top = 1.0;
 # endif
       const auto invrhat_top = 1.0/rhat_top;
-        const auto pnh_i_0 = hvcoord.hybrid_ai0*hvcoord.ps0*(invrhat_top * invrhat_top); // hydrostatic ptop
-        dpnh_dp_i(0,i) = 2*(pnh(0,i) - pnh_i_0)/dp3d(0,i)*rhat_top * rhat_top;
+        const auto pnh_i_0 = (hvcoord.hybrid_ai0*hvcoord.ps0)*invrhat_top * invrhat_top; // hydrostatic ptop
+        dpnh_dp_i(0,i) = (2*(pnh(0,i) - pnh_i_0)/dp3d(0,i))*rhat_top * rhat_top;
       };
       parallel_for(pv, k0);
     };

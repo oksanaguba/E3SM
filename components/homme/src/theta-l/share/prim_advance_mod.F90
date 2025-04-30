@@ -1157,6 +1157,7 @@ contains
 #ifdef HOMMEDA
   real (kind=real_kind) ::  rheighti(np,np,nlevp), rheightm(np,np,nlev), rhatm(np,np,nlev), r0
   real (kind=real_kind) ::  rhati(np,np,nlevp), invrhatm(np,np,nlev), invrhati(np,np,nlevp), munew(np,np,nlevp)
+  real (kind=real_kind) ::  bfb_scale
 #endif
 
   call t_startf('compute_andor_apply_rhs')
@@ -1184,11 +1185,11 @@ contains
 #ifdef HOMMEDA
 !repeated code
      rheighti = phi_i/g + r0
-     rheightm(:,:,1:nlev) = (rheighti(:,:,1:nlev) + rheighti(:,:,2:nlevp))/2
+     rheightm(:,:,1:nlev) = ((phi_i(:,:,1:nlev) + phi_i(:,:,2:nlevp))/2_real_kind)/g + r0
      rhati = rheighti/r0 ! r/r0
      rhatm = rheightm/r0
-     invrhatm = 1/rhatm
-     invrhati = 1/rhati
+     invrhatm = 1_real_kind/rhatm
+     invrhati = 1_real_kind/rhati
 #endif
 
 #ifdef ENERGY_DIAGNOSTICS
@@ -1259,10 +1260,11 @@ contains
         ! ================================
         vtemp(:,:,1,k) = elem(ie)%state%v(:,:,1,k,n0)*dp3d(:,:,k)
         vtemp(:,:,2,k) = elem(ie)%state%v(:,:,2,k,n0)*dp3d(:,:,k)
-
 #ifdef HOMMEDA
+        if (.not. theta_hydrostatic_mode) then
         vtemp(:,:,1,k) = vtemp(:,:,1,k)*invrhatm(:,:,k)
         vtemp(:,:,2,k) = vtemp(:,:,2,k)*invrhatm(:,:,k)
+        end if
 #endif
         elem(ie)%derived%vn0(:,:,:,k)=elem(ie)%derived%vn0(:,:,:,k)+eta_ave_w*vtemp(:,:,:,k)
 
@@ -1270,7 +1272,9 @@ contains
         vort(:,:,k)=vorticity_sphere(elem(ie)%state%v(:,:,:,k,n0),deriv,elem(ie))
 
 #ifdef HOMMEDA
+        if (.not. theta_hydrostatic_mode) then
         vort(:,:,k) = vort(:,:,k)*invrhatm(:,:,k)
+        end if
 #endif
      enddo
 
@@ -1417,8 +1421,11 @@ contains
         w_tens(:,:,k) = (-w_vadv_i(:,:,k) - v_gradw_i(:,:,k))*scale1 - scale2*g*(1-dpnh_dp_i(:,:,k))
 
 #ifdef HOMMEDA
+#ifdef HOMMEXX_BFB_TESTING
+#else
+#endif
         !add DA metric term in w_t : \bu^2/r
-        w_tens(:,:,k) = w_tens(:,:,k) +scale1*(v2_over_r_i(:,:,1,k)*v2_over_r_i(:,:,1,k) + v2_over_r_i(:,:,2,k)*v2_over_r_i(:,:,2,k))
+        w_tens(:,:,k) = w_tens(:,:,k) + scale1*(v2_over_r_i(:,:,1,k) + v2_over_r_i(:,:,2,k))
         !add DA cos term in w_t : \cos * u
         w_tens(:,:,k) = w_tens(:,:,k) +scale1*elem(ie)%fcorcosine(:,:)*v_i(:,:,1,k)
 #endif
@@ -1433,9 +1440,9 @@ contains
         phi_tens(:,:,k) =  (-phi_vadv_i(:,:,k) - v_gradphinh_i(:,:,k))*scale1 &
           + scale2*g*elem(ie)%state%w_i(:,:,k,n0)
 
-#if defined HOMMEDA && defined ENERGY_DIAGNOSTICS 
-        phi_tens_notopo(:,:,k) = phi_tens(:,:,k)
-#endif
+!#if defined HOMMEDA && defined ENERGY_DIAGNOSTICS 
+!        phi_tens_notopo(:,:,k) = phi_tens(:,:,k)
+!#endif
 
 !gradphis term is "artificial", and does not need special [u/rhat] averaging in DA, but needs to 
 !be matched in imex
@@ -1469,7 +1476,7 @@ contains
      w_tens(:,:,k) = (-w_vadv_i(:,:,k) - v_gradw_i(:,:,k))*scale1 - scale1*g*(1-dpnh_dp_i(:,:,k) )
 #ifdef HOMMEDA
      !add DA metric term in w_t : \bu^2/r
-     w_tens(:,:,k) = w_tens(:,:,k) +scale1*(v2_over_r_i(:,:,1,k)*v2_over_r_i(:,:,1,k) + v2_over_r_i(:,:,2,k)*v2_over_r_i(:,:,2,k))
+     w_tens(:,:,k) = w_tens(:,:,k) +scale1* (v2_over_r_i(:,:,1,k) + v2_over_r_i(:,:,2,k))
      !add DA cos term in w_t : \cos * u
      w_tens(:,:,k) = w_tens(:,:,k) +scale1*elem(ie)%fcorcosine(:,:)*v_i(:,:,1,k)
 #endif
@@ -1504,8 +1511,10 @@ contains
            v_theta(:,:,1,k)=elem(ie)%state%v(:,:,1,k,n0)*vtheta_dp(:,:,k)
            v_theta(:,:,2,k)=elem(ie)%state%v(:,:,2,k,n0)*vtheta_dp(:,:,k)
 #ifdef HOMMEDA
+           if (.not. theta_hydrostatic_mode) then
            v_theta(:,:,1,k) = v_theta(:,:,1,k) * invrhatm(:,:,k)
            v_theta(:,:,2,k) = v_theta(:,:,2,k) * invrhatm(:,:,k)
+           end if
 #endif
 
            div_v_theta(:,:,k)=divergence_sphere(v_theta(:,:,:,k),deriv,elem(ie))
@@ -1513,8 +1522,10 @@ contains
            ! alternate form, non-conservative, better HS topography results
            v_theta(:,:,:,k) = gradient_sphere(vtheta(:,:,k),deriv,elem(ie)%Dinv)
 #ifdef HOMMEDA
+           if (rsplit > 0 .and. .not. theta_hydrostatic_mode) then
            v_theta(:,:,1,k) = v_theta(:,:,1,k) * invrhatm(:,:,k)
            v_theta(:,:,2,k) = v_theta(:,:,2,k) * invrhatm(:,:,k)
+           end if
 #endif
 
            !there is already a da correction in divdp term
@@ -1531,6 +1542,10 @@ contains
         ! grad(w^2/2) term
         ! w vorticity correction term
         wvor(:,:,:,k) = gradient_sphere(temp(:,:,k)/2,deriv,elem(ie)%Dinv)
+
+
+
+
 #ifdef HOMMEDA
         wvor(:,:,1,k) = wvor(:,:,1,k) * invrhatm(:,:,k)
         wvor(:,:,2,k) = wvor(:,:,2,k) * invrhatm(:,:,k)
@@ -1551,10 +1566,14 @@ contains
         gradKE(:,:,:,k) = gradient_sphere(KE(:,:,k),deriv,elem(ie)%Dinv)
         gradexner(:,:,:,k) = gradient_sphere(exner(:,:,k),deriv,elem(ie)%Dinv)
 #ifdef HOMMEDA
+       if (.not. theta_hydrostatic_mode) then
+        if (rsplit .ne. 0) then 
         gradKE(:,:,1,k) = gradKE(:,:,1,k) * invrhatm(:,:,k)
         gradKE(:,:,2,k) = gradKE(:,:,2,k) * invrhatm(:,:,k)
+        end if
         gradexner(:,:,1,k) = gradexner(:,:,1,k) * invrhatm(:,:,k)
         gradexner(:,:,2,k) = gradexner(:,:,2,k) * invrhatm(:,:,k)
+        end if
 #endif
 
 #if 0
@@ -1597,6 +1616,7 @@ contains
 
 
 !OG do pgrad DA later !
+
         if (pgrad_correction==1) then
            T0 = TREF-tref_lapse_rate*TREF*Cp/g     ! = 97  
 #ifdef HOMMEXX_BFB_TESTING
@@ -1615,7 +1635,6 @@ contains
            mgrad(:,:,1,k)=mgrad(:,:,1,k) + Cp*T0*(vtemp(:,:,1,k)-gradexner(:,:,1,k)/exner(:,:,k))
            mgrad(:,:,2,k)=mgrad(:,:,2,k) + Cp*T0*(vtemp(:,:,2,k)-gradexner(:,:,2,k)/exner(:,:,k))
         endif
-
 
         do j=1,np
            do i=1,np
@@ -1646,13 +1665,20 @@ contains
                   -Cp*vtheta(i,j,k)*gradexner(i,j,2,k) &
                   -wvor(i,j,2,k) )*scale1
 
+#endif
 #ifdef HOMMEDA
-              vtens1(i,j,k) = vtens1(i,j,k) - scale1*(elem(ie)%state%w_i(i,j,k,n0)+elem(ie)%state%w_i(i,j,k+1,n0))/2*(  v1/rheightm(i,j,k) &
+#ifdef HOMMEXX_BFB_TESTING
+              bfb_scale = 1.0_real_kind
+#else
+              bfb_scale = scale1
+#endif 
+              if (.not. theta_hydrostatic_mode) then
+              vtens1(i,j,k) = vtens1(i,j,k) - bfb_scale*(elem(ie)%state%w_i(i,j,k,n0)+elem(ie)%state%w_i(i,j,k+1,n0))/2_real_kind*(  v1/rheightm(i,j,k) &
                                                                                   + elem(ie)%fcorcosine(i,j) )
-              vtens2(i,j,k) = vtens2(i,j,k) - scale1*(elem(ie)%state%w_i(i,j,k,n0)+elem(ie)%state%w_i(i,j,k+1,n0))/2*v2/rheightm(i,j,k)
+              vtens2(i,j,k) = vtens2(i,j,k) - bfb_scale*(elem(ie)%state%w_i(i,j,k,n0)+elem(ie)%state%w_i(i,j,k+1,n0))/2_real_kind*v2/rheightm(i,j,k)
+              end if 
 #endif
 
-#endif
            end do
         end do     
      end do 
@@ -1665,7 +1691,7 @@ contains
      ! diagnostics. not performance critical, dont thread
      ! =========================================================
      if (compute_diagnostics) then
-        elem(ie)%accum%PE=0
+        !elem(ie)%accum%PE=0
 
         elem(ie)%accum%KEu_horiz1=0
         elem(ie)%accum%KEu_horiz2=0
