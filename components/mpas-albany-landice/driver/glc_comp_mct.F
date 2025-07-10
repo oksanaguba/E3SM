@@ -80,6 +80,8 @@ module glc_comp_mct
 
   integer :: glcLogUnit ! unit number for glc log
 
+  logical  :: ocn_c2_glctf           ! .true.  => ocn to glc thermal forcing coupling on
+
   ! MPAS Datatypes
   !type (dm_info), pointer :: dminfo
   type (core_type), pointer :: corelist => null()
@@ -526,6 +528,9 @@ contains
     ! Determine coupling type (not currently needed by MALI)
     call seq_infodata_GetData(infodata, cpl_seq_option=cpl_seq_option)
 
+    ! Determine if ocn to glc thermal forcing coupling is on
+    call seq_infodata_GetData(infodata, ocn_c2_glctf=ocn_c2_glctf)
+
     ! Initialize the MALI core
     ierr = domain % core % core_init(domain, timeStamp)
     if ( ierr /= 0 ) then
@@ -557,6 +562,13 @@ contains
     call check_clocks_sync(domain % clock, Eclock, err_tmp)
     ierr = ior(ierr,err_tmp)
 
+    ! Reset the alarm for checking for force setting of the adaptive timestep interval
+    if (mpas_is_alarm_ringing(domain % clock, 'adaptiveTimestepForceInterval', ierr=err_tmp)) then
+       ierr = ior(ierr, err_tmp)
+       call mpas_reset_clock_alarm(domain % clock, 'adaptiveTimestepForceInterval', ierr=err_tmp)
+       ierr = ior(ierr, err_tmp)
+    endif
+    ierr = ior(ierr, err_tmp)
 
 !-----------------------------------------------------------------------
 !
@@ -1387,7 +1399,8 @@ contains
                                                floatingBasalMassBal,&
                                                surfaceTemperature,&
                                                basalOceanHeatflx,&
-                                               OceanDensity
+                                               OceanDensity, &
+                                               ismip6_2dThermalForcing
 
     errorCode = 0
 
@@ -1405,6 +1418,7 @@ contains
          call mpas_pool_get_array(geometryPool, 'sfcMassBal', sfcMassBal)
          call mpas_pool_get_array(geometryPool, 'floatingBasalMassBal',floatingBasalMassBal)
          call mpas_pool_get_array(thermalPool, 'surfaceTemperature',surfaceTemperature)
+         call mpas_pool_get_array(geometryPool, 'ismip6_2dThermalForcing', ismip6_2dThermalForcing)
 !         call mpas_pool_get_array(thermalPool, 'basalOceanHeatflx',basalOceanHeatflx)
          !call mpas_pool_get_array(geometryPool, 'OceanDensity',OceanDensity)
 
@@ -1412,6 +1426,8 @@ contains
             n = n + 1
             sfcMassBal(i) = x2g_g % rAttr(index_x2g_Flgl_qice, n)
             floatingBasalMassBal(i) = x2g_g % rAttr(index_x2g_Fogx_qiceli, n)
+            if (ocn_c2_glctf) &
+               ismip6_2dThermalForcing(i) = x2g_g % rAttr(index_x2g_So_tf2d, n)
 !            surfaceTemperature(i) = x2g_g % rAttr(index_x2g_Sl_tsrf, n)
 !JW            basalOceanHeatflx(i) = x2g_g % rAttr(index_x2g_Fogo_qiceh, n)
 !            basalOceanHeatflx(i) = x2g_g % rAttr(index_x2g_Fogx_qicehi, n)
@@ -1483,10 +1499,12 @@ contains
          do i = 1, nCellsSolve
             n = n + 1
 
-            !call route_ice_runoff(0.0_RKIND, & !Recuperate runoff routing switch code (originally in glc_route_ice_runoff module in earlier code), and attach to ice calving flux once present...
+            ! Recuperate runoff routing switch code (originally in glc_route_ice_runoff module in earlier code), 
+            ! and attach to ice calving flux once present...
+            !call route_ice_runoff(0.0_RKIND, & 
             !                      rofi_to_ocn=Fogg_rofi, &
             !                      rofi_to_ice=Figg_rofi)
-            g2x_g % rAttr(index_g2x_Fogg_rofi,n)=0.0 !...and remove these placeholders
+            g2x_g % rAttr(index_g2x_Fogg_rofi,n)=0.0!...and remove these placeholders
             g2x_g % rAttr(index_g2x_Figg_rofi,n)=0.0 !...and remove these placeholders
             g2x_g % rAttr(index_g2x_Fogg_rofl,n) = 0.0 !Attach to subglacial liquid flux once present
 

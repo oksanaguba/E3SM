@@ -398,7 +398,7 @@ deep_copy_impl (const Field& src) const {
   if (rank == 0) {
     auto v     =     get_view<      ST,HD>();
     auto v_src = src.get_view<const ST,HD>();
-    v() = v_src();
+    Kokkos::deep_copy(v,v_src);
     return;
   }
 
@@ -543,7 +543,7 @@ void Field::deep_copy_impl (const ST value) const {
     case 0:
       {
         auto v = get_view<ST,HD>();
-        v() = value;
+        Kokkos::deep_copy(v,value);
       }
       break;
     case 1:
@@ -695,6 +695,34 @@ scale (const ST beta)
 
 template<HostOrDevice HD>
 void Field::
+scale_inv (const Field& x)
+{
+  const auto& dt = data_type();
+  if (dt==DataType::IntType) {
+    int fill_val = constants::DefaultFillValue<int>().value;
+    if (get_header().has_extra_data("mask_value")) {
+      fill_val = get_header().get_extra_data<int>("mask_value");
+    }
+    return update_impl<CombineMode::Divide,HD,int>(x,0,0,fill_val);
+  } else if (dt==DataType::FloatType) {
+    float fill_val = constants::DefaultFillValue<float>().value;
+    if (get_header().has_extra_data("mask_value")) {
+      fill_val = get_header().get_extra_data<float>("mask_value");
+    }
+    return update_impl<CombineMode::Divide,HD,float>(x,0,0,fill_val);
+  } else if (dt==DataType::DoubleType) {
+    double fill_val = constants::DefaultFillValue<double>().value;
+    if (get_header().has_extra_data("mask_value")) {
+      fill_val = get_header().get_extra_data<double>("mask_value");
+    }
+    return update_impl<CombineMode::Divide,HD,double>(x,0,0,fill_val);
+  } else {
+    EKAT_ERROR_MSG ("Error! Unrecognized/unsupported field data type in Field::scale_inv.\n");
+  }
+}
+
+template<HostOrDevice HD>
+void Field::
 scale (const Field& x)
 {
   const auto& dt = data_type();
@@ -720,8 +748,6 @@ scale (const Field& x)
     EKAT_ERROR_MSG ("Error! Unrecognized/unsupported field data type in Field::scale.\n");
   }
 }
-
-
 
 template<CombineMode CM, HostOrDevice HD,typename ST>
 void Field::
@@ -966,6 +992,7 @@ auto Field::get_ND_view () const
                  "MaxRank = 6.\n"
                  "This should never be called at run time.\n"
                  "Please contact developer if this functionality is required\n");
+  return get_view_type<data_nd_t<T,N>,HD>();
 }
 
 } // namespace scream
