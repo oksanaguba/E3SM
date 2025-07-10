@@ -1,7 +1,7 @@
 #ifndef SCREAM_PHYSICS_DYNAMICS_REMAPPER_HPP
 #define SCREAM_PHYSICS_DYNAMICS_REMAPPER_HPP
 
-#include "share/scream_config.hpp"
+#include "share/eamxx_config.hpp"
 
 #include "share/grid/remap/abstract_remapper.hpp"
 
@@ -151,7 +151,7 @@ protected:
 
   bool subfields_info_has_changed (const std::map<int,SubviewInfo>& subfield_info,
                                    const std::vector<Field>& fields) const;
-  void update_subfields_views (const std::map<int,SubviewInfo>& subfield_info,
+  void update_subfields_views (std::map<int,SubviewInfo>& subfield_info,
                                const ViewsRepo& repo,
                                const std::vector<Field>& fields) const;
 

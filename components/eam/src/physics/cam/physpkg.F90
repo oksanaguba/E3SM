@@ -32,8 +32,7 @@ module physpkg
 
   use cam_control_mod,  only: ideal_phys, adiabatic
   use phys_control,     only: phys_do_flux_avg, phys_getopts, waccmx_is
-  use zm_conv,          only: do_zmconv_dcape_ull => trigdcape_ull, &
-                              do_zmconv_dcape_only => trig_dcape_only
+  use zm_conv,          only: zm_param
   use iop_data_mod,     only: single_column
   use flux_avg,         only: flux_avg_init
   use infnan,           only: posinf, assignment(=)
@@ -2021,7 +2020,7 @@ end if ! l_ac_energy_chk
 
     ! DCAPE-ULL: record current state of T and q for computing dynamical tendencies
     !            the calculation follows the same format as in diag_phys_tend_writeout
-    if (deep_scheme .eq. 'ZM' .and. (do_zmconv_dcape_ull .or. do_zmconv_dcape_only)) then
+    if ( deep_scheme.eq.'ZM' .and. zm_param%trig_dcape ) then
       ifld = pbuf_get_index('T_STAR')
       call pbuf_get_field(pbuf, ifld, t_star, (/1,1/),(/pcols,pver/))
       ifld = pbuf_get_index('Q_STAR')
@@ -3235,7 +3234,9 @@ subroutine phys_timestep_init(phys_state, cam_out, pbuf2d)
   if(Nudge_Model) call nudging_timestep_init(phys_state)
 
   ! Update Transformed Eularian Mean (TEM) diagnostics
+  call t_startf('phys_grid_ctem_diags')
   call phys_grid_ctem_diags(phys_state)
+  call t_stopf('phys_grid_ctem_diags')
 
 end subroutine phys_timestep_init
 
@@ -3247,14 +3248,14 @@ subroutine add_fld_default_calls()
   implicit none
 
   !Add all existing ptend names for the addfld calls
-  character(len=20), parameter :: vlist(28) = (/     'topphysbc           '                       ,&
-       'chkenergyfix        ','dadadj              ','zm_convr            ','zm_conv_evap        ',&
-       'momtran             ','zm_conv_tend        ','UWSHCU              ','convect_shallow     ',&
-       'pcwdetrain_mac      ','macro_park          ','macrop              ','micro_mg            ',&
-       'cldwat_mic          ','aero_model_wetdep_ma','convtran2           ','cam_radheat         ',&
-       'chemistry           ','vdiff               ','rayleigh_friction   ','aero_model_drydep_ma',&
-       'Grav_wave_drag      ','convect_shallow_off ','clubb_ice1          ','clubb_det           ',&
-       'clubb_ice4          ','clubb_srf           ','micro_p3            ' /)
+  character(len=21), parameter :: vlist(28) = (/       'topphysbc            '                       ,&
+       'chkenergyfix         ','dadadj               ','zm_convr             ','zm_conv_evap         ',&
+       'zm_transport_momentum','zm_conv_tend         ','UWSHCU               ','convect_shallow      ',&
+       'pcwdetrain_mac       ','macro_park           ','macrop               ','micro_mg             ',&
+       'cldwat_mic           ','aero_model_wetdep_ma ','zm_transport_tracer_2','cam_radheat          ',&
+       'chemistry            ','vdiff                ','rayleigh_friction    ','aero_model_drydep_ma ',&
+       'Grav_wave_drag       ','convect_shallow_off  ','clubb_ice1           ','clubb_det            ',&
+       'clubb_ice4           ','clubb_srf            ','micro_p3             '/)
 
 
 

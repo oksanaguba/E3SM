@@ -34,6 +34,10 @@ set_extra_data (const std::string& key,
 
 std::shared_ptr<FieldHeader> FieldHeader::alias(const std::string& name) const {
   auto fh = create_header(get_identifier().alias(name));
+  if (get_parent() != nullptr) {
+    // If we're aliasing, we MUST keep track of the parent
+    fh->create_parent_child_link(get_parent());
+  }
   fh->m_tracking = m_tracking;
   fh->m_alloc_prop = m_alloc_prop;
   fh->m_extra_data = m_extra_data;
@@ -50,8 +54,8 @@ bool FieldHeader::is_aliasing (const FieldHeader& rhs) const
       m_extra_data==rhs.m_extra_data)
     return true;
 
-  auto p = get_parent().lock();
-  auto rhs_p = rhs.get_parent().lock();
+  auto p = get_parent();
+  auto rhs_p = rhs.get_parent();
   if (p!=nullptr and rhs_p!=nullptr) {
     return p->is_aliasing(*rhs_p) and
            m_alloc_prop->get_subview_info()==rhs.m_alloc_prop->get_subview_info();

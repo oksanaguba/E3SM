@@ -5,12 +5,11 @@
 #include "p3_functions.hpp"
 #include "p3_test_data.hpp"
 #include "p3_data.hpp"
-#include "share/scream_types.hpp"
+#include "share/eamxx_types.hpp"
 
 #include "ekat/ekat_pack.hpp"
 #include "ekat/ekat_pack.hpp"
 #include "ekat/kokkos/ekat_kokkos_utils.hpp"
-#include "ekat/util/ekat_file_utils.hpp"
 
 #include <thread>
 #include <array>

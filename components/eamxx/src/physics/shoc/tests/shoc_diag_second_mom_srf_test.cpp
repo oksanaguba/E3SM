@@ -5,8 +5,8 @@
 #include "shoc_functions.hpp"
 #include "shoc_test_data.hpp"
 #include "physics/share/physics_constants.hpp"
-#include "share/scream_types.hpp"
-#include "share/util/scream_setup_random_test.hpp"
+#include "share/eamxx_types.hpp"
+#include "share/util/eamxx_setup_random_test.hpp"
 
 #include "ekat/ekat_pack.hpp"
 #include "ekat/util/ekat_arch.hpp"
@@ -127,7 +127,7 @@ struct UnitWrap::UnitTest<D>::TestSecondMomSrf : public UnitWrap::UnitTest<D>::B
     } // SCREAM_BFB_TESTING
     else if (this->m_baseline_action == GENERATE) {
       for (Int i = 0; i < num_runs; ++i) {
-        cxx_data[i].write(Base::m_fid);
+        cxx_data[i].write(Base::m_ofile);
       }
     }
 #endif

@@ -2,11 +2,10 @@
 #include "shoc_test_data.hpp"
 #include "shoc_ic_cases.hpp"
 
-#include "share/scream_types.hpp"
-#include "share/scream_session.hpp"
-#include "share/util/scream_utils.hpp"
+#include "share/eamxx_types.hpp"
+#include "share/eamxx_session.hpp"
+#include "share/util/eamxx_utils.hpp"
 
-#include "ekat/util/ekat_file_utils.hpp"
 #include "ekat/util/ekat_test_utils.hpp"
 #include "ekat/ekat_assert.hpp"
 
@@ -62,8 +61,8 @@ struct Baseline {
   }
 
   Int generate_baseline (const std::string& filename) {
-    auto fid = ekat::FILEPtr(fopen(filename.c_str(), "w"));
-    EKAT_REQUIRE_MSG( fid, "generate_baseline can't write " << filename);
+    std::ofstream ofile (filename, std::ios::binary);
+    EKAT_REQUIRE_MSG (ofile.good(), "generate_baseline can't write '" + filename + "'\n");
     Int nerr = 0;
 
     // These times are thrown out, I just wanted to be able to use auto
@@ -91,7 +90,7 @@ struct Baseline {
           }
 
           if (ps.repeat == 0) {
-            write(fid, d);
+            write(ofile, d);
           }
         }
       }
@@ -105,10 +104,10 @@ struct Baseline {
   }
 
   Int run_and_cmp (const std::string& filename, const double& tol, bool no_baseline) {
-    ekat::FILEPtr fid;
+    std::ifstream ifile;
     if (!no_baseline) {
-      fid = ekat::FILEPtr(fopen(filename.c_str(), "r"));
-      EKAT_REQUIRE_MSG( fid, "generate_baseline can't read " << filename);
+      ifile.open(filename,std::ios::binary);
+      EKAT_REQUIRE_MSG( ifile.good(), "run_and_cmp can't read '" + filename + "'\n");
     }
     Int nerr = 0, ne;
     int case_num = 0;
@@ -134,7 +133,7 @@ struct Baseline {
           for (int it = 0; it < ps.nsteps; it++) {
             std::cout << "--- checking case # " << case_num << ", timestep # = " << (it+1)*ps.nadv
                       << " ---\n" << std::flush;
-            read(fid, d_ref);
+            read(ifile, d_ref);
             shoc_main(*d);
             ne = compare(tol, d_ref, d);
             if (ne) std::cout << "Ref impl failed.\n";
@@ -161,32 +160,33 @@ private:
 
   std::vector<ParamSet> params_;
 
-  static void write (const ekat::FILEPtr& fid, const FortranData::Ptr& d) {
+  static void write (std::ofstream& ofile, const FortranData::Ptr& d) {
     FortranDataIterator fdi(d);
     for (Int i = 0, n = fdi.nfield(); i < n; ++i) {
       const auto& f = fdi.getfield(i);
-      ekat::write(&f.dim, 1, fid);
-      ekat::write(f.extent, f.dim, fid);
-      ekat::write(f.data, f.size, fid);
+      impl::write_scalars(ofile,f.dim);
+      impl::write_scalars(ofile,f.extent);
+      impl::write_scalars(ofile,f.data,f.size);
     }
   }
 
-  static void read (const ekat::FILEPtr& fid, const FortranData::Ptr& d) {
+  static void read (std::ifstream& ifile, const FortranData::Ptr& d) {
     FortranDataIterator fdi(d);
     for (Int i = 0, n = fdi.nfield(); i < n; ++i) {
       const auto& f = fdi.getfield(i);
-      int dim, ds[3];
-      ekat::read(&dim, 1, fid);
+      int dim;
+      impl::read_scalars(ifile,dim);
       EKAT_REQUIRE_MSG(dim == f.dim,
                       "For field " << f.name << " read expected dim " <<
                       f.dim << " but got " << dim);
-      ekat::read(ds, dim, fid);
+      std::vector<int> ds(dim);
+      impl::read_scalars(ifile,ds);
       for (int i = 0; i < dim; ++i)
         EKAT_REQUIRE_MSG(ds[i] == f.extent[i],
                         "For field " << f.name << " read expected dim "
                         << i << " to have extent " << f.extent[i] << " but got "
                         << ds[i]);
-      ekat::read(f.data, f.size, fid);
+      impl::read_scalars(ifile,f.data,f.size);
     }
   }
 };
@@ -291,7 +291,7 @@ int main (int argc, char** argv) {
   // Compute full baseline file name with precision.
   baseline_fn += "/shoc_run_and_cmp.baseline" + std::to_string(sizeof(scream::Real));
 
-  scream::initialize_scream_session(argc, argv);
+  scream::initialize_eamxx_session(argc, argv);
   {
     Baseline bln(nsteps, static_cast<Real>(dt), ncol, nlev, num_qtracers, nadv, repeat);
     if (generate) {
@@ -306,7 +306,7 @@ int main (int argc, char** argv) {
       nerr += bln.run_and_cmp(baseline_fn, tol, no_baseline);
     }
   }
-  scream::finalize_scream_session();
+  scream::finalize_eamxx_session();
 
   return nerr != 0 ? 1 : 0;
 }
