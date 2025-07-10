@@ -1555,17 +1555,20 @@ contains
      vtemp(:,:,2,:) = temp(:,:,:)
 
      call i2m(dpnh_dp_i(:,:,:)*gradphinh_i(:,:,1,:),temp(:,:,:))
-#ifdef HOMMEDA
-     mgrad(:,:,1,:) = temp(:,:,:)*invrhatm(:,:,:)
-#else
+
      mgrad(:,:,1,:) = temp(:,:,:)
+#if 0
+     if (.not. theta_hydrostatic_mode) then
+       mgrad(:,:,1,:) = mgrad(:,:,1,:)*invrhatm(:,:,:)
+     end if
 #endif
      call i2m(dpnh_dp_i*gradphinh_i(:,:,2,:),temp(:,:,:))
-#ifdef HOMMEDA
-     mgrad(:,:,2,:) = temp(:,:,:)*invrhatm(:,:,:)
-     ut8 = -mgrad
-#else
      mgrad(:,:,2,:) = temp(:,:,:)
+#if 0
+     if (.not. theta_hydrostatic_mode) then
+       mgrad(:,:,2,:) = mgrad(:,:,2,:)*invrhatm(:,:,:)
+     end if
+     ut8 = -mgrad
 #endif
 
      call i2m(elem(ie)%state%w_i(:,:,:,n0)*elem(ie)%state%w_i(:,:,:,n0),temp)
@@ -1613,15 +1616,16 @@ contains
 
 
 #ifdef HOMMEDA
-        wvor(:,:,1,k) = wvor(:,:,1,k) * invrhatm(:,:,k)
-        wvor(:,:,2,k) = wvor(:,:,2,k) * invrhatm(:,:,k)
-        ut3(:,:,:,k)  = -wvor(:,:,:,k)
+        wvor(:,:,1,k) = wvor(:,:,1,k) 
+        wvor(:,:,2,k) = wvor(:,:,2,k) 
+        ut3(:,:,1,k)  = -wvor(:,:,1,k) * invrhatm(:,:,k)
+        ut3(:,:,2,k)  = -wvor(:,:,2,k) * invrhatm(:,:,k)
 
-        wvor(:,:,1,k) = wvor(:,:,1,k) - vtemp(:,:,1,k) * invrhatm(:,:,k)
-        wvor(:,:,2,k) = wvor(:,:,2,k) - vtemp(:,:,2,k) * invrhatm(:,:,k)
+        wvor(:,:,1,k) = (wvor(:,:,1,k) - vtemp(:,:,1,k)) * invrhatm(:,:,k)
+        wvor(:,:,2,k) = (wvor(:,:,2,k) - vtemp(:,:,2,k)) * invrhatm(:,:,k)
 
-        ut4(:,:,1,k) = vtemp(:,:,1,k) * invrhatm(:,:,k)
-        ut4(:,:,2,k) = vtemp(:,:,2,k) * invrhatm(:,:,k)
+        ut4(:,:,1,k) = vtemp(:,:,1,k) 
+        ut4(:,:,2,k) = vtemp(:,:,2,k) 
 #else
         wvor(:,:,1,k) = wvor(:,:,1,k) - vtemp(:,:,1,k)
         wvor(:,:,2,k) = wvor(:,:,2,k) - vtemp(:,:,2,k)

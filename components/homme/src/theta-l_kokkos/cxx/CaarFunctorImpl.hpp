@@ -983,6 +983,7 @@ struct CaarFunctorImpl {
       Kokkos::parallel_for(Kokkos::ThreadVectorRange(kv.team,NUM_LEV_P),
                            [&](const int ilev) {
         // Note: if rsplit=0, phi_tens/w_tens already contains phi_vadv/w_vadv,
+        // Note: if rsplit=0, phi_tens/w_tens already contains phi_vadv/w_vadv,
         //       otherwise, just garbage from previous team
 
         // Compute w_tens
@@ -1006,10 +1007,14 @@ struct CaarFunctorImpl {
                                        m_buffers.v2_over_r_i(kv.team_idx,1,igp,jgp,ilev));
         w_tens(ilev) +=m_data.scale1*fcorcos * v_i(0,igp,jgp,ilev);
 #endif
-
+#ifdef HOMMEDA
         // Compute phi_tens.
         v_grad = m_buffers.v_over_rhat_i(kv.team_idx,0,igp,jgp,ilev)*grad_phinh_i(0,igp,jgp,ilev)
                + m_buffers.v_over_rhat_i(kv.team_idx,1,igp,jgp,ilev)*grad_phinh_i(1,igp,jgp,ilev);
+#else
+         v_grad = v_i(0,igp,jgp,ilev)*grad_phinh_i(0,igp,jgp,ilev)
+                      + v_i(1,igp,jgp,ilev)*grad_phinh_i(1,igp,jgp,ilev);
+#endif
         if (m_rsplit==0) {
           phi_tens(ilev) += v_grad;
         } else {
@@ -1065,6 +1070,8 @@ struct CaarFunctorImpl {
         phi_np1(ilev) *= m_data.scale3*spheremp;
         phi_np1(ilev) += phi_tens(ilev);
       });
+
+
 
       // Last interface only for w, not phi (since phi=phis there)
       Kokkos::single(Kokkos::PerThread(kv.team),[&](){
@@ -1304,8 +1311,6 @@ struct CaarFunctorImpl {
                          [&](const int idx) {
       const int igp = idx / NP;
       const int jgp = idx % NP;
-        auto wvor_x = Homme::subview(m_buffers.vdp,kv.team_idx,0,igp,jgp);
-        auto wvor_y = Homme::subview(m_buffers.vdp,kv.team_idx,1,igp,jgp);
         auto vort_pt  = Homme::subview(m_buffers.vort,kv.team_idx,igp,jgp);
         auto gex_x = Homme::subview(grad_exner,0,igp,jgp);
         auto gex_y = Homme::subview(grad_exner,1,igp,jgp);
@@ -1316,8 +1321,6 @@ struct CaarFunctorImpl {
         Kokkos::parallel_for(Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
                              [&](const int ilev) { 
            vort_pt(ilev) *= inv_rhat_m(ilev);
-           wvor_x(ilev) *= inv_rhat_m(ilev);
-           wvor_y(ilev) *= inv_rhat_m(ilev);
            gex_x(ilev) *= inv_rhat_m(ilev);
            gex_y(ilev) *= inv_rhat_m(ilev);
                 
@@ -1348,6 +1351,7 @@ struct CaarFunctorImpl {
         auto w_i = Homme::subview(m_state.m_w_i,kv.ie,m_data.n0,igp,jgp);
         auto phi_i = Homme::subview(m_state.m_phinh_i,kv.ie,m_data.n0,igp,jgp);
         auto inv_rhat_i = Homme::subview(m_buffers.inv_rhat_i,kv.team_idx,igp,jgp);
+        auto inv_rhat_m = Homme::subview(m_buffers.inv_rhat_m,kv.team_idx,igp,jgp);
 
         const auto w_gradw_x = [&gradw_x,&w_i] (const int ilev) -> Scalar {
           return gradw_x(ilev)* w_i(ilev);
@@ -1360,6 +1364,12 @@ struct CaarFunctorImpl {
                           w_gradw_x, wvor_x, -1.0);
         ColumnOps::compute_midpoint_values<CombineMode::ScaleAdd>(kv,
                           w_gradw_y, wvor_y, -1.0);
+        Kokkos::parallel_for(Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
+                             [&](const int ilev) {
+          wvor_x(ilev) *= inv_rhat_m(ilev);
+          wvor_y(ilev) *= inv_rhat_m(ilev);
+        });
+ 
       } else {
         // wvor is not used if theta_hydrostatic_mode=1. Set to zero
         // here to avoid adding in uninitialized values into v_tens.
@@ -1381,6 +1391,7 @@ struct CaarFunctorImpl {
         ColumnOps::compute_midpoint_values(kv,phinh_i_y,mgrad_y);
       } else {
         const auto dpnh_dp_i = Homme::subview(m_buffers.dpnh_dp_i,kv.team_idx,igp,jgp);
+        const auto inv_r_hat_m = Homme::subview(m_buffers.inv_rhat_m, kv.team_idx,igp,jgp);
         const auto prod_x = [&phinh_i_x,&dpnh_dp_i](const int ilev)->Scalar {
           return phinh_i_x(ilev)*dpnh_dp_i(ilev);
         };
@@ -1390,6 +1401,14 @@ struct CaarFunctorImpl {
 
         ColumnOps::compute_midpoint_values(kv,prod_x,mgrad_x);
         ColumnOps::compute_midpoint_values(kv,prod_y,mgrad_y);
+#if 0
+        Kokkos::parallel_for(Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
+                             [&](const int ilev) {
+          mgrad_x(ilev) *= inv_r_hat_m(ilev);
+          mgrad_y(ilev) *= inv_r_hat_m(ilev);
+        });
+#endif
+ 
       }
       kv.team_barrier();
 
@@ -1477,7 +1496,7 @@ struct CaarFunctorImpl {
           u_tens(ilev) *= inv_rhat_m(ilev);
           v_tens(ilev) *= inv_rhat_m(ilev);
         }
-# endif
+#endif
         u_tens(ilev) += cp_vtheta*grad_exner(0,igp,jgp,ilev);
         v_tens(ilev) += cp_vtheta*grad_exner(1,igp,jgp,ilev);
 
