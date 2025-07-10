@@ -1164,6 +1164,14 @@ Valid values: .true. or .false.
 Default: Defined in namelist_defaults.xml
 </entry>
 
+<entry id="config_bulk_wind_stress_interp_isotropic" type="logical"
+	category="forcing" group="forcing">
+Controls if windstress is interpolated to edges from 4 adjacent cells rather than just 2.
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
 <entry id="config_use_bulk_thickness_flux" type="logical"
 	category="forcing" group="forcing">
 Controls if a bulk thickness flux will be computed for surface forcing.
@@ -1268,6 +1276,38 @@ Default: Defined in namelist_defaults.xml
 If true, solid runoff from the Antarctic Ice Sheet (below 60S latitude) coming from the coupled is zeroed in the coupler import routines.  To be used with data iceberg fluxes coming from the sea ice model.
 
 Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_scale_dismf_by_removed_ice_runoff" type="logical"
+	category="coupling" group="coupling">
+Whether to scale data ice-shelf melt fluxes by the running mean of removed ice runoff.
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_ais_ice_runoff_history_days" type="integer"
+	category="coupling" group="coupling">
+The number of days over for which the history of removed AIS runoff is stored. The default is 731 days (2 years + 1 day).
+
+Valid values: Any positive integer
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_n_glc_z_levels" type="integer"
+	category="coupling" group="coupling">
+The number of z-levels to use for passing ocean properties to GLC for indirect ice-sheet/ocean coupling. This option is only intended to be used for ocean thermal forcing coupling in E3SM, in which case E3SM will set this option, define the values of ismip6shelfMelt_zOcean through the driver, and pass thermal forcing from the ocean model.  Note that the default value of zero will result in this dimension not being defined (unless overridden by the value in an input file).
+
+Valid values: Any positive integer or zero
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_glc_thermal_forcing_coupling_mode" type="char*1024"
+	category="coupling" group="coupling">
+If and how MPAS-Ocean sends thermal forcing to GLC (MALI) in E3SM.  This is used for ocean coupling with a melt parameterization for grounded marine ice-cliffs in MALI.  This is primarily relevant to the Greenland Ice Sheet, but also relevant to the Antarctic Ice Sheet. 'none' means no coupling of thermal forcing. '3d' means thermal forcing is passed at multiple z-levels.
+
+Valid values: 'off', '3d'
 Default: Defined in namelist_defaults.xml
 </entry>
 
@@ -1531,11 +1571,27 @@ Valid values: Any positive real number.
 Default: Defined in namelist_defaults.xml
 </entry>
 
+<entry id="config_use_frazil_ice_porosity" type="logical"
+	category="frazil_ice" group="frazil_ice">
+If true, use an internal porosity to set internal frazil salinity and that of specified passive tracers.
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
 <entry id="config_frazil_ice_density" type="real"
 	category="frazil_ice" group="frazil_ice">
 Assumed density of frazil. NOTE: test and make consistent with E3SM.
 
 Valid values: Any positive real number.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_frazil_ice_porosity" type="real"
+	category="frazil_ice" group="frazil_ice">
+If frazil porosity is used, sets the porosity of internal ocean frazil ice.
+
+Valid values: Positive real number from 0 to 1
 Default: Defined in namelist_defaults.xml
 </entry>
 
@@ -1584,6 +1640,25 @@ Default: Defined in namelist_defaults.xml
 Flag that controls if frazil formation will exert a surface pressure as it is formed.
 
 Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+
+<!-- land_ice -->
+
+<entry id="config_land_ice_draft_mode" type="character"
+	category="land_ice" group="land_ice">
+Selects the mode in which land-ice draft is computed.
+
+Valid values= 'data,'pressure-dependent'
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_land_ice_rho_ocean" type="real"
+	category="land_ice" group="land_ice">
+ocean density used to calculate landIceDraft at floatation (assumed constant and uniform). Should be consistent with MALI's config_ocean_density when used to determine grounding line location. This is an alternative to the coupler variable effectiveDensityInLandIce which is not currently used.
+
+Valid values: Any positive real number
 Default: Defined in namelist_defaults.xml
 </entry>
 
@@ -3094,6 +3169,137 @@ Default: Defined in namelist_defaults.xml
 <entry id="config_ecosysTracers_diagnostic_fields_level5" type="logical"
 	category="tracer_forcing_ecosysTracers" group="tracer_forcing_ecosysTracers">
 if true, make variables in ecosysDiagFieldsLevel5 available for output
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+
+<!-- tracer_forcing_freshwaterTracers -->
+
+<entry id="config_use_freshwaterTracers" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, the 'freshwaterTracers' category is enabled for the run
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_surface_bulk_forcing" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, surface bulk forcing from coupler is added to surfaceTracerFlux in 'freshwaterTracers' category. True by default because the main function of this tracer group is tracking freshwater fluxes
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_surface_restoring" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, surface restoring source is applied to tracers in 'freshwaterTracers' category
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_interior_restoring" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, interior restoring source is applied to tracers in 'freshwaterTracers' category
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_exponential_decay" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, exponential decay source is applied to tracers in 'freshwaterTracers' category
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_idealAge_forcing" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, idealAge forcing source is applied to tracers in 'freshwaterTracers' category
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_ttd_forcing" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, transit time distribution forcing source is applied to tracers in 'freshwaterTracers' category
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_surface_value" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, surface value is computed for 'freshwaterTracers' category
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_rainFlux" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, the 'freshwaterTracers' category is enabled for the run
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_snowFlux" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, the 'freshwaterTracers' category is enabled for the run
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_iceRunoffFlux" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, the 'freshwaterTracers' category is enabled for the run
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_riverRunoffFlux" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, the 'freshwaterTracers' category is enabled for the run
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_subglacialRunoffFlux" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, the 'freshwaterTracers' category is enabled for the run
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_seaIceFreshWaterFlux" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, the 'freshwaterTracers' category is enabled for the run
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_icebergFreshWaterFlux" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, the 'freshwaterTracers' category is enabled for the run
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_landIceFreshwaterFlux" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, the 'freshwaterTracers' category is enabled for the run
 
 Valid values: .true. or .false.
 Default: Defined in namelist_defaults.xml

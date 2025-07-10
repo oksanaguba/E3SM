@@ -47,7 +47,6 @@ module seq_map_type_mod
      character*16            :: mbname
      integer                 :: tag_entity_type
      integer                 :: nentities ! this should be used only if copy_only is true
-     logical                 :: read_map
      !
 #endif
 
@@ -161,10 +160,8 @@ contains
     mapper%src_mbid  = -1
     mapper%tgt_mbid  = -1
     mapper%intx_mbid = -1
-    mapper%nentities =  0
     mapper%tag_entity_type = 1 ! cells most of the time when we need it
     mapper%mbname    = "undefined"
-    mapper%read_map = .false.
 #ifdef MOABCOMP
     if (seq_comm_iamroot(CPLID)) then
       write(logunit,'(A,i6)') subname//' call init map for mapper with id ',mapper%counter
@@ -212,26 +209,4 @@ contains
 
   end subroutine seq_map_gsmapcheck
   
-  !===============================================================================
-
-  subroutine seq_map_set_type(mapper, mbid, ent_type)
-    use iMOAB, only: iMOAB_GetMeshInfo
-    type(seq_map)   ,intent(in),pointer :: mapper
-    integer         ,intent(in) :: mbid
-    integer         ,intent(in) :: ent_type
-    
-    integer nvert(3), nvise(3), nbl(3), nsurf(3), nvisBC(3), ierr
-
-
-    ierr  = iMOAB_GetMeshInfo ( mbid, nvert, nvise, nbl, nsurf, nvisBC ); 
-    if (ent_type .eq. 0) then
-       mapper%nentities = nvert(1)
-    else if (ent_type .eq. 1) then
-       mapper%nentities = nvise(1)
-    endif
-
-    mapper%tag_entity_type = ent_type
-
-  end  subroutine seq_map_set_type
-
 end module seq_map_type_mod

@@ -6,8 +6,8 @@
 
 #include "physics/share/physics_constants.hpp"
 
-#include "share/util/scream_setup_random_test.hpp"
-#include "share/util/scream_common_physics_functions.hpp"
+#include "share/util/eamxx_setup_random_test.hpp"
+#include "share/util/eamxx_common_physics_functions.hpp"
 #include "share/field/field_utils.hpp"
 
 #include "ekat/ekat_pack.hpp"
@@ -25,10 +25,10 @@ create_gm (const ekat::Comm& comm, const int ncols, const int nlevs) {
 
   using vos_t = std::vector<std::string>;
   ekat::ParameterList gm_params;
-  gm_params.set("grids_names",vos_t{"Point Grid"});
-  auto& pl = gm_params.sublist("Point Grid");
+  gm_params.set("grids_names",vos_t{"point_grid"});
+  auto& pl = gm_params.sublist("point_grid");
   pl.set<std::string>("type","point_grid");
-  pl.set("aliases",vos_t{"Physics"});
+  pl.set("aliases",vos_t{"physics"});
   pl.set<int>("number_of_global_columns", num_global_cols);
   pl.set<int>("number_of_vertical_levels", nlevs);
 
@@ -98,6 +98,7 @@ void run(std::mt19937_64& engine)
     f.allocate_view();
     const auto name = f.name();
     f.get_header().get_tracking().update_time_stamp(t0);
+    f.get_header().set_extra_data("radiation_ran", true);
     diag->set_required_field(f.get_const());
     input_fields.emplace(name,f);
   }
@@ -139,8 +140,7 @@ void run(std::mt19937_64& engine)
     diag->compute_diagnostic();
     const auto& diag_out = diag->get_diagnostic();
     Field SWCF_f = diag_out.clone();
-    SWCF_f.deep_copy<double,Host>(0.0);
-    SWCF_f.sync_to_dev();
+    SWCF_f.deep_copy(0);
     const auto& SWCF_v = SWCF_f.get_view<Real*>();
     Kokkos::parallel_for("", policy, KOKKOS_LAMBDA(const MemberType& team) {
       const int icol = team.league_rank();

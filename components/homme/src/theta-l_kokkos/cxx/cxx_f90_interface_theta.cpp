@@ -114,7 +114,6 @@ void init_simulation_params_c (const int& remap_alg, const int& limiter_option, 
   params.hypervis_scaling              = hypervis_scaling;
   params.disable_diagnostics           = (bool)disable_diagnostics;
   params.use_moisture                  = (bool)use_moisture;
-  params.moisture = params.use_moisture ? MoistDry::MOIST : MoistDry::DRY; //todo-repo-unification
   params.use_cpstar                    = (bool)use_cpstar;
   params.transport_alg                 = transport_alg;
   params.theta_hydrostatic_mode        = (bool)theta_hydrostatic_mode;
@@ -454,7 +453,7 @@ void init_functors_c (const int& allocate_buffer)
 }
 
 void init_elements_2d_c (const int& ie,
-                         CF90Ptr& D, CF90Ptr& Dinv, CF90Ptr& fcor,
+                         CF90Ptr& D, CF90Ptr& Dinv, CF90Ptr& fcor,CF90Ptr& fcorcos,
                          CF90Ptr& spheremp, CF90Ptr& rspheremp,
                          CF90Ptr& metdet, CF90Ptr& metinv,
                          CF90Ptr &tensorvisc, CF90Ptr &vec_sph2cart,
@@ -465,7 +464,7 @@ void init_elements_2d_c (const int& ie,
   const SimulationParams& params = c.get<SimulationParams>();
 
   const bool consthv = (params.hypervis_scaling==0.0);
-  e.m_geometry.set_elem_data(ie,D,Dinv,fcor,spheremp,rspheremp,metdet,metinv,tensorvisc,
+  e.m_geometry.set_elem_data(ie,D,Dinv,fcor,fcorcos,spheremp,rspheremp,metdet,metinv,tensorvisc,
                              vec_sph2cart,consthv,sphere_cart_vec,sphere_latlon_vec);
 }
 

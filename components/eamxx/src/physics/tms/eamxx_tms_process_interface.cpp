@@ -30,10 +30,10 @@ void TurbulentMountainStress::set_grids(const std::shared_ptr<const GridsManager
   const auto m2 = pow(m,2);
 
   // Initialize grid from grids manager
-  m_grid = grids_manager->get_grid("Physics");
+  m_grid = grids_manager->get_grid("physics");
   const auto& grid_name = m_grid->name();
-  EKAT_REQUIRE_MSG(grid_name=="Physics PG2",
-                   "Error! TMS process can only be used with \"Physics PG2\" physics grid. "
+  EKAT_REQUIRE_MSG(grid_name=="physics_pg2",
+                   "Error! TMS process can only be used with \"physics_pg2\" physics grid. "
                    "Current physics grid is "+grid_name+".\n");
 
   m_ncols = m_grid->get_num_local_dofs(); // Number of columns on this rank
@@ -50,9 +50,9 @@ void TurbulentMountainStress::set_grids(const std::shared_ptr<const GridsManager
   add_field<Required>("T_mid",          scalar3d_mid, K,      grid_name,            ps);
   add_field<Required>("p_mid",          scalar3d_mid, Pa,     grid_name,            ps);
   add_field<Required>("pseudo_density", scalar3d_mid, Pa,     grid_name,            ps);
-  add_field<Required>("qv",             scalar3d_mid, kg/kg,  grid_name, "tracers", ps);
   add_field<Required>("sgh30",          scalar2d    , m,      grid_name);
   add_field<Required>("landfrac",       scalar2d    , nondim, grid_name);
+  add_tracer<Required>("qv", m_grid, kg/kg, ps);
 
   add_field<Computed>("surf_drag_coeff_tms", scalar2d, kg/(m2*s), grid_name);
   add_field<Computed>("wind_stress_tms",     vector2d, N/m2,      grid_name);

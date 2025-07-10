@@ -68,17 +68,17 @@ implicit none
   enddo
   if (present(caller)) then
      call pnh_and_exner_from_eos2(hvcoord,vtheta_dp,dp3d,dphi,pnh,exner,&
-          dpnh_dp_i,phi_i(:,:,nlevp),caller,pnh_i_out)
+          dpnh_dp_i,phi_i(:,:,nlevp),caller,pnh_i_out,phi_i_in=phi_i)
   else
      call pnh_and_exner_from_eos2(hvcoord,vtheta_dp,dp3d,dphi,pnh,exner,&
-          dpnh_dp_i,phi_i(:,:,nlevp),'not specified',pnh_i_out)
+          dpnh_dp_i,phi_i(:,:,nlevp),'not specified',pnh_i_out,phi_i_in=phi_i)
   endif
   end subroutine pnh_and_exner_from_eos
 
 
 !uses phis as input, reconstructs phi from dphi and phis
 subroutine pnh_and_exner_from_eos2(hvcoord,vtheta_dp,dp3d,dphi,pnh,exner,&
-     dpnh_dp_i,phis,caller,pnh_i_out,p_exner)
+     dpnh_dp_i,phis,caller,pnh_i_out,p_exner, phi_i_in)
 implicit none
 !
 ! Use Equation of State to compute exner pressure, nh presure
@@ -104,6 +104,7 @@ implicit none
   character(len=*),      intent(in)  :: caller       ! name for error
   real (kind=real_kind), intent(out),   optional :: pnh_i_out(np,np,nlevp)  ! pnh on interfaces
   real (kind=real_kind), intent(inout), optional :: p_exner(np,np,nlev)     ! p/Exner on midlevels
+  real (kind=real_kind), intent(in),   optional :: phi_i_in(np,np,nlevp)   ! used to avoid extra work in C++ code.
 
   !   local
   real (kind=real_kind) :: p_over_exner(np,np,nlev)
@@ -121,29 +122,49 @@ implicit none
   real (kind=real_kind) ::  rheighti(np,np,nlevp), rheightm(np,np,nlev), rhatm(np,np,nlev), r0
   real (kind=real_kind) ::  rhati(np,np,nlevp), invrhatm(np,np,nlev), invrhati(np,np,nlevp), &
                             newrhatsquared(np,np,nlev)
+#ifdef HOMMEXX_BFB_TESTING
+  real (kind=real_kind) ::  rheight_above(np,np,nlev), rhat_above(np, np, nlev)
+#endif
+
+
 #endif
 
 #ifdef HOMMEDA
   !construct phi_i here
-  phi_i(:,:,nlevp) = phis(:,:)
-  do k=nlev,1,-1
-    phi_i(:,:,k) = phi_i(:,:,k+1) - dphi(:,:,k)
-  enddo
+  if (present(phi_i_in)) then
+    phi_i=phi_i_in
+  else 
+    phi_i(:,:,nlevp) = phis(:,:)
+    do k=nlev,1,-1
+      phi_i(:,:,k) = phi_i(:,:,k+1) - dphi(:,:,k)
+    enddo
+  endif
 
   r0=rearth
 
   rheighti = phi_i/g + r0
-  rheightm(:,:,1:nlev) = (rheighti(:,:,1:nlev) + rheighti(:,:,2:nlevp))/2.0
+  rheightm(:,:,1:nlev) = (rheighti(:,:,1:nlev) + rheighti(:,:,2:nlevp))/2.0_real_kind
   rhati = rheighti/r0 ! r/r0
   rhatm = rheightm/r0
-  invrhatm = 1.0/rhatm
-  invrhati = 1.0/rhati
+  invrhatm = 1.0_real_kind/rhatm
+  invrhati = 1.0_real_kind/rhati
 
   newrhatsquared = (rhati(:,:,1:nlev)*rhati(:,:,1:nlev)   + &
                     rhati(:,:,2:nlevp)*rhati(:,:,2:nlevp) + &
-                    rhati(:,:,1:nlev)*rhati(:,:,2:nlevp))/3.0
-#endif
+                    rhati(:,:,1:nlev)*rhati(:,:,2:nlevp))/3.0_real_kind
+#ifdef HOMMEXX_BFB_TESTING
+  rheight_above = (phi_i(:, :, 1:nlev) + dphi)/g + r0
+  rhat_above = rheight_above/r0 ! r/r0
+  newrhatsquared = (rhati(:,:,1:nlev)*rhati(:,:,1:nlev)   + &
+                    rhat_above*rhat_above + &
+                    rhati(:,:,1:nlev)*rhat_above)/3.0_real_kind
+#else
+  newrhatsquared = (rhati(:,:,1:nlev)*rhati(:,:,1:nlev)   + &
+                    rhati(:,:,2:nlevp)*rhati(:,:,2:nlevp) + &
+                    rhati(:,:,1:nlev)*rhati(:,:,2:nlevp))/3.0_real_kind
+#endif 
 
+#endif
   ! check for bad state that will crash exponential function below
   if (theta_hydrostatic_mode) then
     ierr= any(dp3d(:,:,:) < 0 )

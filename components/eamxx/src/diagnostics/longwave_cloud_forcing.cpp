@@ -20,7 +20,7 @@ void LongwaveCloudForcingDiagnostic::set_grids(const std::shared_ptr<const Grids
 
   Units m2 (m*m,"m2");
 
-  auto grid  = grids_manager->get_grid("Physics");
+  auto grid  = grids_manager->get_grid("physics");
   const auto& grid_name = grid->name();
   m_num_cols = grid->get_num_local_dofs(); // Number of columns on this rank
   m_num_levs = grid->get_num_vertical_levels();  // Number of levels per column
@@ -51,6 +51,15 @@ void LongwaveCloudForcingDiagnostic::compute_diagnostic_impl()
   const auto& LWCF              = m_diagnostic_output.get_view<Real*>();
   const auto& LW_flux_up        = get_field_in("LW_flux_up").get_view<const Real**>();
   const auto& LW_clrsky_flux_up = get_field_in("LW_clrsky_flux_up").get_view<const Real**>();
+
+  // NOTE: as part of fixing https://github.com/E3SM-Project/E3SM/issues/6803, this hack
+  //       may have to be revised. Namely, the "radiation_ran" extra data should be removed,
+  //       in favor of a more structured and uniform approach
+  const auto radiation_ran = get_field_in("LW_flux_up").get_header().get_extra_data<bool>("radiation_ran");
+  if (not radiation_ran) {
+    m_diagnostic_output.deep_copy(constants::DefaultFillValue<Real>().value);
+    return;
+  }
 
   Kokkos::parallel_for("LongwaveCloudForcingDiagnostic",
                        default_policy,
