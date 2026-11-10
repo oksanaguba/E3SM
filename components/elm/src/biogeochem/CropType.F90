@@ -16,6 +16,7 @@ module CropType
   use elm_varctl          , only : iulog, use_crop
   use ColumnDataType      , only : col_es
   use VegetationDataType  , only : veg_es
+  use GridcellType        , only : grc_pp
   !
   ! !PUBLIC TYPES:
   implicit none
@@ -37,8 +38,18 @@ module CropType
      logical , pointer :: croplive_patch          (:)   ! patch Flag, true if planted, not harvested
      logical , pointer :: cropplant_patch         (:)   ! patch Flag, true if planted
      integer , pointer :: harvdate_patch          (:)   ! patch harvest date
+     real(r8), pointer :: rateh_patch             (:)   ! increase of tolerance caused by cold hardening index
+     real(r8), pointer :: rated_patch             (:)   ! loss of tolerance caused by dehardening
+     real(r8), pointer :: rates_patch             (:)   ! loss of tolerance caused by low temperature
+     real(r8), pointer :: rater_patch             (:)   ! loss of tolerance caused by respiration under snow
+     real(r8), pointer :: lt50_patch              (:)   ! the lethal temperature at which 50% of the individuals are damaged
+     real(r8), pointer :: fsurv_patch             (:)   ! winter wheat survival rate
+     real(r8), pointer :: accfsurv_patch          (:)   ! accumulated winter wheat survival rate
+     real(r8), pointer :: countfsurv_patch        (:)   ! count of accumulated winter wheat survival rate
+     real(r8), pointer :: wdd_patch               (:)   ! winter wheat weighted cumulated degree days
+     real(r8), pointer :: tcrown_patch            (:)   ! crown temperature
      real(r8), pointer :: fertnitro_patch         (:)   ! patch fertilizer nitrogen
-
+     real(r8), pointer :: fertphosp_patch         (:)   ! patch fertilizer phosphorus
      real(r8), pointer :: gddplant_patch          (:)   ! patch accum gdd past planting date for crop       (ddays)
      real(r8), pointer :: gddtsoi_patch           (:)   ! patch growing degree-days from planting (top two soil layers) (ddays)
      real(r8), pointer :: crpyld_patch            (:)   ! patch crop yield (bu/acre)
@@ -78,6 +89,7 @@ module CropType
 
      procedure, private :: InitAllocate 
      procedure, private :: InitHistory
+     procedure, private :: InitCold
      procedure, private, nopass :: checkDates
 
   end type crop_type
@@ -102,6 +114,7 @@ contains
 
     if (crop_prog) then
        call this%InitHistory(bounds)
+       call this%InitCold(bounds) 
     end if
 
   end subroutine Init
@@ -125,7 +138,18 @@ contains
     allocate(this%croplive_patch         (begp:endp)) ; this%croplive_patch         (:) = .false.
     allocate(this%cropplant_patch        (begp:endp)) ; this%cropplant_patch        (:) = .false.
     allocate(this%harvdate_patch         (begp:endp)) ; this%harvdate_patch         (:) = huge(1) 
+    allocate(this%rateh_patch            (begp:endp)) ; this%rateh_patch            (:) = spval
+    allocate(this%rated_patch            (begp:endp)) ; this%rated_patch            (:) = spval
+    allocate(this%rates_patch            (begp:endp)) ; this%rates_patch            (:) = spval
+    allocate(this%rater_patch            (begp:endp)) ; this%rater_patch            (:) = spval
+    allocate(this%lt50_patch             (begp:endp)) ; this%lt50_patch             (:) = spval
+    allocate(this%fsurv_patch            (begp:endp)) ; this%fsurv_patch            (:) = spval
+    allocate(this%accfsurv_patch         (begp:endp)) ; this%accfsurv_patch         (:) = spval
+    allocate(this%countfsurv_patch       (begp:endp)) ; this%countfsurv_patch       (:) = spval
+    allocate(this%wdd_patch              (begp:endp)) ; this%wdd_patch              (:) = spval
+    allocate(this%tcrown_patch           (begp:endp)) ; this%tcrown_patch           (:) = spval
     allocate(this%fertnitro_patch        (begp:endp)) ; this%fertnitro_patch        (:) = spval
+    allocate(this%fertphosp_patch        (begp:endp)) ; this%fertphosp_patch        (:) = spval
     allocate(this%gddplant_patch         (begp:endp)) ; this%gddplant_patch         (:) = spval
     allocate(this%gddtsoi_patch          (begp:endp)) ; this%gddtsoi_patch          (:) = spval
     allocate(this%crpyld_patch           (begp:endp)) ; this%crpyld_patch           (:) = spval
@@ -169,6 +193,16 @@ contains
     !-----------------------------------------------------------------------
     
     begp = bounds%begp; endp = bounds%endp
+
+    this%fertnitro_patch(begp:endp) = spval
+    call hist_addfld1d (fname='FERTNITRO', units='gN/m2/yr', &
+         avgflag='A', long_name='Nitrogen fertilizer for each crop', &
+         ptr_patch=this%fertnitro_patch, default='inactive')
+
+    this%fertphosp_patch(begp:endp) = spval
+    call hist_addfld1d (fname='FERTPHOSP', units='gP/m2/yr', &
+         avgflag='A', long_name='Phosphorus fertilizer for each crop', &
+         ptr_patch=this%fertphosp_patch, default='inactive')
 
     this%gddplant_patch(begp:endp) = spval
     call hist_addfld1d (fname='GDDPLANT', units='ddays', &
@@ -248,30 +282,65 @@ contains
     this%p2ETo_patch(begp:endp,:) = spval
     call hist_addfld2d (fname='P2ETO', units='mm', type2d='month', &
          avgflag='A', long_name='Precipitation:Evapotranspiration ratio', &
-         ptr_patch=this%p2ETo_patch)
+         ptr_patch=this%p2ETo_patch, default = 'inactive')
 
     this%p2ETo_bar_patch(begp:endp,:) = spval
     call hist_addfld2d (fname='P2ETO_bar', units='mm', type2d='month', &
          avgflag='A', long_name='EWMA Precipitation:Evapotranspiration ratio', &
-         ptr_patch=this%p2ETo_bar_patch)
+         ptr_patch=this%p2ETo_bar_patch, default = 'inactive')
 
     this%prev_p2ETo_bar_patch(begp:endp,:) = spval
     call hist_addfld2d (fname='PREV_P2ETO_bar', units='mm', type2d='month', &
          avgflag='A', long_name='Previous EWMA Precipitation:Evapotranspirationratio', &
-         ptr_patch=this%prev_p2ETo_bar_patch)
+         ptr_patch=this%prev_p2ETo_bar_patch, default = 'inactive')
 
     this%P2E_rm_patch(begp:endp,:) = spval
     call hist_addfld2d (fname='P2E_rm', units='mm', type2d='month', &
          avgflag='A', long_name='Precipitation:Evapotranspiration ratio 4-month sum', &
-         ptr_patch=this%P2E_rm_patch)
+         ptr_patch=this%P2E_rm_patch, default = 'inactive')
 
     this%ETo_patch(begp:endp,:) = spval
     call hist_addfld2d (fname='ETO', units='mm', type2d='month', &
          avgflag='A', long_name='Reference Evapotranspiration', &
-         ptr_patch=this%ETo_patch)
+         ptr_patch=this%ETo_patch, default = 'inactive')
 
   end subroutine InitHistory
 
+
+    !-----------------------------------------------------------------------
+  subroutine InitCold(this, bounds)
+    ! !USES:
+    use LandunitType,    only : lun_pp
+    use landunit_varcon, only : istcrop
+    use VegetationType,  only : veg_pp
+    use GridcellType,    only : grc_pp
+    use elm_varsur,      only : fert_cft, fert_p_cft
+    ! !ARGUMENTS:
+    class(crop_type),  intent(inout) :: this
+    type(bounds_type), intent(in) :: bounds
+    !
+    ! !LOCAL VARIABLES:
+    integer :: t, c, l, g, p, m, topi, ti ! indices
+
+    character(len=*), parameter :: subname = 'InitCold'
+    if (use_crop) then
+       do p= bounds%begp,bounds%endp
+          g = veg_pp%gridcell(p)
+          l = veg_pp%landunit(p)
+          c = veg_pp%column(p)
+          t = veg_pp%topounit(p)
+          topi = grc_pp%topi(g)
+
+          if (lun_pp%itype(l) == istcrop) then
+             ti = t - topi + 1
+             m  = veg_pp%itype(p)
+             this%fertnitro_patch(p) = fert_cft(g,ti,m)
+             this%fertphosp_patch(p) = fert_p_cft(g,ti,m)
+          end if
+       end do
+    end if
+
+  end subroutine InitCold
 
     !-----------------------------------------------------------------------
   subroutine InitAccBuffer (this, bounds)
@@ -324,7 +393,7 @@ contains
     !
     ! !USES:
     use accumulMod       , only : extract_accum_field
-    use clm_time_manager , only : get_nstep
+    use elm_time_manager , only : get_nstep
     !
     ! !ARGUMENTS:
     class(crop_type),  intent(inout) :: this
@@ -368,7 +437,7 @@ contains
     use restUtilMod
     use ncdio_pio
     use VegetationType , only : veg_pp                
-    use pftvarcon      , only : npcropmin, npcropmax
+    use pftvarcon      , only : iscft
     !
     ! !ARGUMENTS:
     class(crop_type), intent(inout)  :: this
@@ -405,7 +474,7 @@ contains
                interpinic_flag='copy', readvar=readvar, data=restyear)
           if (readvar) then
              do p = bounds%begp, bounds%endp
-                if (veg_pp%itype(p) >= npcropmin .and. veg_pp%itype(p) <= npcropmax .and. &
+                if (iscft(veg_pp%itype(p)) .and. &
                      veg_pp%active(p)) then
                    this%nyrs_crop_active_patch(p) = restyear
                 end if
@@ -576,7 +645,7 @@ contains
     ! !USES:
     use accumulMod       , only : update_accum_field, extract_accum_field, accumResetVal
     use shr_const_mod    , only : SHR_CONST_CDAY, SHR_CONST_TKFRZ
-    use clm_time_manager , only : get_step_size, get_nstep
+    use elm_time_manager , only : get_step_size, get_nstep
     use pftvarcon        , only : nwcereal, nwcerealirrig, mxtmp, baset
     use TemperatureType  , only : temperature_type
     use VegetationType   , only : veg_pp                
@@ -620,7 +689,8 @@ contains
           rbufslp(p) = max(0._r8, min(mxtmp(ivt), &
                veg_es%t_ref2m(p)-(SHR_CONST_TKFRZ + baset(ivt)))) &
                * dtime/SHR_CONST_CDAY
-          if (ivt == nwcereal .or. ivt == nwcerealirrig) then
+          ! Modified based on Yaqiong Lu et al., 2017 in Geosci. Model Dev.
+          if ((ivt == nwcereal .or. ivt == nwcerealirrig) .and. this%cphase_patch(p) > 1) then
              rbufslp(p) = rbufslp(p)*this%vf_patch(p)
           end if
        else
@@ -642,9 +712,9 @@ contains
                ((col_es%t_soisno(c,1)*col_pp%dz(c,1) + &
                col_es%t_soisno(c,2)*col_pp%dz(c,2))/(col_pp%dz(c,1)+col_pp%dz(c,2))) - &
                (SHR_CONST_TKFRZ + baset(ivt)))) * dtime/SHR_CONST_CDAY
-          if (ivt == nwcereal .or. ivt == nwcerealirrig) then
-             rbufslp(p) = rbufslp(p)*this%vf_patch(p)
-          end if
+          ! Removed rbufslp modification based on Yaqiong Lu et al., 2017 in Geosci. Model Dev.
+          ! Removed the vf control on gddtsoil, because the vernalization
+          ! occurs after leaf emerge and end at flowering
        else
           rbufslp(p) = accumResetVal
        end if
@@ -657,7 +727,7 @@ contains
   end subroutine UpdateAccVars
 
   !-----------------------------------------------------------------------
-  subroutine CropIncrementYear (this, num_pcropp, filter_pcropp)
+  subroutine CropIncrementYear (this, num_pcropp, filter_pcropp, num_ppercropp, filter_ppercropp)
     !
     ! !DESCRIPTION:
     ! Increment the crop year, if appropriate
@@ -665,12 +735,14 @@ contains
     ! This routine should be called every time step
     !
     ! !USES:
-    use clm_time_manager , only : get_curr_date, is_first_step
+    use elm_time_manager , only : get_curr_date, is_first_step
     !
     ! !ARGUMENTS:
     class(crop_type) :: this
     integer , intent(in) :: num_pcropp       ! number of prog. crop patches in filter
     integer , intent(in) :: filter_pcropp(:) ! filter for prognostic crop patches
+    integer , intent(in) :: num_ppercropp    ! number of prog perennial crop patches in filter
+    integer , intent(in) :: filter_ppercropp(:) ! filter for prognostic perennial crop patches
     !
     ! !LOCAL VARIABLES:
     integer kyr   ! current year
@@ -689,6 +761,12 @@ contains
     if ((kmo == 1 .and. kda == 1 .and. mcsec == 0) .and. .not. is_first_step()) then
        do fp = 1, num_pcropp
           p = filter_pcropp(fp)
+
+          this%nyrs_crop_active_patch(p) = this%nyrs_crop_active_patch(p) + 1
+       end do
+
+       do fp = 1, num_ppercropp
+          p = filter_ppercropp(fp)
 
           this%nyrs_crop_active_patch(p) = this%nyrs_crop_active_patch(p) + 1
        end do
@@ -711,7 +789,7 @@ contains
     ! messes up these bits of saved information.
     !
     ! !ARGUMENTS:
-    use clm_time_manager, only : get_driver_start_ymd, get_start_date
+    use elm_time_manager, only : get_driver_start_ymd, get_start_date
     use elm_varctl      , only : iulog
     use elm_varctl      , only : nsrest, nsrBranch, nsrStartup
     !

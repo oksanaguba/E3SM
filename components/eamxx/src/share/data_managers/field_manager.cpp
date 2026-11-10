@@ -1,0 +1,688 @@
+#include "share/data_managers/field_manager.hpp"
+
+#include "share/data_managers/library_grids_manager.hpp"
+
+namespace scream
+{
+
+FieldManager::
+FieldManager (const std::shared_ptr<const AbstractGrid>& grid,
+              const RepoState state)
+ : FieldManager (std::make_shared<LibraryGridsManager>(grid),state)
+{
+  // Nothing else to do
+}
+
+FieldManager::
+FieldManager (const std::shared_ptr<const GridsManager>& gm,
+              const RepoState state)
+ : m_repo_state (state)
+ , m_grids_mgr  (gm)
+{
+  EKAT_REQUIRE_MSG (m_grids_mgr!=nullptr,
+      "Error! Input grids manager pointer is not valid.");
+
+  // For each grid, initialize maps
+  for (auto gname : m_grids_mgr->get_grid_names()) {
+    m_fields[gname] = std::map<ci_string,std::shared_ptr<Field>>();
+    m_field_groups[gname] = std::map<ci_string, std::shared_ptr<FieldGroup>>();
+    m_group_requests[gname] = std::map<std::string, std::set<GroupRequest>>();
+  }
+
+  if (m_repo_state==RepoState::Closed) {
+    registration_ends();
+  }
+}
+
+void FieldManager::register_field (const FieldRequest& req)
+{
+  // Sanity checks
+  EKAT_REQUIRE_MSG (m_repo_state!=RepoState::Closed,
+      "Error! Repo state is not 'Open' anymore. Did you already called 'registration_ends()'?\n");
+
+  m_repo_state = RepoState::Open;
+
+  const auto& id = req.fid;
+  const auto& grid_name = id.get_grid_name();
+
+  // Make sure this FM contains a grid corresponding to the input grid name
+  EKAT_REQUIRE_MSG(m_grids_mgr->has_grid(grid_name),
+    "Error! Attempting to register field on grid not in the FM's grids manager:\n"
+    "  - FieldRequest grid: " + grid_name + "\n"
+    "  - Grids stored by FM: " + m_grids_mgr->print_available_grids() + "\n");
+
+  // FieldManager does not allow incomplete requests
+  EKAT_REQUIRE_MSG(not req.incomplete,
+    "Error! FieldManager does not allow registering incomplete FieldRequest.\n");
+
+  // Get or create the new field
+  if (!has_field(id.name(), grid_name)) {
+    m_fields[grid_name][id.name()] = std::make_shared<Field>(id);
+  } else {
+    // Make sure the input field has the same layout, units, and data type as the field already stored.
+    // TODO: this is the easiest way to ensure everyone uses the same units.
+    //       However, in the future, we *may* allow different units, providing
+    //       the users with conversion routines perhaps.
+    const auto id0 = m_fields[grid_name][id.name()]->get_header().get_identifier();
+    EKAT_REQUIRE_MSG(id.get_units()==id0.get_units(),
+        "Error! Field '" + id.name() + "' already registered with different units:\n"
+        "         - input field units:  " + id.get_units().to_string() + "\n"
+        "         - stored field units: " + id0.get_units().to_string() + "\n"
+        "       Please, check and make sure all atmosphere processes use the same units.\n");
+
+    EKAT_REQUIRE_MSG(id.get_layout()==id0.get_layout(),
+        "Error! Field '" + id.name() + "' already registered with different layout:\n"
+        "         - input id:  " + id.get_id_string() + "\n"
+        "         - stored id: " + id0.get_id_string() + "\n"
+        "       Please, check and make sure all atmosphere processes use the same layout for a given field.\n");
+
+    EKAT_REQUIRE_MSG(id.data_type()==id0.data_type(),
+        "Error! Field '" + id.name() + "' already registered with different data_type:\n"
+        "         - input id:  " + id.get_id_string() + "\n"
+        "         - stored id: " + id0.get_id_string() + "\n"
+        "       Please, check and make sure all atmosphere processes use the same data_type for a given field.\n");
+  }
+
+  // Make sure the field can accommodate the requested value type
+  m_fields[grid_name][id.name()]->get_header().get_alloc_properties().request_allocation(req.pack_size);
+
+  // Finally, add the field to the given groups
+  for (const auto& group_name : req.groups) {
+    register_group(GroupRequest(group_name,grid_name));
+    auto& info = m_field_group_info[group_name];
+    info->m_fields_names.insert(id.name());
+    info->m_grid_registered[id.name()].insert(grid_name);
+  }
+}
+
+void FieldManager::register_group (const GroupRequest& req)
+{
+  // Make sure this FM contains a grid corresponding to the input grid name
+  EKAT_REQUIRE_MSG(m_grids_mgr->has_grid(req.grid),
+    "Error! Attempting to register group on grid not in the FM's grids manager:\n"
+    "  - GroupRequest grid:  " + req.grid + "\n"
+    "  - Grids stored by FM: " + m_grids_mgr->print_available_grids() + "\n");
+
+
+  // Groups have to be handled once registration is over, so for now simply store the request,
+  // and create an empty group info (if it does not already exist)
+  m_group_requests[req.grid][req.name].insert(req);
+
+  auto& info = m_field_group_info[req.name];
+  if (not info)
+    info = std::make_shared<FieldGroupInfo>(req.name);
+  info->m_requested_grids.insert(req.grid);
+  info->m_monolithic_allocation |= req.monolithic_alloc==MonolithicAlloc::Required;
+
+  if (m_field_groups[req.grid].count(req.name)==0)
+    m_field_groups[req.grid][req.name] = std::make_shared<FieldGroup>(req.name,req.grid);
+}
+
+void FieldManager::
+add_to_group (const std::string& field_name, const std::string& grid_name, const std::string& group_name)
+{
+  add_to_group_internal(field_name,grid_name,group_name,false);
+}
+
+bool FieldManager::
+has_field (const std::string& field_name, const std::string& grid_name) const {
+  return m_fields.find(grid_name)!=m_fields.end() and
+         m_fields.at(grid_name).find(field_name)!=m_fields.at(grid_name).end();
+}
+
+bool FieldManager::
+has_group (const std::string& group_name, const std::string& grid_name) const {
+  return m_field_groups.find(grid_name)!=m_field_groups.end() and
+         m_field_groups.at(grid_name).find(group_name)!=m_field_groups.at(grid_name).end();
+}
+
+Field FieldManager::get_field (const std::string& name, const std::string& grid_name) const {
+  EKAT_REQUIRE_MSG(m_repo_state==RepoState::Closed,
+    "Error! Cannot get fields from the repo while registration has not yet completed.\n");
+  EKAT_REQUIRE_MSG(has_field(name, grid_name),
+    "Error! Field " + name + " on grid " + grid_name + " not found.\n");
+
+  return *m_fields.at(grid_name).at(name);
+}
+
+Field& FieldManager::get_field (const std::string& name, const std::string& grid_name) {
+  EKAT_REQUIRE_MSG(m_repo_state==RepoState::Closed,
+    "Error! Cannot get fields from the repo while registration has not yet completed.\n");
+  EKAT_REQUIRE_MSG(has_field(name, grid_name),
+    "Error! Field " + name + " on grid " + grid_name + " not found.\n");
+
+  return *m_fields.at(grid_name).at(name);
+}
+
+FieldGroup FieldManager::
+get_field_group (const std::string& group_name, const std::string& grid_name)
+{
+  // Sanity checks
+  EKAT_REQUIRE_MSG(m_repo_state==RepoState::Closed,
+      "Error! Cannot get field groups from the repo while registration has not yet completed.\n");
+  EKAT_REQUIRE_MSG (has_group(group_name, grid_name),
+      "Error! Field group '" + group_name + "' on grid '" + grid_name + "' not found.\n");
+
+  return *m_field_groups.at(grid_name).at(group_name);
+}
+
+void FieldManager::
+init_fields_time_stamp (const util::TimeStamp& t0)
+{
+  EKAT_REQUIRE_MSG(m_repo_state==RepoState::Closed,
+      "Error! Cannot set initial time stamp until registration has completed.\n");
+
+  for (auto& [grid_name, field_repo] : m_fields) {
+    for (auto& field_it : field_repo) {
+      field_it.second->get_header().get_tracking().update_time_stamp(t0);
+    }
+  }
+}
+
+void FieldManager::registration_ends ()
+{
+  // This method is responsible of allocating the fields in the repo. The most delicate part is
+  // the allocation of fields group, in the case where a monolithic allocation is required. If we
+  // are not able to honor requests, we will error out. An example of a scenario where we can't
+  // honor all requests is given by the three groups G1=(A,B), G2=(B,C), and G3=(A,C). Clearly,
+  // only two of these groups can have contiguous allocation.
+
+  // To understand how we can parse the groups to figure out if/how to accommodate all requests,
+  // consider the following GR:  G1=(A,B,C), G2=(A,B,C,D,E), G3=(C,D), G4=(C,D,E,F), G5=((D,E,F,G).
+  // The ordering of fields (A,B,C,D,E,F,G) clearly accommodates all GRs, though it might not
+  // be obvious if one scrambled the fields within each GR.
+
+  // For group requests on different grids, we consider the group members to be the union of all
+  // fields registered to a particular group, over all grids. So if fields A and B are registered
+  // as part of group G on grid1, and field C is registered as a part of G on grid2, both G on grid1
+  // and G on grid2 will contain fields A,B,C, and we ensure that the subview index matches over grids.
+
+  // This is the sequence of operations that allows us to establish if (and how) we can honor
+  // all the requests:
+  //  1) ensure all groups with a monolithic allocation contain the desired members. This means that
+  //     we need to loop over GroupRequest (GR), and make sure there are fields registered in those
+  //     groups (querying m_field_group_info info structs).
+  //  2) Focus only on GR that require a monolithic allocation, discarding others.
+  //     All the remaining group can simply "grab" individual fields later (and they
+  //     can even grab some "individual" fields, and some fields that are slices of
+  //     another group).
+  //  3) Divide the groups found at step 2 into 'clusters'. A cluster is a collection
+  //     of field groups such that each group in it share at least one field with
+  //     at least another group in the cluster. If two groups are not in the same
+  //     cluster, they cannot share any field. Each cluster of field groups can be
+  //     processed individually, since allocations are completely independent.
+  //     This allows to reduce the combination of groups to checks later.
+  //     Note: to build a cluster, take any group not yet in a cluster. Then iteratively
+  //     add any group that intersects the cluster, until no intersections are found.
+  //  4) If there is no group in the cluster that contains all the fields of the cluster,
+  //     create the cluster group C. In order to accommodate all requests for groups,
+  //     we must be able to allocate C contiguously.
+  //  5) For each cluster, call the function contiguous_superset from eamxx_utils.hpp
+  //     (see that file for details). If the fcn fails to find an ordering of the cluster's
+  //     field that accommodate all requests, it will return an empty list.
+  //     Otherwise it will return the ordering of all fields in the cluster that allows all
+  //     groups of the cluster to be a contiguous subset of C.
+  //  Note: this can be done independent of grid since each grid will contain the same fields
+
+  // Start by processing group request. This function checks that all group fields are properly
+  // registered on the appropriate grid and the FieldGroupInfo is up to date. If group G is
+  // requested, we make sure to register the union of all fields in group G on any grids they appear.
+  pre_process_monolithic_group_requests();
+
+  // Gather a list of groups whose fields require monolithic allocation
+  std::list<std::string> groups_with_monolithic_allocation;
+  for (auto& grid_it : m_grids_mgr->get_repo()) {
+    for (const auto& greqs : m_group_requests.at(grid_it.second->name())) {
+      for (const auto& r : greqs.second) {
+        if (r.monolithic_alloc==MonolithicAlloc::Required) {
+          // There's at least one request for this group to be allocated.
+          groups_with_monolithic_allocation.push_back(greqs.first);
+          break;
+        }
+      }
+    }
+  }
+  // TODO: Is this still needed? Probably no.
+  ::scream::sort(groups_with_monolithic_allocation);
+  groups_with_monolithic_allocation.unique();
+
+  // Homme currently wants qv to be the first tracer. We should be able to
+  // modify Homme, to use something like qv_idx. However, that requires
+  // extensive changes in Homme. Instead, we hack our way around this limitatin
+  // (for now), and rearrange groups/fields so that we can expect qv to be the
+  // first tracer.
+  // Note: there are potentially two groups of tracers, "tracers" (which
+  // homme advects) and "turbulence_advected_tracers" (which shoc advects).
+  // "turbulence_advected_tracers" is guarenteed to be a subset of "tracers", so
+  // moving qv first in "tracers" will do the same for "turbulence_advected_tracers".
+  // Only homme requires qv first, so we only need to move qv if "tracers" exist.
+  bool qv_must_come_first = false;
+  if (ekat::contains(groups_with_monolithic_allocation,"tracers")
+      and
+      ekat::contains(m_field_group_info["tracers"]->m_fields_names, "qv")) {
+    // Bring tracers to the front, so it will be processed first
+    auto it = ekat::find(groups_with_monolithic_allocation,"tracers");
+    std::swap(*it,groups_with_monolithic_allocation.front());
+
+    // Adding the 'fake' group G=(qv) at the front of groups_with_monolithic_allocation ensures qv won't be put
+    // in the middle of the tracers group. We use a highly unlikely group name, to avoid clashing
+    // with a real group name. Later, after having found an global ordering for the tracers fields,
+    // we will remove this group.
+    groups_with_monolithic_allocation.push_front("__qv__");
+    m_field_group_info.emplace("__qv__",std::make_shared<FieldGroupInfo>("__qv__"));
+    m_field_group_info.at("__qv__")->m_fields_names.insert("qv");
+    qv_must_come_first = true;
+  }
+
+  // Do all the monolithic allocation stuff only if there are groups which require it.
+  if (groups_with_monolithic_allocation.size()>0) {
+    using namespace ShortFieldTagsNames;
+
+    // A cluster is a list of names of groups in the cluster
+    using cluster_type = std::list<std::string>;
+
+    // Determine if two lists have elements in common (does not compute the intersection)
+    auto intersect = [] (const std::set<ci_string>& lhs,
+                        const std::set<ci_string>& rhs) -> bool {
+      for (const auto& s : lhs) {
+        if (ekat::contains(rhs,s)) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    std::list<cluster_type> clusters;
+    std::list<std::string> added_to_a_cluster;
+    while (added_to_a_cluster.size()<groups_with_monolithic_allocation.size()) {
+      cluster_type c;
+      auto first = groups_with_monolithic_allocation.begin();
+      c.push_front(*first);
+      groups_with_monolithic_allocation.erase(first);
+
+      for (const auto& gn : groups_with_monolithic_allocation) {
+        if (ekat::contains(added_to_a_cluster,gn)) {
+          // This group has been added to a cluster already
+          continue;
+        }
+
+        // Get the fields of this group
+        const auto& fnames = m_field_group_info.at(gn)->m_fields_names;
+        for (const auto& c_gn : c) {
+          const auto& c_fnames = m_field_group_info.at(c_gn)->m_fields_names;
+          if (intersect(fnames,c_fnames)) {
+            // Ok, group gn intersects the cluser in at least one group (c_gn).
+            // We add gn to the cluster, then break
+            c.push_back(gn);
+            added_to_a_cluster.push_back(gn);
+            break;
+          }
+        }
+      }
+
+      clusters.emplace_back(c);
+    }
+
+    // Now we have clusters. For each cluster, build the list of lists, and call
+    // the contiguous_superset utility.
+    for (auto& cluster : clusters) {
+      using LOL_t = std::list<std::list<ci_string>>;
+
+      LOL_t groups_fields;
+      for (const auto& gn : cluster) {
+        auto gn_set = m_field_group_info.at(gn)->m_fields_names;
+        auto gn_list = std::list<ci_string>(gn_set.begin(),gn_set.end());
+        groups_fields.push_back(gn_list);
+        ::scream::sort(groups_fields.back());
+      }
+
+      auto cluster_ordered_fields = contiguous_superset(groups_fields);
+
+      // If contiguous_superset returns a list of size 0, it means it was NOT
+      // able to accommodate all the contiguous allocation requests for the
+      // groups in this cluster. We must error out here.
+      EKAT_REQUIRE_MSG(cluster_ordered_fields.size()>0,
+          "Error! Field manager was not able to accommodate the following\n"
+          "       requests for monolithically allocated groups:\n"
+          " - " + ekat::join(cluster,"\n - ") + "\n"
+          "       Consdier modifying the Atm Procs where these groups are requested.\n");
+
+      // If we got here, it means we can allocate the cluster as a field, and then subview all the groups
+      // Steps:
+      //  - check if there's a group in the cluster containing all the fields. If yes, use that group
+      //    name for the grouped field, otherwise make one up from the names of all groups in the cluster.
+      //  - allocate the cluster field F.
+      //  - loop over the groups in the cluster, and subview F at the proper (contiguous) indices.
+
+      // WARNING: this lines should be removed if we move away from Homme's requirement that
+      //          qv be the first tracer
+      if (qv_must_come_first) {
+        auto qv_it = ekat::find(cluster_ordered_fields,"qv");
+        if (qv_it!=cluster_ordered_fields.end()) {
+          // Check that qv comes first or last (if last, reverse the list). If not, error out.
+          // NOTE: I *think* this should not happen, unless 'tracers' is a subgroup of a bigger group.
+          EKAT_REQUIRE_MSG(qv_it==cluster_ordered_fields.begin() || std::next(qv_it,1)==cluster_ordered_fields.end(),
+              "Error! The water vapor field has to be the first tracer, but it is not.\n");
+
+          if (qv_it!=cluster_ordered_fields.begin()) {
+            // Note: reversing the order of the fields preserves subgroups contiguity
+            cluster_ordered_fields.reverse();
+          }
+
+          // Remove __qv__ from the cluster (if present)
+          auto qv_gr_it = ekat::find(cluster,"__qv__");
+          if (qv_gr_it!=cluster.end()) {
+            cluster.erase(qv_gr_it);
+          }
+        }
+      }
+
+      // Check if there is a group with all the fields. Notice that it is enough to check
+      // if any list in the LOL has the same length as cluster_ordered_fields.
+      // If not, we will set cluster_name = $group1_name | $group2_name | ...
+      // Note: cluster_name will be the name of the field allocating all fields in the cluster's groups
+      std::string cluster_name;
+      for (const auto& gn : cluster) {
+        // Start building cluster_name by "or-ing" all gn's.
+        if (gn==cluster.front()) {
+          cluster_name = gn;
+        } else {
+          cluster_name += " | " + gn;
+        }
+
+        const auto& fnames = m_field_group_info.at(gn)->m_fields_names;
+        if (fnames.size()==cluster_ordered_fields.size()) {
+          // Found a group in the cluster that contains all fields.
+          cluster_name = gn;
+          break;
+        }
+      }
+
+      // We must allocate this cluster field on every grid that
+      // exists in the group requests contained in the cluster
+      std::list<std::string> grids_in_cluster;
+      for (const auto& gn : cluster) {
+        for (auto grid_name: m_grids_mgr->get_grid_names()) {
+          if (m_group_requests.at(grid_name).find(gn)!=m_group_requests.at(grid_name).end()) {
+            grids_in_cluster.push_back(grid_name);
+          }
+        }
+      }
+      ::scream::sort(grids_in_cluster);
+      grids_in_cluster.unique();
+
+      for (auto cluster_grid_name : grids_in_cluster) {
+        const auto& cluster_grid = m_grids_mgr->get_grid(cluster_grid_name);
+
+        // Figure out the layout of the fields in this cluster,
+        // and make sure they all have the same layout
+        LayoutType lt = LayoutType::Invalid;
+        FieldLayout f_layout = FieldLayout::invalid();
+        for (const auto& fname : cluster_ordered_fields) {
+          const auto& f = m_fields.at(cluster_grid_name).at(fname);
+          const auto& id = f->get_header().get_identifier();
+          if (lt==LayoutType::Invalid) {
+          f_layout = id.get_layout();
+          lt = f_layout.type();
+          } else {
+            EKAT_REQUIRE_MSG (lt==id.get_layout().type(),
+                "Error! Found a group containing fields with different layouts.\n"
+                "       Group name: " + cluster_name + "\n"
+                "       Layout 1: " + e2str(lt) + "\n"
+                "       Layout 2: " + e2str(id.get_layout().type()) + "\n");
+          }
+        }
+
+        EKAT_REQUIRE_MSG(lt==LayoutType::Scalar2D || lt==LayoutType::Scalar3D,
+            "Error! We can only monolithically allocate scalar fields. Found " + e2str(lt) + " fields instead.\n");
+
+        FieldLayout c_layout = FieldLayout::invalid();
+        if (lt==LayoutType::Scalar2D) {
+          c_layout = cluster_grid->get_2d_vector_layout(cluster_ordered_fields.size());
+        } else {
+          c_layout = cluster_grid->get_3d_vector_layout(f_layout.tags().back(),cluster_ordered_fields.size());
+        }
+
+        // The units for the monolithic field are nondimensional, cause checking whether
+        // all fields in the group have the same units so we can use those is too long and pointless.
+        FieldIdentifier c_fid(cluster_name,c_layout,ekat::units::none,cluster_grid->name());
+        register_field(c_fid);
+        const auto& C = m_fields.at(cluster_grid_name).at(c_fid.name());
+
+        // Scan all fields in this cluster, get their alloc props, and make sure
+        // C can accommodate all of them. Also, make sure C can accommodate all
+        // pack sizes of all GroupRequest of groups in this cluster.
+        auto& C_ap = C->get_header().get_alloc_properties();
+        for (const auto& fn : cluster_ordered_fields) {
+          const auto& f = m_fields.at(cluster_grid_name).at(fn);
+          C_ap.request_allocation(f->get_header().get_alloc_properties());
+        }
+        for (const auto& gn : cluster) {
+          if (m_group_requests.at(cluster_grid_name).find(gn)!=m_group_requests.at(cluster_grid_name).end()) {
+            for (const auto& req : m_group_requests.at(cluster_grid_name).at(gn)) {
+              C_ap.request_allocation(req.pack_size);
+            }
+          }
+        }
+
+        // Allocate
+        C->allocate_view();
+
+        // Note: as of 02/2021, subview_dim should *always* be 1, but we store it just in case,
+        //       to avoid bugs in the future.
+        const auto& C_tags = C->get_header().get_identifier().get_layout().tags();
+        const int subview_dim = std::distance(C_tags.begin(),ekat::find(C_tags,CMP));
+        // See below where we assume subview_dim is 1
+        EKAT_REQUIRE_MSG(subview_dim==1, "Error! subview_dim is assumed to be 1 in FieldManager::registration_ends().\n");
+
+        // Create all individual subfields
+        for (const auto& fn : cluster_ordered_fields) {
+          const auto& f = m_fields.at(cluster_grid_name).at(fn);
+          const auto pos = ekat::find(cluster_ordered_fields,fn);
+          const int idx = std::distance(cluster_ordered_fields.begin(),pos);
+
+          const auto& fid = f->get_header().get_identifier();
+          EKAT_REQUIRE_MSG (fid.get_units()!=ekat::units::Units::invalid(),
+              "Error! A field was registered without providing valid units.\n"
+              "  - field id: " + fid.get_id_string() + "\n");
+          auto fi = C->subfield(fn,fid.get_units(),subview_dim,idx);
+
+          // Overwrite existing field with subfield
+          *f = fi;
+        }
+
+        // Set up individual groups: create the monolithic field (if needed) and set fields in the FieldGroup objects
+        for (auto group_name : cluster) {
+          // "__qv__" is a fake group, used only to ensure that qv is the 1st field in the tracers group.
+          if (group_name=="__qv__")
+            continue;
+
+          const auto& info = *m_field_group_info.at(group_name);
+          const auto& fnames = info.m_fields_names;
+          auto& group = m_field_groups[cluster_grid_name][group_name];
+          if (not group)
+            group = std::make_shared<FieldGroup>(group_name,cluster_grid_name);
+
+          if (group_name==cluster_name) {
+            // Simple: the monolithic field is the whole cluster
+            group->set_monolithic_field(*C);
+          } else {
+            // Find the first field of this group in the ordered cluster names.
+            auto first = std::find_first_of(cluster_ordered_fields.begin(),cluster_ordered_fields.end(),
+                                            fnames.begin(),fnames.end());
+            int subview_beg = std::distance(cluster_ordered_fields.begin(),first);
+            int subview_end = subview_beg+fnames.size();
+            auto sub_layout = c_layout.clone().reset_dim(subview_dim,info.size());;
+            auto sub_fid = c_fid.clone(group_name).reset_layout(sub_layout);
+            register_field(sub_fid);
+            auto& monolithic_f = *m_fields.at(cluster_grid_name).at(group_name);
+            monolithic_f = C->subfield (group_name,subview_dim,subview_beg,subview_end);
+            group->set_monolithic_field(monolithic_f);
+          }
+        }
+      }
+
+      if (ekat::contains(cluster,"__qv__")) {
+        // Erase the 'fake group' we added (to guarantee qv would be first/last in the tracers)
+        m_field_group_info.erase(m_field_group_info.find("__qv__"));
+        cluster.erase(ekat::find(cluster,"__qv__"));
+      }
+    }
+  }
+
+  for (auto grid_name : m_grids_mgr->get_grid_names()) {
+    for (auto& it : m_fields.at(grid_name)) {
+      if (it.second->is_allocated())
+        // If the field has been already allocated, then it was in a monolithic group, so skip it.
+        continue;
+      // A brand new field. Allocate it
+      it.second->allocate_view();
+    }
+  }
+
+  // Prohibit further registration of fields to this repo
+  m_repo_state = RepoState::Closed;
+
+  // Loop through all the FieldGroupInfo stored, and call add_to_group to start creating the actual
+  // FieldGroup objects in the m_field_groups registry
+  for (const auto& [group_name, info] : m_field_group_info)
+    for (const auto& [field_name, grids] : info->m_grid_registered)
+      for (const auto& grid_name : grids)
+        add_to_group_internal(field_name,grid_name,group_name,true);
+}
+
+void FieldManager::clean_up() {
+  // Clean field map
+  m_fields.clear();
+
+  // Clean group info
+  m_field_group_info.clear();
+
+  // Reset repo state
+  m_repo_state = RepoState::Clean;
+}
+
+void FieldManager::clean_up(const std::string& grid_name) {
+  // Clear the maps
+  m_fields[grid_name].clear();
+}
+
+void FieldManager::add_field (const Field& f) {
+  const auto& grid_name = f.get_header().get_identifier().get_grid_name();
+
+  // This method has a few restrictions on the input field.
+  EKAT_REQUIRE_MSG(m_grids_mgr->has_grid(grid_name),
+    "Error! Attempting to add_field on grid not in the FM's grids manager:\n"
+    "  - Field name: " + f.name() + "\n"
+    "  - Grid:       " + grid_name + "\n"
+    "  - Grids stored by FM: " + m_grids_mgr->print_available_grids() + "\n");
+  EKAT_REQUIRE_MSG (m_repo_state!=RepoState::Open,
+      "Error! The method 'add_field' can only be called on a closed or clean repo (if clean, will immediately be closed).\n");
+  EKAT_REQUIRE_MSG (f.is_allocated(),
+      "Error! The method 'add_field' requires the input field to be already allocated.\n");
+  EKAT_REQUIRE_MSG (m_grids_mgr->get_grid(grid_name)->is_valid_layout(f.get_header().get_identifier().get_layout()),
+      "Error! Input field to 'add_field' has a layout not compatible with the stored grid.\n"
+      "  - input field name : " + f.name() + "\n"
+      "  - field manager grid: " + grid_name + "\n"
+      "  - input field layout:   " + f.get_header().get_identifier().get_layout().to_string() + "\n");
+  EKAT_REQUIRE_MSG (not has_field(f.name(), grid_name),
+      "Error! The method 'add_field' requires the input field to not be already existing.\n"
+      "  - field name: " + f.get_header().get_identifier().name() + "\n");
+
+  // All good, add the field to the repo
+  m_fields[grid_name][f.get_header().get_identifier().name()] = std::make_shared<Field>(f);
+
+  // If it was not closed before, it is now
+  m_repo_state = RepoState::Closed;
+
+  const auto& groups = f.get_header().get_tracking().get_groups_names();
+  for (const auto& group_name : groups) {
+    add_to_group(f.name(),grid_name,group_name);
+  }
+}
+
+void FieldManager::
+add_to_group_internal (const std::string& field_name, const std::string& grid_name,
+                       const std::string& group_name, const bool monolithic_ok)
+{
+  EKAT_REQUIRE_MSG (has_field(field_name, grid_name),
+      "Error! Cannot add field to group, since the field is not present in this FieldManager.\n"
+      "   field name: " + field_name + "\n"
+      "   grid name:  " + grid_name + "\n"
+      "   group name: " + group_name + "\n");
+
+  auto& group = m_field_groups[grid_name][group_name];
+  if (not group)
+    group = std::make_shared<FieldGroup>(group_name,grid_name);
+
+  EKAT_REQUIRE_MSG (not group->has_monolithic_field() or monolithic_ok,
+      "Error! Cannot add fields to a group that stores a monolithic field after registration has ended.\n"
+      "   field name: " + field_name + "\n"
+      "   group name: " + group_name + "\n"
+      "   grid name : " + grid_name + "\n");
+
+  auto f = get_field(field_name,grid_name);
+  if (group->individual_fields().count(field_name)==0)
+    group->set_field(f);
+
+  // If this method is called from add_field, it is redundant, but otherwise it's needed.
+  auto& ft = f.get_header().get_tracking();
+  ft.add_group(group_name);
+}
+
+void FieldManager::pre_process_monolithic_group_requests () {
+  // For each group, loop over all fields in the group and register
+  // on to each grid the group is requested on (if necessary)
+  for (auto [group_name, group_info] : m_field_group_info) {
+    if (not group_info->m_monolithic_allocation) continue;
+    // Gather all grids in this group. We need to check
+    // both grids that already exist in the group and grids that
+    // at one point were requested by the group.
+    std::list<ci_string> grids_in_group;
+    for (auto field_name : group_info->m_fields_names) {
+      for (auto grid_name : group_info->m_grid_registered.at(field_name)) {
+        if (not ekat::contains(grids_in_group, grid_name)) grids_in_group.push_back(grid_name);
+      }
+    }
+    for (auto grid_name : group_info->m_requested_grids) {
+      if (not ekat::contains(grids_in_group, grid_name)) grids_in_group.push_back(grid_name);
+    }
+
+    // Register fields on all grids
+    for (auto field_name : group_info->m_fields_names) {
+      for (auto grid_name : grids_in_group) {
+        // Field already registered on grid. Just make sure group_info has it down for this grid
+        if (has_field(field_name, grid_name)) {
+          group_info->m_grid_registered[field_name].insert(grid_name);
+          continue;
+        }
+
+        // Find the grid which registered this field.
+        // Note: We require *exactly one* grid has registered the field
+        std::string registered_grid = "";
+        for (auto other_grid_name : group_info->m_grid_registered.at(field_name)) {
+          if (other_grid_name == grid_name) continue;
+
+          // Check that we haven't found 2 other grids which registered this field
+          EKAT_REQUIRE_MSG(registered_grid == "" or registered_grid == other_grid_name,
+            "Error! Before registration_end(), FieldManager requires a field within a group to be registered on a single grid.\n"
+            "  - Field name: " + field_name + "\n"
+            "  - Group name: " + group_name + "\n"
+            "  - Grids registered: " + other_grid_name + "," + registered_grid + "\n");
+
+            registered_grid = other_grid_name;
+        }
+
+        // Get a FID for this grid by asking for an equivalent layout
+        // to the layout on the src grid
+        const auto src_fid = m_fields.at(registered_grid).at(field_name)->get_header().get_identifier();
+        const auto fl = m_grids_mgr->get_grid(grid_name)->equivalent_layout(src_fid.get_layout());
+        auto fid = src_fid.clone().reset_layout(fl).reset_grid(grid_name);
+
+        register_field(FieldRequest(fid,group_name));
+      }
+    }
+  }
+}
+
+} // namespace scream

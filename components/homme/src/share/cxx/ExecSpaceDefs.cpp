@@ -13,62 +13,16 @@
 #include "Dimensions.hpp"
 #include "utilities/MathUtils.hpp"
 
-#ifdef KOKKOS_ENABLE_CUDA
-# include <cuda.h>
-#endif
-
-#ifdef KOKKOS_ENABLE_HIP
-#include <hip/hip_runtime.h>
-#endif
-
 namespace Homme {
 
 // Since we're initializing from inside a Fortran code and don't have access to
-// char** args to pass to Kokkos::initialize, we need to do some work on our
-// own. As a side benefit, we'll end up running on GPU platforms optimally
-// without having to specify --kokkos-ndevices on the command line.
+// char** args to pass to Kokkos::initialize, we need to create and set the kokkos
+// initialization settings manually.
 void initialize_kokkos () {
-  // This is in fact const char*, but Kokkos::initialize requires char*.
-  std::vector<char*> args;
-
-  //   This is the only way to get the round-robin rank assignment Kokkos
-  // provides, as that algorithm is hardcoded in Kokkos::initialize(int& narg,
-  // char* arg[]). Once the behavior is exposed in the InitArguments version of
-  // initialize, we can remove this string code.
-  //   If for some reason we're running on a GPU platform, have Cuda enabled,
-  // but are using a different execution space, this initialization is still
-  // OK. The rank gets a GPU assigned and simply will ignore it.
-#ifdef KOKKOS_ENABLE_CUDA
-  int nd;
-  const auto ret = cudaGetDeviceCount(&nd);
-  if (ret != cudaSuccess) {
-    // It isn't a big deal if we can't get the device count.
-    nd = 1;
-  }
-#elif defined(KOKKOS_ENABLE_HIP)
-  int nd;
-  const auto ret = hipGetDeviceCount(&nd);
-  if (ret != hipSuccess) {
-    // It isn't a big deal if we can't get the device count.
-    nd = 1;
-  }
-#endif
-#ifdef HOMMEXX_ENABLE_GPU  
-  std::stringstream ss;
-  ss << "--kokkos-num-devices=" << nd;
-  const auto key = ss.str();
-  std::vector<char> str(key.size()+1);
-  std::copy(key.begin(), key.end(), str.begin());
-  str.back() = 0;
-  args.push_back(const_cast<char*>(str.data()));
-#endif
-
-
-  const char* silence = "--kokkos-disable-warnings";
-  args.push_back(const_cast<char*>(silence));
-
-  int narg = args.size();
-  Kokkos::initialize(narg, args.data());
+  auto const settings = Kokkos::InitializationSettings()
+    .set_map_device_id_by("mpi_rank")
+    .set_disable_warnings(true);
+  Kokkos::initialize(settings);
 }
 
 ThreadPreferences::ThreadPreferences ()
@@ -173,38 +127,32 @@ team_num_threads_vectors (const int num_parallel_iterations,
   // fewer than 4 warps/thread block limits the thread occupancy to that
   // number/4. That seems to be in Cuda specs, but I don't know of a function
   // that provides this number. Use a configuration option that defaults to 4.
-  const int min_num_warps = HOMMEXX_CUDA_MIN_WARP_PER_TEAM;
-#ifdef KOKKOS_ENABLE_CUDA
-  const int num_warps_device = Kokkos::Impl::cuda_internal_maximum_concurrent_block_count();
-  const int num_threads_warp = Kokkos::Impl::CudaTraits::WarpSize;
-  // The number on P100 is 16, but for some reason
-  // Kokkos::Impl::cuda_internal_maximum_grid_count() returns 8. I may be
-  // misusing the function. I have an open issue with the Kokkos team to resolve
-  // this. For now:
-# ifdef KOKKOS_ENABLE_DEBUG
-  // Work around spurious "terminate called after throwing an instance
-  // of 'std::runtime_error'" message.
-  const int max_num_warps = 8;
-# else
-  const int max_num_warps = HOMMEXX_CUDA_MAX_WARP_PER_TEAM; //Kokkos::Impl::cuda_internal_maximum_grid_count();
-# endif
+  int min_num_warps = HOMMEXX_CUDA_MIN_WARP_PER_TEAM;
 
-#elif defined(KOKKOS_ENABLE_HIP)
+  int max_num_warps = HOMMEXX_CUDA_MAX_WARP_PER_TEAM;
+#ifdef KOKKOS_ENABLE_DEBUG
+  // In debug builds, team size must be smaller because of Kokkos-side data.
+  max_num_warps = std::min(max_num_warps, 8);
+#endif
 
-  //use 64 wavefronts per CU and 120 CUs
-  const int num_warps_device = 120*64; // no such thing Kokkos::Impl::hip_internal_maximum_warp_count();
-  const int max_num_warps = HOMMEXX_CUDA_MAX_WARP_PER_TEAM;
-  const int num_threads_warp = Kokkos::Experimental::Impl::HIPTraits::WarpSize;
+#if defined(KOKKOS_ENABLE_CUDA) || defined(KOKKOS_ENABLE_HIP) || defined(KOKKOS_ENABLE_SYCL)
+  // vector_length_max() is a static method — no instance needed.
+  // It returns the hardware warp/wavefront/subgroup size for this backend
+  const int num_threads_warp = Kokkos::TeamPolicy<HommexxGPU>::vector_length_max();
 
+  // concurrency() returns total hardware threads across all SMs/CUs.
+  // Dividing by warp size gives effective total warp count - portable
+  // across CUDA, HIP and SYCL without any magic numbers.
+  const int num_warps_device = HommexxGPU().concurrency() / num_threads_warp;
 #else
-
-  // I want thread-distribution rules to be unit-testable even when Cuda is
-  // off. Thus, make up a P100-like machine:
+  // I want thread-distribution rules to be unit-testable even when GPU spaces
+  // are off. Thus, make up a GPU-like machine:
   const int num_warps_device = 1792;
   const int num_threads_warp = 32;
-  const int max_num_warps = 16;
-
+  max_num_warps = 16;
 #endif
+
+  min_num_warps = std::min(min_num_warps, max_num_warps);
 
   return Parallel::team_num_threads_vectors_for_gpu(
     num_warps_device, num_threads_warp,

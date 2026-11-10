@@ -11,8 +11,10 @@
 #include "compose_hommexx.hpp"
 
 extern "C" void
-sl_get_params(double* nu_q, double* hv_scaling, int* hv_q, int* hv_subcycle_q,
-              int* limiter_option, int* cdr_check, int* geometry_type);
+sl_get_params(double* nu_q, double* hv_scaling, int* hv_q, int* hv_subcycle_q, int* hv_subcycle_q_sgs,
+              int* limiter_option, int* cdr_check, int* geometry_type,
+              int* trajectory_nsubstep, int* trajectory_nvelocity,
+              int* diagnostics, bool* do_3d_turbulence);
 
 namespace Homme {
 
@@ -46,6 +48,7 @@ void ComposeTransportImpl::setup () {
   m_sphere_ops = Context::singleton().get<SphereOperators>();
   
   set_dp_tol();
+  
   nslot = calc_nslot(m_geometry.num_elems());
 }
 
@@ -53,15 +56,30 @@ void ComposeTransportImpl::reset (const SimulationParams& params) {
   const auto num_elems = Context::singleton().get<Connectivity>().get_num_local_elements();
 
   const bool independent_time_steps = params.dt_tracer_factor > params.dt_remap_factor;
-  if (independent_time_steps != m_data.independent_time_steps ||
-      m_data.nelemd != num_elems || m_data.qsize != params.qsize) {
+
+  sl_get_params(&m_data.nu_q, &m_data.hv_scaling, &m_data.hv_q, &m_data.hv_subcycle_q, &m_data.hv_subcycle_q_sgs,
+                &m_data.limiter_option, &m_data.cdr_check, &m_data.geometry_type,
+                &m_data.trajectory_nsubstep, &m_data.trajectory_nvelocity,
+                &m_data.diagnostics, &m_data.do_3d_turbulence);
+
+  if (independent_time_steps != m_data.independent_time_steps or
+      m_data.nelemd != num_elems or m_data.qsize != params.qsize) {
     const auto& g = m_geometry;
     const auto& t = m_tracers;
     const auto& s = m_state;
     const auto& d = m_derived;
     const auto nel = num_elems;
     const auto nlev = NUM_LEV*packn;
-    m_data.dep_pts = DeparturePoints("dep_pts", nel);
+    const int ndim = (m_data.trajectory_nsubstep == 0 ?
+                      3 :
+                      (independent_time_steps ? 4 : 3));
+    m_data.dep_pts = DeparturePoints("dep_pts", nel, num_phys_lev, np, np, ndim);
+    if (m_data.trajectory_nsubstep > 0)
+      m_data.vnode = DeparturePoints("vnode", nel, num_phys_lev, np, np, ndim);
+    if (m_data.trajectory_nsubstep > 1)
+      m_data.vdep  = DeparturePoints("vdep" , nel, num_phys_lev, np, np, ndim+1);
+    if (m_data.trajectory_nsubstep > 0)
+      setup_enhanced_trajectory(params, num_elems);
     homme::compose::set_views(
       g.m_spheremp,
       homme::compose::SetView<Real****>  (reinterpret_cast<Real*>(d.m_dp.data()),
@@ -76,8 +94,9 @@ void ComposeTransportImpl::reset (const SimulationParams& params) {
         nel, t.qdp.extent_int(1), t.qdp.extent_int(2), np, np, nlev),
       homme::compose::SetView<Real*****> (reinterpret_cast<Real*>(t.Q.data()),
                                           nel, t.Q.extent_int(1), np, np, nlev),
-      m_data.dep_pts);
+      m_data.dep_pts, m_data.vnode, ndim, m_data.vdep, m_data.vdep.extent_int(4));
   }
+
   m_data.independent_time_steps = independent_time_steps;
   if (m_data.nelemd == num_elems && m_data.qsize == params.qsize) return;
 
@@ -86,12 +105,14 @@ void ComposeTransportImpl::reset (const SimulationParams& params) {
                         "SL transport requires qsize > 0; if qsize == 0, use Eulerian.");
   m_data.nelemd = num_elems;
 
-  sl_get_params(&m_data.nu_q, &m_data.hv_scaling, &m_data.hv_q, &m_data.hv_subcycle_q,
-                &m_data.limiter_option, &m_data.cdr_check, &m_data.geometry_type);
   Errors::runtime_check(m_data.hv_q >= 0 && m_data.hv_q <= m_data.qsize,
                         "semi_lagrange_hv_q should be in [0, qsize].");
   Errors::runtime_check(m_data.hv_subcycle_q >= 0,
                         "hypervis_subcycle_q should be >= 0.");
+  Errors::runtime_check(m_data.hv_subcycle_q_sgs >= 0,
+                        "horiz_turb_subcycle_q should be >= 0.");
+  Errors::runtime_check(!m_data.do_3d_turbulence || m_data.hv_subcycle_q_sgs > 0,
+                        "horiz_turb_subcycle_q should be > 0 when 3D turbulence is enabled.");
 
   m_tp_ne = Homme::get_default_team_policy<ExecSpace>(m_data.nelemd);
   m_tp_ne_qsize = Homme::get_default_team_policy<ExecSpace>(m_data.nelemd * m_data.qsize);
@@ -105,25 +126,26 @@ void ComposeTransportImpl::reset (const SimulationParams& params) {
   m_sphere_ops.allocate_buffers(m_tu_ne_qsize);
 
   if (Context::singleton().get<Connectivity>().get_comm().root())
-    printf("compose> nelemd %d qsize %d hv_q %d hv_subcycle_q %d lim %d "
+    printf("compose> nelemd %d qsize %d hv_q %d hv_subcycle_q %d hv_subcycle_q_sgs %d lim %d "
            "independent_time_steps %d\n",
-           m_data.nelemd, m_data.qsize, m_data.hv_q, m_data.hv_subcycle_q,
+           m_data.nelemd, m_data.qsize, m_data.hv_q, m_data.hv_subcycle_q, m_data.hv_subcycle_q_sgs,
            m_data.limiter_option, (int) m_data.independent_time_steps);
 }
 
 int ComposeTransportImpl::requested_buffer_size () const {
   // FunctorsBuffersManager wants the size in terms of sizeof(Real).
-  return (3*Buf1::shmem_size(nslot) +
-          2*Buf2::shmem_size(nslot))/sizeof(Real);
+  return (m_data.n_buf1*Buf1Alloc::shmem_size(nslot) +
+          m_data.n_buf2*Buf2::shmem_size(nslot))/sizeof(Real);
 }
 
 void ComposeTransportImpl::init_buffers (const FunctorsBuffersManager& fbm) {
   Scalar* mem = reinterpret_cast<Scalar*>(fbm.get_memory());
-  for (int i = 0; i < 3; ++i) {
-    m_data.buf1[i] = Buf1(mem, nslot);
-    mem += Buf1::shmem_size(nslot)/sizeof(Scalar);
+  for (int i = 0; i < m_data.n_buf1; ++i) {
+    m_data.buf1o[i] = Buf1o(mem, nslot);
+    m_data.buf1e[i] = Buf1e(mem, nslot); // use the same memory
+    mem += Buf1Alloc::shmem_size(nslot)/sizeof(Scalar);
   }
-  for (int i = 0; i < 2; ++i) {
+  for (int i = 0; i < m_data.n_buf2; ++i) {
     m_data.buf2[i] = Buf2(mem, nslot);
     mem += Buf2::shmem_size(nslot)/sizeof(Scalar);
   }
@@ -133,11 +155,14 @@ void ComposeTransportImpl::init_boundary_exchanges () {
   assert(m_data.qsize > 0); // after reset() called
 
   auto bm_exchange = Context::singleton().get<MpiBuffersManagerMap>()[MPI_EXCHANGE];
+  const auto& sp = Context::singleton().get<SimulationParams>();
 
   // For qdp DSS at end of transport step.
   for (int i = 0; i < Q_NUM_TIME_LEVELS; ++i) {
     m_qdp_dss_be[i] = std::make_shared<BoundaryExchange>();
     auto be = m_qdp_dss_be[i];
+    be->set_label(std::string("ComposeTransport-qdp-DSS-" + std::to_string(i)));
+    be->set_diagnostics_level(sp.internal_diagnostics_level);
     be->set_buffers_manager(bm_exchange);
     be->set_num_fields(0, 0, m_data.qsize + 1);
     be->register_field(m_tracers.qdp, i, m_data.qsize, 0);
@@ -145,14 +170,29 @@ void ComposeTransportImpl::init_boundary_exchanges () {
     be->registration_completed();
   }
 
-  for (int i = 0; i < 2; ++i) {
-    m_v_dss_be[i] = std::make_shared<BoundaryExchange>();
-    auto be = m_v_dss_be[i];
-    be->set_buffers_manager(bm_exchange);
-    be->set_num_fields(0, 0, 2 + (i ? 1 : 0));
-    be->register_field(m_derived.m_vstar, 2, 0);
-    if (i) be->register_field(m_derived.m_divdp);
-    be->registration_completed();
+  if (m_data.trajectory_nsubstep == 0) {
+    for (int i = 0; i < 2; ++i) {
+      m_v_dss_be[i] = std::make_shared<BoundaryExchange>();
+      auto be = m_v_dss_be[i];
+      be->set_label(std::string("ComposeTransport-v-DSS-" + std::to_string(i)));
+      be->set_diagnostics_level(sp.internal_diagnostics_level);
+      be->set_buffers_manager(bm_exchange);
+      be->set_num_fields(0, 0, 2+i);
+      be->register_field(m_derived.m_vstar, 2, 0);
+      if (i) be->register_field(m_derived.m_divdp);
+      be->registration_completed();
+    }
+  } else {
+    for (int i = 0; i < 2; ++i) {
+      m_v_dss_be[i] = std::make_shared<BoundaryExchange>();
+      auto be = m_v_dss_be[i];
+      be->set_label(std::string("ComposeTransport-v-DSS-" + std::to_string(i)));
+      be->set_diagnostics_level(sp.internal_diagnostics_level);
+      be->set_buffers_manager(bm_exchange);
+      be->set_num_fields(0, 0, 3+i);
+      be->register_field(m_tracers.qtens_biharmonic, 3+i, 0);
+      be->registration_completed();
+    }
   }
 
   // For optional HV applied to q.
@@ -160,6 +200,8 @@ void ComposeTransportImpl::init_boundary_exchanges () {
     for (int i = 0; i < 2; ++i) {
       m_hv_dss_be[i] = std::make_shared<BoundaryExchange>();
       auto be = m_hv_dss_be[i];
+      be->set_label(std::string("ComposeTransport-q-HV-" + std::to_string(i)));
+      be->set_diagnostics_level(sp.internal_diagnostics_level);
       be->set_buffers_manager(bm_exchange);
       be->set_num_fields(0, 0, m_data.hv_q);
       if (i == 0) 
@@ -169,24 +211,53 @@ void ComposeTransportImpl::init_boundary_exchanges () {
       be->registration_completed();
     }
   }
+
+  // For horizontal turbulent diffusion applied to all tracers.
+  if (m_data.do_3d_turbulence) {
+    for (int i = 0; i < 2; ++i) {
+      m_horiz_turb_dss_be[i] = std::make_shared<BoundaryExchange>();
+      auto be = m_horiz_turb_dss_be[i];
+      be->set_label(std::string("ComposeTransport-q-HorizTurb-" + std::to_string(i)));
+      be->set_diagnostics_level(sp.internal_diagnostics_level);
+      be->set_buffers_manager(bm_exchange);
+      be->set_num_fields(0, 0, m_data.qsize);
+      if (i == 0)
+        be->register_field(m_tracers.qtens_biharmonic, m_data.qsize, 0);
+      else
+        be->register_field(m_tracers.Q, m_data.qsize, 0);
+      be->registration_completed();
+    }
+  }
 }
 
 void ComposeTransportImpl::run (const TimeLevel& tl, const Real dt) {
   GPTLstart("compose_transport");
 
-  calc_trajectory(tl.np1, dt);
+  if (m_data.trajectory_nsubstep == 0)
+    calc_trajectory(tl.np1, dt);
+  else
+    calc_enhanced_trajectory(tl.nstep, tl.np1, dt);
   
   GPTLstart("compose_isl");
   homme::compose::advect(tl.np1, tl.n0_qdp, tl.np1_qdp);
+  Kokkos::fence();
   GPTLstop("compose_isl");
-  
+
   if (m_data.hv_q > 0 && m_data.nu_q > 0) {
     GPTLstart("compose_hypervis_scalar");
     advance_hypervis_scalar(dt);
     Kokkos::fence();
     GPTLstop("compose_hypervis_scalar");
   }
-  
+
+  // SGS horizontal turbulent diffusion for all tracers.
+  if (m_data.do_3d_turbulence) {
+    GPTLstart("compose_horizturb_scalar");
+    advance_horizontal_turbulent_diffusion_scalar(dt);
+    Kokkos::fence();
+    GPTLstop("compose_horizturb_scalar");
+  }
+
   GPTLstart("compose_cedr_global");
   homme::compose::set_dp3d_np1(m_data.independent_time_steps ?
                                0 : // dp3d is actually divdp

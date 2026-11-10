@@ -15,19 +15,23 @@ typedef double Real;
 namespace ko = Kokkos;
 
 // Fortran array wrappers with Fortran index order.
-template <typename T> using FA1 = ko::View<T*,     ko::LayoutLeft, ko::HostSpace>;
-template <typename T> using FA2 = ko::View<T**,    ko::LayoutLeft, ko::HostSpace>;
-template <typename T> using FA3 = ko::View<T***,   ko::LayoutLeft, ko::HostSpace>;
-template <typename T> using FA4 = ko::View<T****,  ko::LayoutLeft, ko::HostSpace>;
-template <typename T> using FA5 = ko::View<T*****, ko::LayoutLeft, ko::HostSpace>;
+// Use host_mirror_type::memory_space (not host_mirror_type directly) to:
+//   1. Get the correct memory space on APUs where host_mirror_type of HIPSpace stays in HIPSpace.
+//   2. Preserve const qualifiers on T, which host_mirror_type strips.
+using HostMirrorMemSpace = typename ko::View<Real*, ko::DefaultExecutionSpace::memory_space>::host_mirror_type::memory_space;
+template <typename T> using FA1 = ko::View<T*,     ko::LayoutLeft, HostMirrorMemSpace>;
+template <typename T> using FA2 = ko::View<T**,    ko::LayoutLeft, HostMirrorMemSpace>;
+template <typename T> using FA3 = ko::View<T***,   ko::LayoutLeft, HostMirrorMemSpace>;
+template <typename T> using FA4 = ko::View<T****,  ko::LayoutLeft, HostMirrorMemSpace>;
+template <typename T> using FA5 = ko::View<T*****, ko::LayoutLeft, HostMirrorMemSpace>;
 
 template <typename MT> using DepPoints =
-  ko::View<Real***[3], ko::LayoutRight, typename MT::DDT>;
+  ko::View<Real****, ko::LayoutRight, typename MT::DDT>;
 template <typename MT> using QExtrema =
   ko::View<Real****, ko::LayoutRight, typename MT::DDT>;
-  
-template <typename MT> using DepPointsH = typename DepPoints<MT>::HostMirror;
-template <typename MT> using QExtremaH = typename QExtrema<MT>::HostMirror;
+
+template <typename MT> using DepPointsH = typename DepPoints<MT>::host_mirror_type;
+template <typename MT> using QExtremaH = typename QExtrema<MT>::host_mirror_type;
 
 template <typename MT> using QExtremaHConst = ko::Const<QExtremaH<MT> >;
 template <typename MT> using QExtremaConst = ko::Const<QExtrema<MT> >;
@@ -62,7 +66,7 @@ struct HommeFormatSubArray {
     assert(i >= 0);
     return data[i];
   }
-  COMPOSE_FORCEINLINE_FUNCTION 
+  COMPOSE_FORCEINLINE_FUNCTION
   T& operator() (const Int& k, const Int& lev) const {
     static_assert(rank == 2, "rank 2 array");
     assert(k >= 0);
@@ -70,7 +74,7 @@ struct HommeFormatSubArray {
     check(k, lev);
     return data[lev*np2 + k];
   }
-  COMPOSE_FORCEINLINE_FUNCTION 
+  COMPOSE_FORCEINLINE_FUNCTION
   T& operator() (const Int& q_or_timelev, const Int& k, const Int& lev) const {
     static_assert(rank == 3, "rank 3 array");
     assert(q_or_timelev >= 0);
@@ -79,7 +83,7 @@ struct HommeFormatSubArray {
     check(k, lev, q_or_timelev);
     return data[(q_or_timelev*nlev + lev)*np2 + k];
   }
-  COMPOSE_FORCEINLINE_FUNCTION 
+  COMPOSE_FORCEINLINE_FUNCTION
   T& operator() (const Int& timelev, const Int& q, const Int& k, const Int& lev) const {
     static_assert(rank == 4, "rank 4 array");
     assert(timelev >= 0);
@@ -91,7 +95,7 @@ struct HommeFormatSubArray {
   }
 
 private:
-  static const int np2 = 16;  
+  static const int np2 = 16;
   T* data;
   const Int nlev, qsized, ntimelev;
 
@@ -108,7 +112,7 @@ private:
         assert(q_or_timelev < qsized);
     }
     if (timelev >= 0) assert(timelev < ntimelev);
-#endif    
+#endif
   }
 };
 
@@ -140,57 +144,57 @@ struct HommeFormatArray {
   COMPOSE_FORCEINLINE_FUNCTION
   T& operator() (const Int& ie, const Int& i) const {
     static_assert(rank == 2, "rank 2 array");
-    assert(i >= 0);
-    assert(ie_data_ptr[ie]);
     // These routines are not used on the GPU, but they can be called from
     // KOKKOS_FUNCTIONs on CPU in GPU builds. Avoid nvcc warnings as follows:
-#if defined __CUDA_ARCH__ || defined __HIP_DEVICE_COMPILE__
+#if defined __CUDA_ARCH__ || defined __HIP_DEVICE_COMPILE__ || defined __SYCL_DEVICE_ONLY__
     return unused();
 #else
+    assert(i >= 0);
+    assert(ie_data_ptr[ie]);
     return *(ie_data_ptr[ie] + i);
 #endif
   }
-  COMPOSE_FORCEINLINE_FUNCTION 
+  COMPOSE_FORCEINLINE_FUNCTION
   T& operator() (const Int& ie, const Int& k, const Int& lev) const {
     static_assert(rank == 3, "rank 3 array");
+#if defined __CUDA_ARCH__ || defined __HIP_DEVICE_COMPILE__ || defined __SYCL_DEVICE_ONLY__
+    return unused();
+#else
     assert(k >= 0);
     assert(lev >= 0);
     assert(ie_data_ptr[ie]);
     check(ie, k, lev);
-#if defined __CUDA_ARCH__ || defined __HIP_DEVICE_COMPILE__
-    return unused();
-#else
     return *(ie_data_ptr[ie] + lev*np2 + k);
 #endif
   }
-  COMPOSE_FORCEINLINE_FUNCTION 
+  COMPOSE_FORCEINLINE_FUNCTION
   T& operator() (const Int& ie, const Int& q_or_timelev, const Int& k,
                  const Int& lev) const {
     static_assert(rank == 4, "rank 4 array");
+#if defined __CUDA_ARCH__ || defined __HIP_DEVICE_COMPILE__ || defined __SYCL_DEVICE_ONLY__
+    return unused();
+#else
     assert(q_or_timelev >= 0);
     assert(k >= 0);
     assert(lev >= 0);
     assert(ie_data_ptr[ie]);
     check(ie, k, lev, q_or_timelev);
-#if defined __CUDA_ARCH__ || defined __HIP_DEVICE_COMPILE__
-    return unused();
-#else
     return *(ie_data_ptr[ie] + (q_or_timelev*nlev + lev)*np2 + k);
 #endif
   }
-  COMPOSE_FORCEINLINE_FUNCTION 
+  COMPOSE_FORCEINLINE_FUNCTION
   T& operator() (const Int& ie, const Int& timelev, const Int& q, const Int& k,
                  const Int& lev) const {
     static_assert(rank == 5, "rank 4 array");
+#if defined __CUDA_ARCH__ || defined __HIP_DEVICE_COMPILE__ || defined __SYCL_DEVICE_ONLY__
+    return unused();
+#else
     assert(timelev >= 0);
     assert(q >= 0);
     assert(k >= 0);
     assert(lev >= 0);
     assert(ie_data_ptr[ie]);
     check(ie, k, lev, q, timelev);
-#if defined __CUDA_ARCH__ || defined __HIP_DEVICE_COMPILE__
-    return unused();
-#else
     return *(ie_data_ptr[ie] + ((timelev*qsized + q)*nlev + lev)*np2 + k);
 #endif
   }
@@ -211,7 +215,7 @@ private:
   COMPOSE_FORCEINLINE_FUNCTION
   void check (Int ie, Int k = -1, Int lev = -1, Int q_or_timelev = -1,
               Int timelev = -1) const {
-#if defined COMPOSE_BOUNDS_CHECK && ! (defined __CUDA_ARCH__ || defined __HIP_DEVICE_COMPILE__)
+#if defined COMPOSE_BOUNDS_CHECK && ! (defined __CUDA_ARCH__ || defined __HIP_DEVICE_COMPILE__ || defined __SYCL_DEVICE_ONLY__)
     assert(ie >= 0 && ie < static_cast<Int>(ie_data_ptr.size()));
     if (k >= 0) assert(k < np2);
     if (lev >= 0) assert(lev < nlev);
@@ -222,7 +226,7 @@ private:
         assert(q_or_timelev < qsized);
     }
     if (timelev >= 0) assert(timelev < ntimelev);
-#endif    
+#endif
   }
 };
 
@@ -255,7 +259,7 @@ struct TracerArrays {
   View<Real****>  dp3d; // elem%state%dp3d or the sl3d equivalent
   View<Real*****> qdp;  // elem%state%Qdp(:,:,:,:,:)
   View<Real****>  q;    // elem%state%Q
-  DepPoints<MT> dep_points;
+  DepPoints<MT> dep_points, vnode, vdep;
   QExtrema<MT> q_min, q_max;
   void alloc_if_not();
 #else
@@ -287,10 +291,18 @@ subview_ie (const Int ie, const TracerView<T*****>& s)
 { return TracerView<T****>(&s(ie,0,0,0,0), s.extent(1), s.extent(2), s.extent(3), s.extent(4)); }
 
 template <typename MT>
-void sl_h2d(TracerArrays<MT>& ta, bool transfer, Cartesian3D* dep_points);
+void sl_traj_h2d(TracerArrays<MT>& ta, Real* dep_points, Real* vnode, Real* vdep,
+                 Int ndim);
 
 template <typename MT>
-void sl_d2h(const TracerArrays<MT>& ta, bool transfer, Cartesian3D* dep_points,
+void sl_traj_d2h(const TracerArrays<MT>& ta, Real* dep_points, Real* vnode,
+                 Real* vdep, Int ndim);
+
+template <typename MT>
+void sl_h2d(TracerArrays<MT>& ta, bool transfer, Real* dep_points, Int ndim);
+
+template <typename MT>
+void sl_d2h(const TracerArrays<MT>& ta, bool transfer, Real* dep_points, Int ndim,
             Real* minq, Real* maxq);
 
 template <typename MT>

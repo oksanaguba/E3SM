@@ -114,7 +114,7 @@ contains
     use TridiagonalMod     , only : Tridiagonal
     use elm_varpar         , only : nlevlak, nlevgrnd, nlevsno
     use elm_varcon         , only : hfus, cpliq, cpice, tkwat, tkice, denice
-    use elm_varcon         , only : vkc, grav, denh2o, tfrz, cnfac
+    use elm_varcon         , only : vkc, grav, denh2o, tfrz, cnfac, spval
     use elm_varctl         , only : iulog, use_lch4
     !
     ! !ARGUMENTS:
@@ -245,6 +245,7 @@ contains
          t_lake          =>   col_es%t_lake          , & ! Output: [real(r8) (:,:) ]  col lake temperature (Kelvin)
          hc_soi          =>   col_es%hc_soi          , & ! Output: [real(r8) (:)   ]  soil heat content (MJ/m2)
          hc_soisno       =>   col_es%hc_soisno       , & ! Output: [real(r8) (:)   ]  soil plus snow plus lake heat content (MJ/m2)
+         hc_lake         =>   col_es%hc_lake         , & ! Output: [real(r8) (:)   ]  lake-water heat content (MJ/m2)
 
          beta            =>   lakestate_vars%betaprime_col         , & ! Output: [real(r8) (:)   ]  col effective beta: sabg_lyr(p,jtop) for snow layers, beta otherwise
          lake_icefrac    =>   lakestate_vars%lake_icefrac_col      , & ! Output: [real(r8) (:,:) ]  col mass fraction of lake layer that is frozen
@@ -291,6 +292,7 @@ contains
        esum2(c) = 0._r8
        hc_soisno(c) = 0._r8
        hc_soi(c)    = 0._r8
+       hc_lake(c)   = 0._r8
        if (use_lch4) then
           jconvect(c) = 0
           jconvectbot(c) = nlevlak+1
@@ -994,6 +996,7 @@ contains
           fin(c) = fin(c) + phi(c,j)
           ! New for CLM 4
           hc_soisno(c) = hc_soisno(c) + cv_lake(c,j)*t_lake(c,j)/1.e6
+          hc_lake(c) = hc_lake(c) + cv_lake(c,j)*t_lake(c,j)/1.e6
        end do
     end do
 
@@ -1014,7 +1017,6 @@ contains
           if (j == 1) fin(c) = fin(c) + phi_soil(c)
        end do
     end do
-
 
     ! Check energy conservation.
     do fp = 1, num_lakep
@@ -1291,6 +1293,7 @@ contains
           qflx_snofrz_lyr => col_wf%qflx_snofrz_lyr , & ! Input:  [real(r8)  (:,:) ] snow freezing rate (positive definite) (col,lyr) [kg m-2 s-1]
           qflx_snow_melt  => col_wf%qflx_snow_melt  , & ! Output: [real(r8)  (:)   ] net snow melt
           qflx_snomelt    => col_wf%qflx_snomelt    , & ! Output: [real(r8)  (:)   ] snow melt (mm H2O /s)
+          qflx_snomelt_lyr=> col_wf%qflx_snomelt_lyr, & ! Output: [real(r8)  (:)   ] snow melt per layer (mm H2O /s)
           qflx_snofrz_col => col_wf%qflx_snofrz     , & ! Output: [real(r8)  (:)   ] column-integrated snow freezing rate (kg m-2 s-1) [+]
 
           t_soisno        => col_es%t_soisno      , & ! Input:  [real(r8)  (:,:) ] soil temperature (Kelvin)
@@ -1306,10 +1309,11 @@ contains
        do fc = 1,num_lakec
           c = filter_lakec(fc)
 
-          qflx_snomelt(c)   = 0._r8
-          eflx_snomelt(c)   = 0._r8
-          lhabs(c)          = 0._r8
-          qflx_snow_melt(c) = 0._r8
+          qflx_snomelt(c)      = 0._r8
+          qflx_snomelt_lyr(c,:)= 0._r8
+          eflx_snomelt(c)      = 0._r8
+          lhabs(c)             = 0._r8
+          qflx_snow_melt(c)    = 0._r8
        end do
 
        do j = -nlevsno+1,0
@@ -1399,6 +1403,7 @@ contains
                    if (j <= 0) then !snow
                       imelt(c,j) = 1
                       qflx_snomelt(c) = qflx_snomelt(c) + melt/dtime
+                      qflx_snomelt_lyr(c,j) = melt/dtime
                    end if
                 else if (t_soisno(c,j) < tfrz .and. h2osoi_liq(c,j) > 0._r8) then !freezing
                    dophasechangeflag = .true.

@@ -9,10 +9,10 @@ module CNNitrogenStateType
   use elm_varpar             , only : nlevdecomp_full, nlevdecomp, crop_prog
   use elm_varcon             , only : spval, ispval, dzsoi_decomp, zisoi
   use landunit_varcon        , only : istcrop, istsoil 
-  use elm_varctl             , only : use_vertsoilc, use_century_decomp
+  use elm_varctl             , only : use_vertsoilc, use_century_decomp, use_fan
   use elm_varctl             , only : iulog, override_bgc_restart_mismatch_dump, spinup_state
   use decompMod              , only : bounds_type
-  use pftvarcon              , only : npcropmin, nstor
+  use pftvarcon              , only : iscft, nstor
   use CNDecompCascadeConType , only : decomp_cascade_con
   use VegetationPropertiesType         , only : veg_vp
   use abortutils             , only : endrun
@@ -117,7 +117,6 @@ module CNNitrogenStateType
      real(r8), pointer :: smin_nh4sorb_vr_col          (:,:)   ! col (gN/m3) vertically-resolved soil mineral NH4 absorbed
      real(r8), pointer :: smin_nh4sorb_col             (:)     ! col (gN/m2) soil mineral NH4 pool absorbed
 
-     real(r8), pointer :: plant_nbuffer_col            (:)     ! col plant nitrogen buffer, (gN/m2), used to exchange info with betr 
 
      real(r8), pointer :: totpftn_beg_col              (:)
      real(r8), pointer :: cwdn_beg_col                 (:)
@@ -189,6 +188,34 @@ module CNNitrogenStateType
     
      real(r8), pointer :: plmr_ptlai_z                              (:,:)
      real(r8), pointer :: plmr_pleafn_z                             (:,:)
+
+     !FAN
+     real(r8), pointer :: tan_g1_col(:)                        ! col (gN/m2) total ammoniacal N in FAN pool G1
+     real(r8), pointer :: tan_g2_col(:)                        ! col (gN/m2) total ammoniacal N in FAN pool G2 
+     real(r8), pointer :: tan_g3_col(:)                        ! col (gN/m2) total ammoniacal N in FAN pool G2      
+     real(r8), pointer :: tan_s0_col(:)                        ! col (gN/m2) total ammoniacal N in FAN pool S0
+     real(r8), pointer :: tan_s1_col(:)                        ! col (gN/m2) total ammoniacal N in FAN pool S1
+     real(r8), pointer :: tan_s2_col(:)                        ! col (gN/m2) total ammoniacal N in FAN pool S2 
+     real(r8), pointer :: tan_s3_col(:)                        ! col (gN/m2) total ammoniacal N in FAN pool S3 
+     real(r8), pointer :: tan_f1_col(:)                        ! col (gN/m2) total ammoniacal N in FAN pool F1
+     real(r8), pointer :: tan_f2_col(:)                        ! col (gN/m2) total ammoniacal N in FAN pool F2
+     real(r8), pointer :: tan_f3_col(:)                        ! col (gN/m2) total ammoniacal N in FAN pool F3
+     real(r8), pointer :: tan_f4_col(:)                        ! col (gN/m2) total ammoniacal N in FAN pool F4
+     
+     real(r8), pointer :: fert_u1_col(:)                       ! col (gN/m2) total urea N in FAN pool U1
+     real(r8), pointer :: fert_u2_col(:)                       ! col (gN/m2) total urea N in FAN pool U2
+     
+     real(r8), pointer :: manure_u_grz_col(:)                  ! col (gN/m2) unavailable organic N, grazing
+     real(r8), pointer :: manure_a_grz_col(:)                  ! col (gN/m2) available organic N, grazing
+     real(r8), pointer :: manure_r_grz_col(:)                  ! col (gN/m2) resistant organic N, grazing
+
+     real(r8), pointer :: manure_u_app_col(:)                  ! col (gN/m2) unavailable organic N, application
+     real(r8), pointer :: manure_a_app_col(:)                  ! col (gN/m2) available organic N, application
+     real(r8), pointer :: manure_r_app_col(:)                  ! col (gN/m2) resistant organic N, application
+
+     real(r8), pointer :: manure_n_stored_col(:)               ! col (gN/m2) manure N in storage
+     real(r8), pointer :: manure_tan_stored_col(:)             ! col (gN/m2) manure TAN in storage
+     real(r8), pointer :: fan_grz_fract_col(:)                 ! col unitless fraction of animals grazing
 
    contains
 
@@ -386,7 +413,34 @@ contains
     allocate(this%smin_nh4sorb_vr_col      (begc:endc,1:nlevdecomp_full)) ; this%smin_nh4sorb_vr_col      (:,:) = nan
     allocate(this%smin_nh4sorb_col         (begc:endc))                   ; this%smin_nh4sorb_col         (:)   = nan
 
-    allocate(this%plant_nbuffer_col(begc:endc));this%plant_nbuffer_col(:) = nan
+
+    if (use_fan) then
+       allocate(this%tan_g1_col(begc:endc))  ; this%tan_g1_col(:) = nan
+       allocate(this%tan_g2_col(begc:endc))  ; this%tan_g2_col(:) = nan
+       allocate(this%tan_g3_col(begc:endc))  ; this%tan_g3_col(:) = nan
+       allocate(this%tan_s0_col(begc:endc))  ; this%tan_s0_col(:) = nan
+       allocate(this%tan_s1_col(begc:endc))  ; this%tan_s1_col(:) = nan
+       allocate(this%tan_s2_col(begc:endc))  ; this%tan_s2_col(:) = nan
+       allocate(this%tan_s3_col(begc:endc))  ; this%tan_s3_col(:) = nan
+       allocate(this%tan_f1_col(begc:endc))  ; this%tan_f1_col(:) = nan
+       allocate(this%tan_f2_col(begc:endc))  ; this%tan_f2_col(:) = nan
+       allocate(this%tan_f3_col(begc:endc))  ; this%tan_f3_col(:) = nan
+       allocate(this%tan_f4_col(begc:endc))  ; this%tan_f4_col(:) = nan
+       allocate(this%fert_u1_col(begc:endc)) ; this%fert_u1_col(:) = nan
+       allocate(this%fert_u2_col(begc:endc)) ; this%fert_u2_col(:) = nan
+
+       allocate(this%manure_u_grz_col(begc:endc)) ; this%manure_u_grz_col(:) = nan
+       allocate(this%manure_a_grz_col(begc:endc)) ; this%manure_a_grz_col(:) = nan
+       allocate(this%manure_r_grz_col(begc:endc)) ; this%manure_r_grz_col(:) = nan
+
+       allocate(this%manure_u_app_col(begc:endc)) ; this%manure_u_app_col(:) = nan
+       allocate(this%manure_a_app_col(begc:endc)) ; this%manure_a_app_col(:) = nan
+       allocate(this%manure_r_app_col(begc:endc)) ; this%manure_r_app_col(:) = nan
+
+       allocate(this%manure_n_stored_col(begc:endc))   ; this%manure_n_stored_col(:) = nan
+       allocate(this%manure_tan_stored_col(begc:endc)) ; this%manure_tan_stored_col(:) = nan
+       allocate(this%fan_grz_fract_col(begc:endc))     ; this%fan_grz_fract_col(:) = nan
+    end if
 
   end subroutine InitAllocate
 
@@ -446,7 +500,7 @@ contains
     ! !USES:
     use elm_varpar     , only : crop_prog
     use decompMod      , only : bounds_type
-    use pftvarcon      , only : noveg, npcropmin
+    use pftvarcon      , only : noveg, iscft
     !
     ! !ARGUMENTS:
     class(nitrogenstate_type)      :: this
@@ -506,7 +560,7 @@ contains
     do p = bounds%begp,bounds%endp
 
        l = veg_pp%landunit(p)
-       if (lun_pp%itype(l) == istsoil .or. lun_pp%itype(l) == istcrop) then       
+       if (veg_pp%is_on_soil_col(p) .or. veg_pp%is_on_crop_col(p)) then       
           if (veg_pp%itype(p) == noveg) then
              this%leafn_patch(p) = 0._r8
              this%leafn_storage_patch(p) = 0._r8
@@ -532,7 +586,7 @@ contains
           ! tree types need to be initialized with some stem mass so that
           ! roughness length is not zero in canopy flux calculation
 
-          if (veg_vp%woody(veg_pp%itype(p)) == 1._r8) then
+          if (veg_vp%woody(veg_pp%itype(p)) >= 1.0_r8) then
              this%deadstemn_patch(p) = deadstemc_patch(p) / veg_vp%deadwdcn(veg_pp%itype(p))
           else
              this%deadstemn_patch(p) = 0._r8
@@ -579,7 +633,7 @@ contains
 
     do c = bounds%begc, bounds%endc
        l = col_pp%landunit(c)
-       if (lun_pp%itype(l) == istsoil .or. lun_pp%itype(l) == istcrop) then
+       if (col_pp%is_soil(c) .or. col_pp%is_crop(c)) then
 
           ! column nitrogen state variables
           this%ntrunc_col(c) = 0._r8
@@ -633,6 +687,36 @@ contains
           this%prod100n_col(c)      = 0._r8
           this%totprodn_col(c)      = 0._r8
        end if
+
+       if ( use_fan ) then
+          this%tan_g1_col(c) = 0.0_r8
+          this%tan_g2_col(c) = 0.0_r8
+          this%tan_g3_col(c) = 0.0_r8
+          this%tan_s0_col(c) = 0.0_r8
+          this%tan_s1_col(c) = 0.0_r8
+          this%tan_s2_col(c) = 0.0_r8
+          this%tan_s3_col(c) = 0.0_r8
+          this%tan_f1_col(c) = 0.0_r8
+          this%tan_f2_col(c) = 0.0_r8
+          this%tan_f3_col(c) = 0.0_r8
+          this%tan_f4_col(c) = 0.0_r8
+          this%fert_u2_col(c) = 0.0_r8
+          this%fert_u1_col(c) = 0.0_r8
+          
+          this%manure_u_grz_col(c) = 0.0_r8
+          this%manure_a_grz_col(c) = 0.0_r8
+          this%manure_r_grz_col(c) = 0.0_r8
+          
+          this%manure_u_app_col(c) = 0.0_r8
+          this%manure_a_app_col(c) = 0.0_r8
+          this%manure_r_app_col(c) = 0.0_r8
+          
+          this%manure_tan_stored_col(c) = 0.0_r8
+          this%fan_grz_fract_col(c) = 0.0_r8
+          this%manure_n_stored_col(c) = 0.0_r8
+          
+       end if
+
     end do
 
     ! now loop through special filters and explicitly set the variables that
@@ -669,7 +753,7 @@ contains
     !
     ! !USES:
     use shr_infnan_mod      , only : isnan => shr_infnan_isnan, nan => shr_infnan_nan, assignment(=)
-    use clm_time_manager    , only : is_restart, get_nstep
+    use elm_time_manager    , only : is_restart, get_nstep
     use elm_varctl          , only : spinup_mortality_factor
     use CNStateType         , only : cnstate_type
     use restUtilMod
@@ -921,7 +1005,7 @@ contains
            this%npool_patch(p)              + &
            this%retransn_patch(p)
 
-      if ( crop_prog .and. veg_pp%itype(p) >= npcropmin )then
+      if ( crop_prog .and. iscft(veg_pp%itype(p)))then
          this%dispvegn_patch(p) = &
               this%dispvegn_patch(p) + &
               this%grainn_patch(p)

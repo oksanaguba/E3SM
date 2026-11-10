@@ -165,7 +165,7 @@ subroutine dcmip2016_test1(elem,hybrid,hvcoord,nets,nete)
 
 end subroutine
 
-subroutine dcmip2016_test1_pg(elem,hybrid,hvcoord,nets,nete,nphys)
+subroutine dcmip2016_pg_init(elem,hybrid,hvcoord,nets,nete,nphys)
   use gllfvremap_mod, only: gfr_init
 
   type(element_t),    intent(inout), target :: elem(:)                  ! element array
@@ -185,6 +185,18 @@ subroutine dcmip2016_test1_pg(elem,hybrid,hvcoord,nets,nete,nphys)
           pg_data%q(ncol,nlev,qsize,nelemd))
   end if
   !$omp barrier
+end subroutine dcmip2016_pg_init
+
+subroutine dcmip2016_test1_pg(elem,hybrid,hvcoord,nets,nete,nphys)
+  use gllfvremap_mod, only: gfr_init
+
+  type(element_t),    intent(inout), target :: elem(:)                  ! element array
+  type(hybrid_t),     intent(in)            :: hybrid                   ! hybrid parallel structure
+  type(hvcoord_t),    intent(inout)         :: hvcoord                  ! hybrid vertical coordinates
+  integer,            intent(in)            :: nets,nete                ! start, end element index
+  integer,            intent(in)            :: nphys                    ! pgN, N parameter, for physgrid
+
+  call dcmip2016_pg_init(elem,hybrid,hvcoord,nets,nete,nphys)
   call dcmip2016_test1(elem,hybrid,hvcoord,nets,nete)
   sample_period = 3600*24
 end subroutine dcmip2016_test1_pg
@@ -199,8 +211,8 @@ subroutine dcmip2016_test2(elem,hybrid,hvcoord,nets,nete)
   type(hvcoord_t),    intent(inout)         :: hvcoord                  ! hybrid vertical coordinates
   integer,            intent(in)            :: nets,nete                ! start, end element index
 
-  integer :: i,j,k,ie , ierr                                                  ! loop indices
-  real(rl):: lon,lat,ntop                                               ! pointwise coordiantes
+  integer :: i,j,k,ie ! loop indices
+  real(rl):: lon,lat! pointwise coordiantes
   real(rl), dimension(np,np,nlev):: p,z,u,v,w,T,rho,dp                     ! pointwise field values
   real(rl), dimension(np,np):: ps,phis
   real(rl), dimension(np,np,nlevp):: w_i,z_i,p_i
@@ -280,7 +292,7 @@ subroutine dcmip2016_test3(elem,hybrid,hvcoord,nets,nete)
   real(rl), parameter :: ztop3  = 20000_rl                              ! top of model at 20km
 
   real(rl), dimension(np,np,nlev,3) :: q
-  real(rl), dimension(np,np,nlev) :: p,dp,z,u,v,w,T,thetav,rho,rhom
+  real(rl), dimension(np,np,nlev) :: p,dp,z,u,v,w,T,thetav,rho
   real(rl), dimension(np,np,nlevp) :: p_i,z_i,w_i
   real(rl), dimension(np,np) :: phis, ps
 
@@ -512,7 +524,7 @@ subroutine dcmip2016_test1_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl)
   integer :: i,j,k,ie                                                     ! loop indices
   real(rl), dimension(np,np,nlev) :: u,v,w,T,exner_kess,theta_kess,p,dp,rho,z,qv,qc,qr
   real(rl), dimension(np,np,nlev) :: u0,v0,T0,qv0,qc0,qr0,cl,cl2,ddt_cl,ddt_cl2
-  real(rl), dimension(np,np,nlev) :: rho_dry,rho_new,Rstar,p_pk
+  real(rl), dimension(np,np,nlev) :: rho_dry
   real(rl), dimension(nlev)       :: u_c,v_c,p_c,qv_c,qc_c,qr_c,rho_c,z_c, th_c
   real(rl), dimension(np,np)      :: delta_ps(np,np)
   real(rl) :: max_w, max_precl, max_preci, min_ps
@@ -590,7 +602,11 @@ subroutine dcmip2016_test1_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl)
       th_c = theta_kess(i,j,nlev:1:-1)
 
       ! get forced versions of u,v,p,qv,qc,qr. rho is constant
-      lat=0.0
+      if (case_planar_bubble) then
+         lat = 0
+      else
+         lat = elem(ie)%spherep(i,j)%lat
+      end if
       call DCMIP2016_PHYSICS(test, u_c, v_c, p_c, th_c, qv_c, qc_c, qr_c, rho_c, dt, z_c, zi_c, lat, nlev, &
                              precl(i,j,ie), pbl_type, prec_type)
 
@@ -960,7 +976,6 @@ subroutine dcmip2016_test1_pg_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl
   use element_ops, only: get_field
   use gllfvremap_mod
   use perf_mod, only: t_startf, t_stopf
-  use control_mod, only: ftype
 
   ! to DSS precl
   use edge_mod, only: edgevpack_nlyr, edgevunpack_nlyr, edge_g
@@ -975,7 +990,7 @@ subroutine dcmip2016_test1_pg_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl
   type(TimeLevel_t),  intent(in)            :: tl                       ! time level structure
 
   integer, parameter :: iqv = 1
-  real(rl), parameter :: one = 1.0_rl
+  integer, parameter :: test = 1
 
   integer :: i,j,k,ie,qi
   real(rl), dimension(np,np,nlev) :: u,v,w,T,p,dp,rho,rho_dry,z,exner_kess,theta_kess
@@ -992,15 +1007,21 @@ subroutine dcmip2016_test1_pg_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl
   real(rl), dimension(np,np,nlevp) :: phi_i, zi_fv
   real(rl), dimension(np,np) :: zs_fv, ps_fv, delta_ps
   real(rl) :: precl_fv(np,np,1), rcd(6)
-  real(rl), allocatable :: qmin(:,:,:), qmax(:,:,:)
-
   integer :: pbl_type, prec_type
-  integer, parameter :: test = 1
+  logical :: toy_chemistry_on
 
   nf = pg_data%nphys
   ncol = nf*nf
 
-  prec_type = dcmip16_prec_type
+  if (case_planar_bubble) then
+     toy_chemistry_on = .false.
+     prec_type = bubble_prec_type
+     if (qsize .ne. 3) call abortmp('ERROR: moist bubble test requires qsize=3')
+  else
+     toy_chemistry_on = .true.
+     prec_type = dcmip16_prec_type
+  endif
+
   pbl_type  = dcmip16_pbl_type
 
   max_w     = -huge(rl)
@@ -1077,9 +1098,12 @@ subroutine dcmip2016_test1_pg_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl
            zi_c = zi_fv(i,j,nlevp:1:-1)
            th_c = theta_kess_fv(i,j,nlev:1:-1)
 
-           call gfr_f_get_latlon(ie, i, j, lat, lon)
-
            ! Get forced versions of u,v,p,qv,qc,qr. rho is constant.
+           if (case_planar_bubble) then
+              lat = 0
+           else
+              call gfr_f_get_latlon(ie, i, j, lat, lon)
+           end if
            call DCMIP2016_PHYSICS(test, u_c, v_c, p_c, th_c, qv_c, qc_c, qr_c, rho_c, dt, &
                 z_c, zi_c, lat, nlev, precl_fv(i,j,1), pbl_type, prec_type)
 
@@ -1090,18 +1114,25 @@ subroutine dcmip2016_test1_pg_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl
            Q_fv(i,j,:,3) = qr_c(nlev:1:-1)
            theta_kess_fv(i,j,:) = th_c(nlev:1:-1)
 
-           do k=1,nlev
-              call tendency_terminator(lat*rad2dg, lon*rad2dg, Q_fv(i,j,k,4), Q_fv(i,j,k,5), &
-                   dt, ddt_cl(i,j,k), ddt_cl2(i,j,k))
-           enddo
+           if (toy_chemistry_on) then
+              call gfr_f_get_latlon(ie, i, j, lat, lon)
+              qi = 4
+              do k=1,nlev
+                 call tendency_terminator(lat*rad2dg, lon*rad2dg, Q_fv(i,j,k,qi), Q_fv(i,j,k,qi+1), &
+                      dt, ddt_cl(i,j,k), ddt_cl2(i,j,k))
+              end do
+           end if
         enddo
      enddo
 
      do i = 1,3
         Q_fv(:nf,:nf,:,i) = (rho_dry_fv(:nf,:nf,:)/rho_fv(:nf,:nf,:))*Q_fv(:nf,:nf,:,i)
      end do
-     Q_fv(:nf,:nf,:,4) = Q_fv(:nf,:nf,:,4) + dt*ddt_cl(:nf,:nf,:)
-     Q_fv(:nf,:nf,:,5) = Q_fv(:nf,:nf,:,5) + dt*ddt_cl2(:nf,:nf,:)
+     if (toy_chemistry_on) then
+        qi = 4
+        Q_fv(:nf,:nf,:,qi  ) = Q_fv(:nf,:nf,:,qi  ) + dt*ddt_cl (:nf,:nf,:)
+        Q_fv(:nf,:nf,:,qi+1) = Q_fv(:nf,:nf,:,qi+1) + dt*ddt_cl2(:nf,:nf,:)
+     end if
 
      ! Convert from theta to T w.r.t. new model state.
      ! Assume hydrostatic pressure pi changed by qv forcing.
@@ -1145,16 +1176,19 @@ subroutine dcmip2016_test1_pg_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl
   call gfr_f2g_dss(hybrid, elem, nets, nete)
   call gfr_pg1_reconstruct(hybrid, nt, hvcoord, elem, nets, nete)
 
-  call toy_init(rcd)
-  do ie = nets,nete
-     do i = 1,2
-        wrk4(:,:,:,i) = elem(ie)%state%Q(:,:,:,i+3)
+  if (toy_chemistry_on) then
+     call toy_init(rcd)
+     do ie = nets,nete
+        do i = 1,2
+           wrk4(:,:,:,i) = elem(ie)%state%Q(:,:,:,i+3)
+        end do
+        call toy_rcd(wrk4, rcd)
      end do
-     call toy_rcd(wrk4, rcd)
-  end do
-  call toy_print(hybrid, tl%nstep, rcd)
+     call toy_print(hybrid, tl%nstep, rcd)
+  end if
 
-  if (ftype == 0) then
+  ! In standalone Homme, for all ftype values, FQ is tendency.
+  if (.true.) then !(ftype == 0) then
      ! Convert FQ from state to Qdp tendency.
      do ie = nets,nete
         do k = 1,nlev
@@ -1198,7 +1232,7 @@ subroutine dcmip2016_test2_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl, t
   integer :: i,j,k,ie                                                     ! loop indices
   real(rl), dimension(np,np,nlev) :: u,v,w,T,exner_kess,theta_kess,p,dp,rho,z,qv,qc,qr
   real(rl), dimension(np,np,nlev) :: u0,v0,T0,qv0,qc0,qr0
-  real(rl), dimension(np,np,nlev) :: rho_dry,rho_new,Rstar,p_pk
+  real(rl), dimension(np,np,nlev) :: rho_dry
   real(rl), dimension(np,np)      :: delta_ps(np,np)
   real(rl), dimension(nlev)       :: u_c,v_c,p_c,qv_c,qc_c,qr_c,rho_c,z_c, th_c
   real(rl) :: max_w, max_precl, max_preci, min_ps
@@ -1265,7 +1299,7 @@ subroutine dcmip2016_test2_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl, t
       zi_c = zi (i,j,nlevp:1:-1)
       th_c = theta_kess(i,j,nlev:1:-1)
 
-      lat=0.0
+      lat=0.0 ! unused in test 2
       ! get forced versions of u,v,p,qv,qc,qr. rho is constant
       call DCMIP2016_PHYSICS(test, u_c, v_c, p_c, th_c, qv_c, qc_c, qr_c, rho_c, dt, z_c, zi_c, lat, nlev, &
                              precl(i,j,ie), pbl_type, prec_type)
@@ -1326,10 +1360,9 @@ subroutine dcmip2016_test3_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl)
   type(TimeLevel_t),  intent(in)            :: tl                       ! time level structure
 
   integer :: i,j,k,ie                                                     ! loop indices
-  real(rl):: lat
   real(rl), dimension(np,np,nlev) :: u,v,w,T,theta_kess,exner_kess,p,dp,rho,z,qv,qc,qr
   real(rl), dimension(np,np,nlev) :: T0,qv0,qc0,qr0
-  real(rl), dimension(np,np,nlev) :: rho_dry,rho_new,Rstar,p_pk
+  real(rl), dimension(np,np,nlev) :: rho_dry
   real(rl), dimension(np,np,nlev) :: theta_inv,qv_inv,qc_inv,qr_inv,rho_inv,exner_inv,z_inv ! inverted columns
   real(rl), dimension(np,np,nlevp):: zi
   real(rl), dimension(np,np)      :: ps,delta_ps(np,np)

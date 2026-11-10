@@ -59,12 +59,14 @@ module ocn_constants
       ocn_ref_salinity      ,&! ocean reference salinity (psu)
       atm_ref_pressure      ,&! standard sea level pressure (Pa)
       molecular_weight_C    ,&! molecular weight carbon
-      molecular_weight_O2     ! molecular weight oxygen
+      molecular_weight_O2   ,&! molecular weight oxygen
+      molecular_weight_Fe     ! molecular weight iron
 
    !  conversion factors
 
    real (kind=RKIND), public :: &
       T0_Kelvin        ,&! zero point for Celsius
+      pi               ,&! pi
       mpercm           ,&! meters per m
       cmperm           ,&! m per meter
       days_per_second  ,&! days per second
@@ -117,6 +119,7 @@ contains
        !-----------------------------------------------------------------------
 
        T0_Kelvin = 273.16_RKIND               ! zero point for Celsius
+       pi        = 3.14159265358979323846_RKIND ! pi
        rho_air   = 1.2_RKIND                  ! ambient air density (kg/m^3)
        rho_sw    = config_density0            ! density of salt water (kg/m^3)
        rho_fw    = 1.0e3_RKIND                ! avg. water density (kg/m^3)
@@ -126,7 +129,7 @@ contains
        sound     = 1.5e2_RKIND                ! speed of sound (m/s)
        vonkar    = 0.4_RKIND                  ! von Karman constant
        emissivity         = 1.0_RKIND         !
-       stefan_boltzmann   = 567.0e-10_RKIND   !  W/m^2/K^4
+       stefan_boltzmann   = 5.670374419e-8_RKIND   !  W/m^2/K^4
        latent_heat_vapor_mks  = 2.5e6_RKIND   ! lat heat of vaporization (J/kg)
        latent_heat_fusion = 3.34e6_RKIND      ! lat heat of fusion (erg/kg)
        latent_heat_fusion_mks = 3.337e5_RKIND ! lat heat of fusion (J/kg)
@@ -135,6 +138,7 @@ contains
        atm_ref_pressure   = 101325.0_RKIND    ! (Pa)
        molecular_weight_C = 12.0107_RKIND     ! molecular weight carbon
        molecular_weight_O2 = 15.9994_RKIND    ! molecular weight oxygen
+       molecular_weight_Fe = 55.845_RKIND     ! molecular weight iron
 
 
        !-----------------------------------------------------------------------
@@ -159,6 +163,7 @@ contains
 
 #ifdef MPAS_ESM_SHR_CONST
        T0_Kelvin              = SHR_CONST_TKFRZ         ! zero point for Celsius
+       pi                     = SHR_CONST_PI            ! zero point for Celsius
        cp_sw                  = SHR_CONST_CPSW          ! erg/g/K
        cp_air                 = SHR_CONST_CPDAIR        ! J/kg/K
        rho_air                = SHR_CONST_RHODAIR       ! kg/m^3
@@ -173,6 +178,7 @@ contains
        sea_ice_salinity       = SHR_CONST_ICE_REF_SAL   ! psu
        molecular_weight_C     = SHR_CONST_MWC           ! molecular weight carbon
        molecular_weight_O2    = SHR_CONST_MWO           ! molecular weight oxygen
+       molecular_weight_Fe    = SHR_CONST_MWFE          ! molecular weight iron
 #endif
 
 !#ifdef ZERO_SEA_ICE_REF_SAL

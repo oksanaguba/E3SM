@@ -217,7 +217,7 @@ contains
   subroutine compute_higher_order_weights(bounds)
     !
     ! !DESCRIPTION:
-    ! Assuming veg_pp%wtcol, col_pp%wtlunit and lun_pp%wttopounit have already been computed, compute
+    ! Assuming veg_pp%wtcol, col_pp%wtlunit, lun_pp%wttopounit and top_pp%wtgcell have already been computed, compute
     ! the "higher-order" weights: 
     ! veg_pp%wtlunit, veg_pp%wttopounit, veg_pp%wtgcell,
     ! col_pp%wttopounit, col_pp%wtgcell, and
@@ -958,7 +958,7 @@ contains
        !topi = grc_pp%topi(g)
        !ti = t - topi + 1
        ptype = veg_pp%itype(p)
-       if (lun_pp%itype(l) == istsoil) then
+       if (veg_pp%is_on_soil_col(p)) then
           ptype_1indexing = ptype + (1 - natpft_lb)
           subgrid_weights_diagnostics%pct_nat_pft(t, ptype_1indexing) = veg_pp%wtlunit(p) * 100._r8
        else if (lun_pp%itype(l) == istcrop) then

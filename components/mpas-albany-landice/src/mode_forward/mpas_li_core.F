@@ -15,6 +15,8 @@ module li_core
    use li_velocity
    use li_setup
    use li_mask
+   use li_mesh
+   use li_config
 
    implicit none
    private
@@ -70,6 +72,9 @@ module li_core
       use li_setup
       use li_constants
       use li_subglacial_hydro
+      use li_bedtopo
+      use li_advection
+      use li_time_average_coupled
 !!!      use mpas_tracer_advection
 !!!      use li_global_diagnostics
 
@@ -106,7 +111,7 @@ module li_core
       logical, pointer :: config_do_restart
       real (kind=RKIND), pointer :: deltat  ! variable in each block
       real (kind=RKIND) :: dtSeconds ! local variable
-      type (MPAS_Pool_type), pointer :: meshPool
+      type (MPAS_Pool_type), pointer :: meshPool, geometryPool, velocityPool, timeAveragingPool
       type (MPAS_TimeInterval_type) :: timeStepInterval
       character (len=StrKIND), pointer :: xtime, simulationStartTime
       real (kind=RKIND), pointer :: daysSinceStart
@@ -120,6 +125,7 @@ module li_core
       err_tmp = 0
       globalErr = 0
 
+      call li_config_init(domain % configs)
       call mpas_pool_get_config(domain % configs, 'config_do_restart', config_do_restart)
 
       !
@@ -206,6 +212,11 @@ module li_core
       call mpas_log_write("Finished processing recurring input streams at initial time.")
 
       ! ===
+      ! Initialize land ice mesh public paramters
+      call li_meshCreate(domain)
+      ! ===
+
+      ! ===
       ! Initialize some time stuff on each block
       ! ===
       ! Set startTimeStamp based on the start time of the simulation clock
@@ -254,6 +265,11 @@ module li_core
       end do
 
       ! ===
+      ! This is where li_updateMeshFIelds would be called if we wanted to be consistent with mpas-ocean.
+      ! We don't currently think this needs to be called, so leaving it out for now.
+      ! ===
+
+      ! ===
       ! === Initialize modules ===
       ! ===
 
@@ -278,6 +294,21 @@ module li_core
          block => block % next
       end do
 
+      ! Update mask and geometry
+      block => domain % blocklist
+      do while (associated(block))
+         call mpas_pool_get_subpool(block % structs, 'mesh', meshPool)
+         call mpas_pool_get_subpool(block % structs, 'velocity', velocityPool)
+         call mpas_pool_get_subpool(block % structs, 'geometry', geometryPool)
+         call mpas_pool_get_subpool(block % structs, 'timeAveraging', timeAveragingPool)
+
+         call li_calculate_mask(meshPool, velocityPool, geometryPool, err_tmp)
+         err = ior(err, err_tmp)
+         call li_update_geometry(geometryPool)
+
+         block => block % next
+      end do
+
       ! initialize thermal solver
       ! Note: This subroutine includes a loop over blocks
       call li_thermal_init(domain, err_tmp)
@@ -287,9 +318,16 @@ module li_core
       call li_SGH_init(domain, err_tmp)
       err = ior(err, err_tmp)
 
+      ! Initialize bed topo module
+      call li_bedtopo_init(domain, err_tmp)
+      err = ior(err, err_tmp)
+
       ! initialize analysis driver
       call li_analysis_init(domain, err_tmp)
       err = ior(err, err_tmp)
+
+      ! initialize time averaging of fields sent to coupler
+      call li_time_average_coupled_init(meshPool,timeAveragingPool)      
 
       ! halo update for reconstruction coefficients
       ! Note: Results on multiple processors may be incorrect without this update
@@ -305,10 +343,8 @@ module li_core
       ! ===
       call li_velocity_external_write_albany_mesh(domain)
 
-      ! check for errors and exit
-
-      call mpas_dmpar_max_int(domain % dminfo, err, globalErr)  ! Find out if any blocks got an error
-      if (globalErr > 0) then
+      call mpas_dmpar_max_int(domain % dminfo, abs(err), globalErr)  ! Find out if any blocks got an error
+      if (globalErr /= 0) then
           call mpas_log_write("An error has occurred in li_core_init. Aborting...", MPAS_LOG_CRIT)
       endif
 
@@ -426,7 +462,11 @@ module li_core
             block => block % next
          end do
 
-         call mpas_log_write('Starting timestep number $i', intArgs=(/timestepNumber/), flushNow=.true.)
+         call mpas_log_write('')
+         call mpas_log_write('=============================')
+         call mpas_log_write('Starting timestep number $i', intArgs=(/timestepNumber/))
+         call mpas_log_write('=============================')
+         call mpas_log_write('', flushNow=.true.)
 
          ! ===
          ! === Perform Timestep
@@ -457,7 +497,7 @@ module li_core
          ! will allow that.
          ! Finally, set whence to latest_before so we have piecewise-constant forcing.
          ! Could add, e.g., linear interpolation later.
-         call mpas_stream_mgr_read(domain % streamManager, whence=MPAS_STREAM_LATEST_BEFORE, ierr=err_tmp)
+         call mpas_stream_mgr_read(domain % streamManager, whence=MPAS_STREAM_LATEST_BEFORE, saveActualWhen = .true., ierr=err_tmp)
          err = ior(err, err_tmp)
          call mpas_stream_mgr_reset_alarms(domain % streamManager, direction=MPAS_STREAM_INPUT, ierr=err_tmp)
          err = ior(err, err_tmp)
@@ -535,8 +575,8 @@ module li_core
          err = ior(err, err_tmp)
          call mpas_timer_stop("write streams")
 
-         ! === (end of output section) ===
 
+         ! === (end of output section) ===
 
          ! Move time level 1 fields (current values) into time level 2 (old values) for next time step
          ! (for those fields with multiple time levels)
@@ -640,6 +680,9 @@ module li_core
 
       err = ior(err, err_tmp)
 
+      call li_meshDestroy(err_tmp)
+      err = ior(err, err_tmp)
+
       ! === error check and exit
       call mpas_dmpar_max_int(domain % dminfo, err, globalErr)  ! Find out if any blocks got an error
       if (globalErr > 0) then
@@ -678,6 +721,7 @@ module li_core
       use li_setup
       use li_statistics
       use li_advection
+      use li_calving, only: li_calve_ice
       use mpas_io_streams, only: MPAS_STREAM_LATEST_BEFORE
 
       implicit none
@@ -713,8 +757,11 @@ module li_core
       ! Variables needed for printing timestamps
       type (MPAS_Time_Type) :: currTime
       character(len=StrKIND) :: timeStamp
+      real(kind=RKIND), pointer :: deltat
+      real(kind=RKIND) :: deltatTemp
 
       integer :: err, err_tmp, globalErr
+      integer, pointer :: albanyVelocityError
       logical :: solveVelo
 
       integer, dimension(:), pointer :: vertexMask
@@ -769,8 +816,32 @@ module li_core
       end do
 
       ! Initial velocity solve
-      call li_velocity_solve(domain, solveVelo=solveVelo, err=err_tmp)
+      call mpas_pool_get_subpool(domain % blocklist % structs, 'velocity', velocityPool)
+      call mpas_pool_get_array(velocityPool, 'albanyVelocityError', albanyVelocityError)
+      albanyVelocityError = 0
+      call li_velocity_solve(domain, solveVelo=solveVelo, updateMask=.true., err=err_tmp)
       err = ior(err, err_tmp)
+
+      ! Initial calving solution
+      ! This is required for the calving CFL to work correctly
+      ! For rate-based calving laws, no calving actually occurs because dt=0.
+      ! For threshold calving laws (e.g. thickness-based) calving *will* occur
+      ! Note that during a timestep, calving occurs before velocity, but because
+      ! many calving laws require velocity-related fields, it needs to be called
+      ! after velocity here.
+      if (.not. config_do_restart) then
+         ! Temporarily set dt to 0 to avoid actually calving anything for rate-based calving laws
+         call mpas_pool_get_array(meshPool, 'deltat', deltat)
+         deltatTemp = deltat
+         deltat = 0.0_RKIND
+
+         call li_calve_ice(domain, err_tmp)
+         err = ior(err, err_tmp)
+
+         ! Restore appropriate value for dt
+         deltat = deltatTemp
+      endif
+
 
       ! Calculate diagnostic vars
       call li_calculate_diagnostic_vars(domain, err=err_tmp)
@@ -904,6 +975,7 @@ module li_core
       type (mpas_pool_type), pointer :: geometryPool
       integer, dimension(:), pointer :: vertexMask
       real (kind=RKIND), dimension(:), pointer :: thickness, thicknessOld
+      real (kind=RKIND), dimension(:,:), pointer :: layerThickness
       character (len=StrKIND), pointer :: config_velocity_solver
       logical, pointer :: config_do_velocity_reconstruction_for_external_dycore
       logical, pointer :: config_adaptive_timestep_include_DCFL
@@ -962,6 +1034,10 @@ module li_core
       err = ior(err, err_tmp)
       call mpas_timer_stop("initialize velocity")
 
+      ! SIA and hydro need these weights initialized for some options
+      call li_init_barycentric_weights_vertex(block, err_tmp)
+      err = ior(err, err_tmp)
+
       ! Higher-order velo solvers needs vertex-to-cell interp routine initialized
       if ( (trim(config_velocity_solver) == 'L1L2') .or.    &
            (trim(config_velocity_solver) == 'FO') .or.      &
@@ -977,6 +1053,11 @@ module li_core
       call mpas_pool_get_array(geometryPool, 'thickness', thickness)
       call mpas_pool_get_array(geometryPool, 'thicknessOld', thicknessOld)
       thicknessOld = thickness
+
+      ! Initialize layerThickness
+      call mpas_pool_get_array(geometryPool, 'layerThickness', layerThickness)
+      call li_calculate_layerThickness(meshPool, thickness, layerThickness)
+
 
       ! === error check
       if (err > 0) then
@@ -1042,6 +1123,7 @@ module li_core
       character (len=StrKIND), pointer :: config_dt  ! MPAS LI-specific config option
       character (len=StrKIND), pointer :: config_adaptive_timestep_force_interval  ! MPAS LI-specific config option
       character (len=StrKIND), pointer :: config_restart_timestamp_name
+      integer, pointer :: config_slm_coupling_interval
       character (len=StrKIND) :: restartTimeStamp !< string to be read from file
       integer, pointer :: config_year_digits
       integer :: err_tmp
@@ -1060,6 +1142,7 @@ module li_core
       call mpas_pool_get_config(configs, 'config_stop_time', config_stop_time)
       call mpas_pool_get_config(configs, 'config_restart_timestamp_name', config_restart_timestamp_name)
       call mpas_pool_get_config(configs, 'config_adaptive_timestep_force_interval', config_adaptive_timestep_force_interval)
+      call mpas_pool_get_config(configs, 'config_slm_coupling_interval', config_slm_coupling_interval)
 
 
       ! Set time to the user-specified start time OR use a restart time from file
@@ -1124,7 +1207,7 @@ module li_core
       ierr = ior(ierr, err_tmp)
 
       ! === error check
-      if (ierr > 0) then
+      if (ierr /= 0) then
           call mpas_log_write("An error has occurred in li_simulation_clock_init.", MPAS_LOG_ERR)
       endif
 

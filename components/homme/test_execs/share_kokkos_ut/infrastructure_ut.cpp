@@ -1,6 +1,7 @@
 #include <catch2/catch.hpp>
 
 #include <iostream>
+#include <limits>
 
 #include "ExecSpaceDefs.hpp"
 #include "Types.hpp"
@@ -9,6 +10,7 @@
 #include "utilities/TestUtils.hpp"
 #include "utilities/BfbUtils.hpp"
 #include "utilities/VectorUtils.hpp"
+#include "utilities/Hash.hpp"
 
 #include "HybridVCoord.hpp"
 
@@ -284,7 +286,7 @@ TEST_CASE("bfb_pow", "test taylor appx of pow function") {
   }
 
   SECTION ("real_pow") {
-    auto cmvdc = [](const ExecViewManaged<Scalar> xd)->ExecViewManaged<Scalar>::HostMirror {
+    auto cmvdc = [](const ExecViewManaged<Scalar> xd)->ExecViewManaged<Scalar>::host_mirror_type {
       auto xh = Kokkos::create_mirror_view(xd);
       Kokkos::deep_copy(xh,xd);
       return xh;
@@ -330,13 +332,13 @@ TEST_CASE("bfb_pow", "test taylor appx of pow function") {
 
   SECTION ("check_worst_pow") {
 
-    auto hd = [](ExecViewManaged<Scalar>::HostMirror h,ExecViewManaged<Scalar> d) {
+    auto hd = [](ExecViewManaged<Scalar>::host_mirror_type h,ExecViewManaged<Scalar> d) {
       Kokkos::deep_copy(d,h);
     };
-    auto dh = [](ExecViewManaged<Scalar> d,ExecViewManaged<Scalar>::HostMirror h) {
+    auto dh = [](ExecViewManaged<Scalar> d,ExecViewManaged<Scalar>::host_mirror_type h) {
       Kokkos::deep_copy(h,d);
     };
-    auto cmv = [](const ExecViewManaged<Scalar> xd)->ExecViewManaged<Scalar>::HostMirror {
+    auto cmv = [](const ExecViewManaged<Scalar> xd)->ExecViewManaged<Scalar>::host_mirror_type {
       auto xh = Kokkos::create_mirror_view(xd);
       return xh;
     };
@@ -516,4 +518,48 @@ TEST_CASE("hvcoord","hvcoord") {
       REQUIRE (dbi[k+1]==hybi_delta(ilev)[ivec]);
     }
   }
+}
+
+template <typename T>
+static void testeq () {
+  int cnt = 0;
+  for (const T perturb : {std::numeric_limits<T>::epsilon(), T(-1e-3),
+                          T(1e-2)*std::numeric_limits<T>::epsilon()}) {
+    const T x = M_PI;
+    const T y = M_PI*(1 + perturb);
+    HashType a = 0, b = 0;
+    hash(x, a);
+    hash(y, b);
+    REQUIRE((a == b) == (x == y));
+    if (a == b) ++cnt;
+  }
+  REQUIRE(cnt == 1);
+}
+
+TEST_CASE("hasher", "hasher") {
+  { // Repeated values should not be nullified.
+    HashType a = 0;
+    hash(M_PI, a);
+    hash(M_PI, a);
+    REQUIRE(a != 0);
+  }
+
+  { // Negated values should not be nullified.
+    HashType a = 0;
+    hash( M_PI, a);
+    hash(-M_PI, a);
+    REQUIRE(a != 0);
+  }
+
+  { // The hasher is sensitive to diffs that double accum is not.
+    double a = M_PI, b = 1e-20, c = a + b;
+    HashType x = 0, y = 0;
+    hash(a, x);
+    hash(a, y); hash(b, y);
+    REQUIRE(a == c); // double add doesn't see b
+    REQUIRE(x != y); // but the hasher does
+  }
+
+  testeq<float>();
+  testeq<double>(); 
 }

@@ -111,9 +111,9 @@ contains
          landIcePressure,     &! land ice pressure
          effectiveDensityCur, &! effective density at current time
          effectiveDensityNew   ! effective density at new time level
-                                                  
+
       integer, dimension(:), pointer :: &
-         landIceMask           ! mask for land ice presence on cell
+         landIceFloatingMask   ! mask for land ice presence on cell
 
       ! Scratch Arrays
       ! effectiveDensityScratch: effective seawater density in land
@@ -130,8 +130,8 @@ contains
       if ( (trim(config_land_ice_flux_mode) /= 'coupled') ) return
 
       ! Retrieve forcing and state variables
-      call mpas_pool_get_array(forcingPool, 'landIceMask', &
-                                             landIceMask)
+      call mpas_pool_get_array(forcingPool, 'landIceFloatingMask', &
+                                             landIceFloatingMask)
       call mpas_pool_get_array(forcingPool, 'landIcePressure', &
                                              landIcePressure)
       call mpas_pool_get_array(statePool, 'ssh', ssh, 2)
@@ -139,7 +139,7 @@ contains
                                            effectiveDensityCur, 1)
       call mpas_pool_get_array(statePool, 'effectiveDensityInLandIce', &
                                            effectiveDensityNew, 2)
-      !$acc enter data copyin(landIceMask, landIcePressure, ssh, &
+      !$acc enter data copyin(landIceFloatingMask, landIcePressure, ssh, &
       !$acc                   effectiveDensityCur, effectiveDensityNew)
 
       allocate(effectiveDensityScratch(nCellsAll))
@@ -151,13 +151,13 @@ contains
 #ifdef MPAS_OPENACC
       !$acc parallel loop &
       !$acc    present(effectiveDensityScratch, effectiveDensityCur, &
-      !$acc            landIcePressure, landIceMask, ssh)
+      !$acc            landIcePressure, landIceFloatingMask, ssh)
 #else
       !$omp parallel
       !$omp do schedule(runtime)
 #endif
       do iCell = 1, nCellsAll
-         if (landIceMask(iCell) == 1) then
+         if (landIceFloatingMask(iCell) == 1) then
             ! land ice is present to update the effective density
             effectiveDensityScratch(iCell) = -landIcePressure(iCell)/ &
                                               (ssh(iCell)*gravity)
@@ -179,15 +179,17 @@ contains
 #else
       !$omp do schedule(runtime) private(weightSum, i, cell2)
 #endif
-      do iCell = 1, nCellsAll
+      do iCell = 1, nCellsOwned
          weightSum = 1.0_RKIND
          effectiveDensityNew(iCell) = effectiveDensityScratch(iCell)
          do i = 1, nEdgesOnCell(iCell)
             cell2 = cellsOnCell(i,iCell)
-            effectiveDensityNew(iCell) = effectiveDensityNew(iCell) &
-                                       + cellMask(1,cell2)* &
-                                         effectiveDensityScratch(cell2)
-            weightSum = weightSum + cellMask(1,cell2)
+            if (cell2 <= nCellsAll) then
+               effectiveDensityNew(iCell) = effectiveDensityNew(iCell) &
+                                          + cellMask(1,cell2)* &
+                                            effectiveDensityScratch(cell2)
+               weightSum = weightSum + cellMask(1,cell2)
+            end if
          end do
          effectiveDensityNew(iCell) = effectiveDensityNew(iCell)/ &
                                       weightSum
@@ -198,7 +200,7 @@ contains
 #endif
 
       !$acc exit data delete(effectiveDensityScratch)
-      !$acc exit data delete(landIceMask, landIcePressure, ssh, &
+      !$acc exit data delete(landIceFloatingMask, landIcePressure, ssh, &
       !$acc                  effectiveDensityCur, effectiveDensityNew)
       deallocate(effectiveDensityScratch)
 

@@ -12,9 +12,9 @@
 
 namespace Homme {
 
-class FunctorsBuffersManager;
-class SimulationParams;
-class GllFvRemapImpl;
+struct FunctorsBuffersManager;
+struct SimulationParams;
+struct GllFvRemapImpl;
 
 class GllFvRemap {
 public:
@@ -40,7 +40,7 @@ public:
   typedef Phys2T::const_type CPhys2T;
   typedef Phys3T::const_type CPhys3T;
 
-  void init_data(const int nf, const int nf_max, bool theta_hydrostatic_mode,
+  void init_data(const int nf, const int nf_max, const bool theta_hydrostatic_mode,
                  const Real* fv_metdet, const Real* g2f_remapd, const Real* f2g_remapd,
                  const Real* D_f, const Real* Dinv_f);
 
@@ -52,6 +52,8 @@ public:
                           const Phys1T& ps, const Phys1T& phis,
                           // T,omega(ie,col,lev)
                           const Phys2T& T, const Phys2T& omega,
+                          const CPhys3T* strain3d_components_gll,
+                          const Phys3T* strain3d_components_fv,
                           // uv(ie, col, 0 or 1, lev)
                           const Phys3T& uv, 
                           // q(ie,col,idx,lev)
@@ -60,7 +62,8 @@ public:
                           const Phys2T* dp = nullptr);
   //   Remap physics state and tendencies to dynamics state and tendencies.
   void run_fv_phys_to_dyn(const int time_idx, const CPhys2T& T, const CPhys3T& uv,
-                          const CPhys3T& q);
+                          const CPhys3T& q, const CPhys2T* Km = nullptr,
+                          const CPhys2T* Kh = nullptr);
   //   DSS the remapped dynamics tendencies and state. Call this after
   //   run_fv_phys_to_dyn if the dynamics-physics coupler does not already
   //   provide it.
@@ -81,7 +84,7 @@ private:
 
 extern "C" void
 init_gllfvremap_c(int nelemd, int np, int nf, int nf_max,
-                  const bool theta_hydrostatic_mode,
+                  const int theta_hydrostatic_mode,
                   CF90Ptr fv_metdet, CF90Ptr g2f_remapd,
                   CF90Ptr f2g_remapd, CF90Ptr D_f, CF90Ptr Dinv_f);
 

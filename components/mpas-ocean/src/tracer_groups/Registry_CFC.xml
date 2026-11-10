@@ -49,7 +49,7 @@
 
 	<var_struct name="state" time_levs="2">
 		<var_struct name="tracers" time_levs="2">
-			<var_array name="CFCTracers" dimensions="nVertLevels nCells Time" type="real" packages="CFCTracersPKG"  default_value="0.0">
+			<var_array name="CFCTracers" dimensions="nVertLevels nCells Time" type="real" packages="CFCTracersPKG"  default_value="0.0" missing_value="FILLVAL" missing_value_mask="cellMask">
 				<!-- Add constituents of tracer group -->
 				<var name="CFC11" array_group="CFCGRP" units="mol m^{-3}"
 			description="CFC11"
@@ -63,7 +63,7 @@
 
 	<var_struct name="tend" time_levs="1">
 		<var_struct name="tracersTend" time_levs="1">
-			<var_array name="CFCTracersTend" type="real" dimensions="nVertLevels nCells Time" packages="CFCTracersPKG">
+			<var_array name="CFCTracersTend" type="real" dimensions="nVertLevels nCells Time" packages="CFCTracersPKG" missing_value="FILLVAL" missing_value_mask="cellMask">
 				<!-- Add constituents of tracer group -->
 				<var name="CFC11Tend" array_group="CFCGRP" units="mol m^{-3} s^{-1}"
 			description="CFC11 Tendency"
@@ -93,6 +93,15 @@
 				/>
 				<var name="CFC12SurfaceFluxRunoff" array_group="CFCSurfaceFluxRunoffGRP" units="mol m^{-3} m s^{-1}"
 					description="CFC12 Surface Flux Due to Runoff"
+				/>
+			</var_array>
+			<var_array name="CFCTracersSurfaceFluxSubglacialRunoff" type="real" dimensions="nCells Time" packages="CFCTracersPKG">
+				<!-- Add constituents of tracer group -->
+				<var name="CFCSurfaceFluxSubglacialRunoff" array_group="CFCSurfaceFluxSubglacialRunoffGRP" units="mol m^{-3} m s^{-1}"
+					description="CFC11 Surface Flux Due to Subglacial Runoff"
+				/>
+				<var name="CFC12SurfaceFluxSubglacialRunoff" array_group="CFCSurfaceFluxSubglacialRunoffGRP" units="mol m^{-3} m s^{-1}"
+					description="CFC12 Surface Flux Due to Subglacial Runoff"
 				/>
 			</var_array>
 			<var_array name="CFCTracersSurfaceFluxRemoved" type="real" dimensions="nCells Time" packages="CFCTracersPKG">

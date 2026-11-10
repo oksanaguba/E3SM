@@ -192,11 +192,11 @@ contains
          pkgTracerVerticalHumicsActive, &
          pkgTracerVerticalDONActive, &
          pkgTracerVerticalIronActive, &
-         pkgTracerZAerosolsActive, &
-         pkgTracerZSalinityActive
+         pkgTracerZAerosolsActive
 
     logical, pointer :: &
-         config_use_level_meltponds
+         config_use_level_meltponds, &
+         config_use_floe_size_distribution
 
     type (mpas_pool_type), pointer :: configPool
 
@@ -289,11 +289,10 @@ contains
                                                                pkgTracerVerticalIronActive)
     call MPAS_pool_get_package(domain % blocklist % packages, 'pkgTracerZAerosolsActive', &
                                                                pkgTracerZAerosolsActive)
-    call MPAS_pool_get_package(domain % blocklist % packages, 'pkgTracerZSalinityActive', &
-                                                               pkgTracerZSalinityActive)
 
     configPool => domain % blocklist % configs
     call MPAS_pool_get_config(configPool, "config_use_level_meltponds", config_use_level_meltponds)
+    call MPAS_pool_get_config(configPool, "config_use_floe_size_distribution", config_use_floe_size_distribution)
 
     if (pkgColumnTracerIceAgeActive) then
        call add_tracer_to_tracer_linked_list(tracersHead, 'iceAge',               'iceVolumeCategory')
@@ -301,6 +300,10 @@ contains
 
     if (pkgColumnTracerFirstYearIceActive) then
        call add_tracer_to_tracer_linked_list(tracersHead, 'firstYearIceArea',     'iceAreaCategory')
+    endif
+
+    if (config_use_floe_size_distribution) then
+       call add_tracer_to_tracer_linked_list(tracersHead, 'floeSizeDist',        'iceAreaCategory')
     endif
 
     if (pkgColumnTracerLevelIceActive) then
@@ -311,7 +314,7 @@ contains
     if (pkgColumnTracerPondsActive) then
        if (config_use_level_meltponds) then
           call add_tracer_to_tracer_linked_list(tracersHead, 'pondArea',             'levelIceArea')
-       else
+       else ! topo and sea-level ponds
           call add_tracer_to_tracer_linked_list(tracersHead, 'pondArea',             'iceAreaCategory')
        endif
        call add_tracer_to_tracer_linked_list(tracersHead, 'pondDepth',            'pondArea')
@@ -469,10 +472,6 @@ contains
        call add_tracer_to_tracer_linked_list(tracersHead, 'verticalAerosolsIce','brineFraction')
        call add_tracer_to_tracer_linked_list(tracersHead, 'verticalAerosolsSnow','snowVolumeCategory')
     endif
-
-    ! vertical salinity
-    if (pkgTracerZSalinityActive) &
-       call add_tracer_to_tracer_linked_list(tracersHead, 'verticalSalinity',            'brineFraction')
 
     if (verboseTracers) then
        thisTracer => tracersHead

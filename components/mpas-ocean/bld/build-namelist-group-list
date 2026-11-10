@@ -3,6 +3,7 @@ my @groups = qw(run_modes
                 io
                 decomposition
                 time_integration
+                lateral_walls
                 hmix
                 hmix_del2
                 hmix_del4
@@ -10,20 +11,24 @@ my @groups = qw(run_modes
                 redi_isopycnal_mixing
                 submesoscale_eddy_parameterization
                 gm_eddy_parameterization
+                eddy_kinetic_energy_correction
                 eddy_parameterization
-                rayleigh_damping
                 cvmix
                 wave_coupling
                 gotm
                 forcing
+                precip_scaling
                 coupling
                 shortwaveradiation
                 self_attraction_loading
                 tidal_potential_forcing
                 frazil_ice
+                land_ice
                 land_ice_fluxes
                 advection
                 bottom_drag
+                rayleigh_damping
+                vegetation_drag
                 ocean_constants
                 pressure_gradient
                 eos
@@ -38,9 +43,12 @@ my @groups = qw(run_modes
                 testing
                 transport_tests
                 init_mode_vert_levels
+                manufactured_solution
+                init_mode_subgrid
                 tracer_forcing_activetracers
                 tracer_forcing_debugtracers
                 tracer_forcing_ecosystracers
+                tracer_forcing_freshwatertracers
                 tracer_forcing_dmstracers
                 tracer_forcing_macromoleculestracers
                 tracer_forcing_idealagetracers

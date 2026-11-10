@@ -52,13 +52,15 @@ contains
     use elm_varpar          , only : nlevlak
     use elm_varcon          , only : hvap, hsub, hfus, cpair, cpliq, tkwat, tkice, tkair
     use elm_varcon          , only : sb, vkc, grav, denh2o, tfrz, spval, zsno
-    use elm_varctl          , only : iulog, use_lch4, use_extrasnowlayers
+    use elm_varctl          , only : iulog, use_lch4, use_firn_percolation_and_compaction, lake_evap_cap_method
     use LakeCon             , only : betavis, z0frzlake, tdmax, emg_lake
     use LakeCon             , only : lake_use_old_fcrit_minz0
     use LakeCon             , only : minz0lake, cur0, cus, curm, fcrit
     use QSatMod             , only : QSat
-    use FrictionVelocityMod , only : FrictionVelocity, MoninObukIni, implicit_stress
-    use clm_time_manager    , only : get_nstep
+    use FrictionVelocityMod , only : FrictionVelocity, MoninObukIni, &
+         implicit_stress, atm_gustiness, force_land_gustiness
+    use elm_time_manager    , only : get_nstep
+    use timeinfoMod         , only : dtime_mod
     !
     ! !ARGUMENTS:
     type(bounds_type)      , intent(in)    :: bounds
@@ -99,8 +101,8 @@ contains
     real(r8) :: dzsur(bounds%begc:bounds%endc)     ! 1/2 the top layer thickness (m)
     real(r8) :: eg                                 ! water vapor pressure at temperature T [pa]
     real(r8) :: htvp(bounds%begc:bounds%endc)      ! latent heat of vapor of water (or sublimation) [j/kg]
-    real(r8) :: obu(bounds%begp:bounds%endp)       ! monin-obukhov length (m)
-    real(r8) :: obuold(bounds%begp:bounds%endp)    ! monin-obukhov length of previous iteration
+    real(r8) :: obu(bounds%begp:bounds%endp)       ! Obukhov length scale (m)
+    real(r8) :: obuold(bounds%begp:bounds%endp)    ! Obukhov length scale of previous iteration
     real(r8) :: qsatg(bounds%begc:bounds%endc)     ! saturated humidity [kg/kg]
     real(r8) :: qsatgdT(bounds%begc:bounds%endc)   ! d(qsatg)/dT
     real(r8) :: qstar                              ! moisture scaling parameter
@@ -123,6 +125,7 @@ contains
     real(r8) :: ur(bounds%begp:bounds%endp)        ! wind speed at reference height [m/s]
     real(r8) :: ustar(bounds%begp:bounds%endp)     ! friction velocity [m/s]
     real(r8) :: wc                                 ! convective velocity [m/s]
+    real(r8) :: ugust_total(bounds%begp:bounds%endp) ! gustiness including convective velocity [m/s]
     real(r8) :: zeta                               ! dimensionless height used in Monin-Obukhov theory
     real(r8) :: zldis(bounds%begp:bounds%endp)     ! reference height "minus" zero displacement height [m]
     real(r8) :: displa(bounds%begp:bounds%endp)    ! displacement (always zero) [m]
@@ -133,6 +136,11 @@ contains
     real(r8) :: fm(bounds%begp:bounds%endp)        ! needed for BGC only to diagnose 10m wind speed
     real(r8) :: bw                                 ! partial density of water (ice + liquid)
     real(r8) :: t_grnd_temp                        ! Used in surface flux correction over frozen ground
+    real(r8) :: qflx_evap_cap                      ! water-availability cap on qflx_evap_soi (kg/m2/s)
+    logical  :: evap_water_limited                 ! true if qflx_evap_soi(p) was capped by water availability this iteration
+    real(r8) :: dtime                               ! land model time step (sec)
+    real(r8) :: evap_coef                          ! forc_rho/raw: evaporation per unit humidity difference (kg/m2/s per kg/kg)
+    real(r8) :: dqdT_coef                          ! evap_coef * d(qsatg)/dT
     real(r8) :: betaprime(bounds%begc:bounds%endc) ! Effective beta: sabg_lyr(p,jtop) for snow layers, beta otherwise
     real(r8) :: e_ref2m                            ! 2 m height surface saturated vapor pressure [Pa]
     real(r8) :: de2mdT                             ! derivative of 2 m height surface saturated vapor pressure on t_ref2m
@@ -191,6 +199,7 @@ contains
 
          h2osoi_liq       =>    col_ws%h2osoi_liq         , & ! Input:  [real(r8) (:,:) ]  liquid water (kg/m2)
          h2osoi_ice       =>    col_ws%h2osoi_ice         , & ! Input:  [real(r8) (:,:) ]  ice lens (kg/m2)
+         h2osno           =>    col_ws%h2osno             , & ! Input:  [real(r8) (:)   ]  snow water (mm H2O)
 
          t_lake           =>    col_es%t_lake            , & ! Input:  [real(r8) (:,:) ]  lake temperature (Kelvin)
          t_soisno         =>    col_es%t_soisno          , & ! Input:  [real(r8) (:,:) ]  soil (or snow) temperature (Kelvin)
@@ -244,6 +253,7 @@ contains
       z0qg_col => frictionvel_vars%z0qg_col
 
       kva0temp = 20._r8 + tfrz
+      dtime = dtime_mod
 
       do fp = 1, num_lakep
          p = filter_lakep(fp)
@@ -354,20 +364,21 @@ contains
          if (implicit_stress) then
             wind_speed0(p) = max(0.01_r8, hypot(forc_u(t), forc_v(t)))
             wind_speed_adj(p) = wind_speed0(p)
-            ur(p) = max(1.0_r8, wind_speed_adj(p) + ugust(t))
+            ur(p) = max(1.0_r8, sqrt(wind_speed_adj(p)**2 + ugust(t)**2))
 
             prev_tau(p) = tau_est(t)
          else
-            ur(p) = max(1.0_r8,sqrt(forc_u(t)*forc_u(t)+forc_v(t)*forc_v(t)) + ugust(t))
+            ur(p) = max(1.0_r8,sqrt(forc_u(t)*forc_u(t)+forc_v(t)*forc_v(t)+ugust(t)*ugust(t)))
          end if
          tau_diff(p) = 1.e100_r8
+         ugust_total(p) = ugust(t)
 
          dth(p)   = thm(p)-t_grnd(c)
          dqh(p)   = forc_q(t)-qsatg(c)
          dthv     = dth(p)*(1._r8+0.61_r8*forc_q(t))+0.61_r8*forc_th(t)*dqh(p)
          zldis(p) = forc_hgt_u_patch(p) - 0._r8
 
-         ! Initialize Monin-Obukhov length and wind speed
+         ! Initialize Obukhov length scale and wind speed
 
          call MoninObukIni(ur(p), thv(c), dthv, zldis(p), z0mg(p), um(p), obu(p))
       end do
@@ -390,7 +401,8 @@ contains
 
          call FrictionVelocity(begp, endp, fncopy, fpcopy, &
               displa(begp:endp), z0mg(begp:endp), z0hg(begp:endp), z0qg(begp:endp), &
-              obu(begp:endp), iter, ur(begp:endp), um(begp:endp), ustar(begp:endp), &
+              obu(begp:endp), iter, ur(begp:endp), um(begp:endp), ugust_total(begp:endp), &
+              ustar(begp:endp), &
               temp1(begp:endp), temp2(begp:endp), temp12m(begp:endp), temp22m(begp:endp), &
               fm(begp:endp), frictionvel_vars)
 
@@ -435,7 +447,7 @@ contains
                call shr_flux_update_stress(wind_speed0(p), wsresp(t), tau_est(t), &
                     tau(p), prev_tau(p), tau_diff(p), prev_tau_diff(p), &
                     wind_speed_adj(p))
-               ur(p) = max(1.0_r8, wind_speed_adj(p) + ugust(t))
+               ur(p) = max(1.0_r8, sqrt(wind_speed_adj(p)**2 + ugust(t)**2))
             end if
 
             ! Get derivative of fluxes with respect to ground temperature
@@ -460,6 +472,34 @@ contains
             elseif(t_grnd(c)<tgbef(c)-20._r8)then
               t_grnd(c)=tgbef(c)-20._r8
             endif
+
+            ! If the t_grnd solved above would evaporate more than water availability allows,
+            ! evaporation is not actually a function of t_grnd in this regime -- there is no
+            ! more water to respond with. Drop its temperature-derivative from bx, replace it
+            ! with a fixed loss in ax, and re-solve so t_grnd (and everything downstream in
+            ! this iteration: dth/dqh/zeta/obu/roughness lengths below) stays self-consistent
+            ! with the capped evaporation instead of the discarded unconstrained value.
+            evap_water_limited = .false.
+            if (trim(lake_evap_cap_method) == 'rain_snow' .or. trim(lake_evap_cap_method) == 'rain_snow_h2osno') then
+               qflx_evap_cap = max(forc_rain(t) + forc_snow(t), 0._r8)
+               if (trim(lake_evap_cap_method) == 'rain_snow_h2osno') then
+                  qflx_evap_cap = qflx_evap_cap + h2osno(c)/dtime
+               end if
+               if (forc_rho(t)*(qsatg(c)+qsatgdT(c)*(t_grnd(c)-tgbef(c))-forc_q(t))/raw(p) > qflx_evap_cap) then
+                  evap_water_limited = .true.
+                  evap_coef = forc_rho(t)/raw(p)
+                  dqdT_coef = qsatgdT(c)*evap_coef
+                  ax = ax + htvp(c)*(evap_coef*(qsatg(c)-forc_q(t)) - dqdT_coef*tgbef(c) - qflx_evap_cap)
+                  bx = bx - htvp(c)*dqdT_coef
+                  t_grnd(c) = ax/bx
+                  if(t_grnd(c)>tgbef(c)+20._r8)then
+                    t_grnd(c)=tgbef(c)+20._r8
+                  elseif(t_grnd(c)<tgbef(c)-20._r8)then
+                    t_grnd(c)=tgbef(c)-20._r8
+                  endif
+               end if
+            end if
+
             ! Update htvp
             if (t_grnd(c) > tfrz) then
                htvp(c) = hvap
@@ -471,7 +511,11 @@ contains
             ! using ground temperatures from previous time step
 
             eflx_sh_grnd(p) = forc_rho(t)*cpair*(t_grnd(c)-thm(p))/rah(p)
-            qflx_evap_soi(p) = forc_rho(t)*(qsatg(c)+qsatgdT(c)*(t_grnd(c)-tgbef(c))-forc_q(t))/raw(p)
+            if (evap_water_limited) then
+               qflx_evap_soi(p) = qflx_evap_cap
+            else
+               qflx_evap_soi(p) = forc_rho(t)*(qsatg(c)+qsatgdT(c)*(t_grnd(c)-tgbef(c))-forc_q(t))/raw(p)
+            end if
 
             ! Re-calculate saturated vapor pressure, specific humidity and their
             ! derivatives at lake surface
@@ -492,8 +536,13 @@ contains
                um(p) = max(ur(p),0.1_r8)
             else                     !unstable
                zeta = max(-100._r8,min(zeta,-0.01_r8))
-               wc = beta1*(-grav*ustar(p)*thvstar*zii/thv(c))**0.333_r8
-               um(p) = sqrt(ur(p)*ur(p)+wc*wc)
+               if ((.not. atm_gustiness) .or. force_land_gustiness) then
+                  wc = beta1*(-grav*ustar(p)*thvstar*zii/thv(c))**0.333_r8
+                  ugust_total(p) = sqrt(ugust(t)**2 + wc**2)
+                  um(p) = sqrt(ur(p)*ur(p)+wc*wc)
+               else
+                  um(p) = max(ur(p),0.1_r8)
+               end if
             end if
             obu(p) = zldis(p)/zeta
 
@@ -597,6 +646,22 @@ contains
             htvp(c) = hsub
          end if
 
+         ! Backstop cap for the t_grnd overrides just above: those force t_grnd directly
+         ! (freezing point, or convective mixing to t_lake) rather than solving it from ax/bx,
+         ! so there is no equation to re-solve against the cap the way the ITERATION loop does
+         ! above. Applied here, before eflx_soil_grnd/eflx_gnet below are assembled from
+         ! qflx_evap_soi, so any energy that can no longer leave as latent heat is left to warm
+         ! the lake/ground via eflx_gnet instead. Never clamps condensation (qflx_evap_soi < 0).
+         ! In practice this only binds for the convective-mixing branch (t_grnd forced warmer);
+         ! the freezing-point branch only forces t_grnd colder than an already-capped value.
+         if (trim(lake_evap_cap_method) == 'rain_snow' .or. trim(lake_evap_cap_method) == 'rain_snow_h2osno') then
+            qflx_evap_cap = max(forc_rain(t) + forc_snow(t), 0._r8)
+            if (trim(lake_evap_cap_method) == 'rain_snow_h2osno') then
+               qflx_evap_cap = qflx_evap_cap + h2osno(c)/dtime
+            end if
+            qflx_evap_soi(p) = min(qflx_evap_soi(p), qflx_evap_cap)
+         end if
+
          ! Net longwave from ground to atmosphere
          ! eflx_lwrad_out(p) = (1._r8-emg_lake)*forc_lwrad(c) + stftg3(p)*(-3._r8*tgbef(c)+4._r8*t_grnd(c))
          ! What is tgbef doing in this equation? Can't it be exact now? --Zack Subin, 4/14/09
@@ -686,7 +751,7 @@ contains
          qflx_dirct_rain(p) = 0._r8
          qflx_leafdrip(p) = 0._r8
 
-         if (.not. use_extrasnowlayers) then
+         if (.not. use_firn_percolation_and_compaction) then
             ! Because they will be used in pft2col initialize here.
             ! This will be overwritten in LakeHydrology
             qflx_snwcp_ice(p) = 0._r8

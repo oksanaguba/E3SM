@@ -12,7 +12,7 @@ module CNCarbonStateType
   use elm_varctl             , only : iulog, use_vertsoilc, spinup_state 
   use decompMod              , only : bounds_type
   use CNStateType            , only : cnstate_type
-  use pftvarcon              , only : npcropmin
+  use pftvarcon              , only : iscft
   use CNDecompCascadeConType , only : decomp_cascade_con
   use VegetationPropertiesType         , only : veg_vp
   use abortutils             , only : endrun
@@ -109,7 +109,6 @@ module CNCarbonStateType
      real(r8), pointer :: totecosysc_col           (:)     ! col (gC/m2) total ecosystem carbon, incl veg but excl cpool
      real(r8), pointer :: totcolc_col              (:)     ! col (gC/m2) total column carbon, incl veg and cpool
      real(r8), pointer :: totabgc_col              (:)     ! col (gC/m2) total column above ground carbon, excluding som 
-     real(r8), pointer :: totblgc_col              (:)     ! col (gc/m2) total column non veg carbon
 
      ! variables for above ground vegetation biomass
      real(r8), pointer :: totvegc_abg_patch            (:)     ! (gC/m2) total above vegetation carbon, excluding cpool
@@ -258,7 +257,6 @@ contains
 
 
     allocate(this%totabgc_col              (begc :endc))                   ;     this%totabgc_col              (:)   = nan
-    allocate(this%totblgc_col              (begc:endc))                    ;     this%totblgc_col              (:)   = nan
     allocate(this%decomp_cpools_vr_col(begc:endc,1:nlevdecomp_full,1:ndecomp_pools))  
     this%decomp_cpools_vr_col(:,:,:)= nan
 
@@ -361,16 +359,6 @@ contains
 
     ! add history fields for all CLAMP CN variables
 
-
-
-    if (carbon_type == 'c12') then
-
-
-       !those variables are now ouput in betr
-
-
-    end if
-
     !-------------------------------
     ! C13 state variables - column
     !-------------------------------
@@ -400,7 +388,7 @@ contains
     !
     ! !USES:
     use landunit_varcon , only: istsoil
-    use pftvarcon       , only: noveg, npcropmin
+    use pftvarcon       , only: noveg
     !
     ! !ARGUMENTS:
     class(carbonstate_type) :: this 
@@ -450,7 +438,7 @@ contains
           this%leafcmax_patch(p) = 0._r8
 
           l = veg_pp%landunit(p)
-          if (lun_pp%itype(l) == istsoil .or. lun_pp%itype(l) == istcrop) then
+          if (veg_pp%is_on_soil_col(p) .or. veg_pp%is_on_crop_col(p)) then
 
              if (veg_pp%itype(p) == noveg) then
                 this%leafc_patch(p)         = 0._r8
@@ -459,7 +447,7 @@ contains
                 if (veg_vp%evergreen(veg_pp%itype(p)) == 1._r8) then
                    this%leafc_patch(p)         = 1._r8 * ratio
                    this%leafc_storage_patch(p) = 0._r8
-                else if (veg_pp%itype(p) >= npcropmin) then ! prognostic crop types
+                else if (iscft(veg_pp%itype(p))) then ! prognostic crop types
                    this%leafc_patch(p) = 0._r8
                    this%leafc_storage_patch(p) = 0._r8
                 else
@@ -477,7 +465,7 @@ contains
              this%livestemc_storage_patch(p) = 0._r8 
              this%livestemc_xfer_patch(p)    = 0._r8 
 
-             if (veg_vp%woody(veg_pp%itype(p)) == 1._r8) then
+             if (veg_vp%woody(veg_pp%itype(p)) >= 1.0_r8) then
                 this%deadstemc_patch(p) = 0.1_r8 * ratio
              else
                 this%deadstemc_patch(p) = 0._r8 
@@ -569,7 +557,7 @@ contains
     ! initialize column-level variables
     do c = bounds%begc, bounds%endc
        l = col_pp%landunit(c)
-       if (lun_pp%itype(l) == istsoil .or. lun_pp%itype(l) == istcrop) then
+       if (col_pp%is_soil(c) .or. col_pp%is_crop(c)) then
 
 
           this%cwdc_col(c)       = 0._r8
@@ -626,13 +614,12 @@ contains
     ! !USES:
     use shr_infnan_mod   , only : isnan => shr_infnan_isnan, nan => shr_infnan_nan, assignment(=)
     use shr_const_mod    , only : SHR_CONST_PDB
-    use clm_time_manager , only : is_restart, get_nstep
+    use elm_time_manager , only : is_restart, get_nstep
     use elm_varcon       , only : c13ratio, c14ratio
     use elm_varctl       , only : spinup_mortality_factor, spinup_state
 
     use restUtilMod
     use ncdio_pio
-    use tracer_varcon  , only : is_active_betr_bgc
     !
     ! !ARGUMENTS:
     class (carbonstate_type) :: this
@@ -811,7 +798,7 @@ contains
     !
     ! !USES:
     use elm_varctl       , only: iulog
-    use clm_time_manager , only: get_step_size
+    use elm_time_manager , only: get_step_size
     use elm_varcon       , only: secspday
     use elm_varpar       , only: nlevdecomp, ndecomp_pools, nlevdecomp_full
     !
@@ -866,7 +853,7 @@ contains
             this%gresp_storage_patch(p)      + &
             this%gresp_xfer_patch(p)
 
-       if ( crop_prog .and. veg_pp%itype(p) >= npcropmin )then
+       if ( crop_prog .and. iscft(veg_pp%itype(p)))then
           this%storvegc_patch(p) =            &
                this%storvegc_patch(p)       + &
                this%grainc_storage_patch(p) + &
@@ -921,10 +908,11 @@ contains
     call p2c(bounds, num_soilc, filter_soilc, &
          this%totvegc_abg_patch(bounds%begp:bounds%endp), &
          this%totvegc_abg_col(bounds%begc:bounds%endc))
-
-    call p2c(bounds, num_soilc, filter_soilc, &
-         this%cropseedc_deficit_patch(bounds%begp:bounds%endp), &
-         cropseedc_deficit_col(bounds%begc:bounds%endc))
+    if ( crop_prog )then
+      call p2c(bounds, num_soilc, filter_soilc, &
+            this%cropseedc_deficit_patch(bounds%begp:bounds%endp), &
+            cropseedc_deficit_col(bounds%begc:bounds%endc))
+    end if
 
     ! column level summary
 
@@ -1102,8 +1090,11 @@ contains
             this%totlitc_col(c)  + &
             this%totsomc_col(c)  + &
             this%prod1c_col(c)   + &
-            this%ctrunc_col(c)   + &
-            cropseedc_deficit_col(c)
+            this%ctrunc_col(c)
+
+       if (crop_prog )then
+         this%totcolc_col(c) = this%totcolc_col(c) + cropseedc_deficit_col(c)
+       end if
             
        this%totabgc_col(c) = &
             this%totpftc_col(c)  + &

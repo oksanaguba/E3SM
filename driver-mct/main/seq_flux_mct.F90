@@ -46,6 +46,9 @@ module seq_flux_mct
   real(r8), allocatable ::  ubot (:)  ! atm velocity, zonal
   real(r8), allocatable ::  vbot (:)  ! atm velocity, meridional
   real(r8), allocatable ::  wsresp(:) ! atm response to surface stress
+  real(r8), allocatable ::  charnsea(:) ! Charnock coeff accounting for the wave stress
+  real(r8), allocatable ::  ustarwav(:) ! Friction velocity from WW3
+  real(r8), allocatable ::  z0wav(:)    ! Surface roughness length from WW3
   real(r8), allocatable ::  tau_est(:)! estimation of tau in equilibrium with wind
   real(r8), allocatable ::  ugust_atm(:)  ! atm gustiness
   real(r8), allocatable ::  thbot(:)  ! atm potential T
@@ -71,6 +74,7 @@ module seq_flux_mct
   real(r8), allocatable ::  tref (:)  ! diagnostic:  2m ref T
   real(r8), allocatable ::  qref (:)  ! diagnostic:  2m ref Q
   real(r8), allocatable :: duu10n(:)  ! diagnostic: 10m wind speed squared
+  real(r8), allocatable :: u10res(:)  ! diagnostic: 10m "resolved" (no gustiness) wind speed (m/s)^2
 
   real(r8), allocatable :: fswpen (:) ! fraction of sw penetrating ocn surface layer
   real(r8), allocatable :: ocnsal (:) ! ocean salinity
@@ -144,6 +148,9 @@ module seq_flux_mct
   integer :: index_o2x_So_t
   integer :: index_o2x_So_u
   integer :: index_o2x_So_v
+  integer :: index_w2x_Sw_Charn
+  integer :: index_w2x_Sw_Z0
+  integer :: index_w2x_Sw_Ustar
   integer :: index_o2x_So_fswpen
   integer :: index_o2x_So_s
   integer :: index_o2x_So_roce_16O
@@ -171,6 +178,7 @@ module seq_flux_mct
   integer :: index_xao_So_ssq
   integer :: index_xao_So_duu10n
   integer :: index_xao_So_u10
+  integer :: index_xao_So_u10withgusts
   integer :: index_xao_So_fswpen
   integer :: index_xao_So_warm_diurn
   integer :: index_xao_So_salt_diurn
@@ -293,6 +301,17 @@ contains
     allocate( vocn(nloc),stat=ier)
     if(ier/=0) call mct_die(subName,'allocate vocn',ier)
     vocn = 0.0_r8
+
+    allocate( charnsea(nloc),stat=ier)
+    if(ier/=0) call mct_die(subName,'allocate charnsea',ier)
+    charnsea = 0.0_r8
+    allocate( ustarwav(nloc),stat=ier)
+    if(ier/=0) call mct_die(subName,'allocate ustarwav',ier)
+    ustarwav = 0.0_r8 
+    allocate( z0wav(nloc),stat=ier)
+    if(ier/=0) call mct_die(subName,'allocate z0wav',ier)
+    z0wav = 0.0_r8
+
     allocate( tocn(nloc),stat=ier)
     if(ier/=0) call mct_die(subName,'allocate tocn',ier)
     tocn = 0.0_r8
@@ -343,6 +362,9 @@ contains
     allocate(duu10n(nloc),stat=ier)
     if(ier/=0) call mct_die(subName,'allocate duu10n',ier)
     duu10n = 0.0_r8
+    allocate(u10res(nloc),stat=ier)
+    if(ier/=0) call mct_die(subName,'allocate u10res',ier)
+    u10res = 0.0_r8
 
     !--- flux_diurnal cycle flux fields ---
     allocate(uGust(nloc),stat=ier)
@@ -744,6 +766,8 @@ contains
     if(ier/=0) call mct_die(subName,'allocate qref',ier)
     allocate(duu10n(nloc_a2o),stat=ier)
     if(ier/=0) call mct_die(subName,'allocate duu10n',ier)
+    allocate(u10res(nloc_a2o),stat=ier)
+    if(ier/=0) call mct_die(subName,'allocate u10res',ier)
 
     ! set emask
 
@@ -986,6 +1010,7 @@ contains
     integer(in) :: index_tref
     integer(in) :: index_qref
     integer(in) :: index_duu10n
+    integer(in) :: index_u10withgusts
     integer(in) :: index_ustar
     integer(in) :: index_ssq
     integer(in) :: index_re
@@ -1138,8 +1163,9 @@ contains
             warmMaxInc, windMaxInc, qSolInc, windInc, nInc, &
             tbulk, tskin, tskin_day, tskin_night, &
             cskin, cskin_night, tod, dt,          &
-            duu10n,ustar, re  , ssq , missval = 0.0_r8, &
+            duu10n, ustar, re  , ssq , missval = 0.0_r8, &
             cold_start=cold_start, wsresp=wsresp, tau_est=tau_est)
+       u10res = sqrt(duu10n) ! atm-supplied gustiness not implemented for flux_diurnal
     else if (ocn_surface_flux_scheme.eq.2) then
        call shr_flux_atmOcn_UA(nloc_a2o , zbot , ubot, vbot, thbot, &
             shum , shum_16O , shum_HDO, shum_18O, dens , tbot, pslv, &
@@ -1148,6 +1174,7 @@ contains
             evap , evap_16O, evap_HDO, evap_18O, taux, tauy, tref, qref , &
             duu10n,ustar, re  , ssq , missval = 0.0_r8, &
             wsresp=wsresp, tau_est=tau_est)
+       u10res = sqrt(duu10n) ! atm-supplied gustiness not implemented for UA
     else
 
        call shr_flux_atmocn (nloc_a2o , zbot , ubot, vbot, thbot, &
@@ -1157,7 +1184,7 @@ contains
             roce_16O, roce_HDO, roce_18O,    &
             evap , evap_16O, evap_HDO, evap_18O, taux, tauy, tref, qref , &
             ocn_surface_flux_scheme, &
-            duu10n,ustar, re  , ssq , missval = 0.0_r8, &
+            duu10n, u10res, ustar, re  , ssq , missval = 0.0_r8, &
             wsresp=wsresp, tau_est=tau_est, ugust=ugust)
     endif
 
@@ -1176,6 +1203,7 @@ contains
     index_tref   = mct_aVect_indexRA(xaop_ae,"So_tref")
     index_qref   = mct_aVect_indexRA(xaop_ae,"So_qref")
     index_duu10n = mct_aVect_indexRA(xaop_ae,"So_duu10n")
+    index_u10withgusts = mct_aVect_indexRA(xaop_ae,"So_u10withgusts")
     index_ustar  = mct_aVect_indexRA(xaop_ae,"So_ustar")
     index_ssq    = mct_aVect_indexRA(xaop_ae,"So_ssq")
     index_re     = mct_aVect_indexRA(xaop_ae,"So_re")
@@ -1216,7 +1244,8 @@ contains
        xaop_oe%rAttr(index_ssq   ,io) = xaop_oe%rAttr(index_ssq   ,io) + ssq(n) * wt   ! s.hum. saturation at Ts
        xaop_oe%rAttr(index_lwup  ,io) = xaop_oe%rAttr(index_lwup  ,io) + lwup(n)* wt
        xaop_oe%rAttr(index_duu10n,io) = xaop_oe%rAttr(index_duu10n,io) + duu10n(n)*wt
-       xaop_oe%rAttr(index_u10   ,io) = xaop_oe%rAttr(index_u10   ,io) + sqrt(duu10n(n))*wt
+       xaop_oe%rAttr(index_u10   ,io) = xaop_oe%rAttr(index_u10   ,io) + u10res(n)*wt
+       xaop_oe%rAttr(index_u10withgusts,io) = xaop_oe%rAttr(index_u10withgusts,io) + sqrt(duu10n(n))*wt
        xaop_oe%rAttr(index_sumwt ,io) = xaop_oe%rAttr(index_sumwt ,io) + wt
     enddo
 
@@ -1250,7 +1279,8 @@ contains
        xaop_ae%rAttr(index_ssq   ,ia) = xaop_ae%rAttr(index_ssq   ,ia) + ssq(n) * wt   ! s.hum. saturation at Ts
        xaop_ae%rAttr(index_lwup  ,ia) = xaop_ae%rAttr(index_lwup  ,ia) + lwup(n)* wt
        xaop_ae%rAttr(index_duu10n,ia) = xaop_ae%rAttr(index_duu10n,ia) + duu10n(n)*wt
-       xaop_ae%rAttr(index_u10   ,ia) = xaop_ae%rAttr(index_u10   ,ia) + sqrt(duu10n(n))*wt
+       xaop_ae%rAttr(index_u10   ,ia) = xaop_ae%rAttr(index_u10   ,ia) + u10res(n)*wt
+       xaop_ae%rAttr(index_u10withgusts,ia) = xaop_ae%rAttr(index_u10withgusts,ia) + sqrt(duu10n(n))*wt
        xaop_ae%rAttr(index_sumwt ,ia) = xaop_ae%rAttr(index_sumwt ,ia) + wt
     enddo
 
@@ -1300,7 +1330,7 @@ contains
 
   !===============================================================================
 
-  subroutine seq_flux_atmocn_mct(infodata, tod, dt, a2x, o2x, xao)
+  subroutine seq_flux_atmocn_mct(infodata, tod, dt, a2x, o2x, xao, w2x)
 
     !-----------------------------------------------------------------------
     !
@@ -1310,6 +1340,7 @@ contains
     integer(in)             , intent(in)         :: tod,dt  ! NEW
     type(mct_aVect)         , intent(in)         :: a2x  ! a2x_ax or a2x_ox
     type(mct_aVect)         , intent(in)         :: o2x  ! o2x_ax or o2x_ox
+    type(mct_aVect), optional, intent(in)        :: w2x  !  w2x_wx
     type(mct_aVect)         , intent(inout)      :: xao
     !
     ! Local variables
@@ -1317,7 +1348,7 @@ contains
     logical     :: flux_albav   ! flux avg option
     logical     :: dead_comps   ! .true.  => dead components are used
     integer(in) :: n            ! indices
-    integer(in) :: nloc, nloca, nloco    ! number of gridcells
+    integer(in) :: nloc, nloca, nloco, nlocw    ! number of gridcells
     logical,save:: first_call = .true.
     logical     :: cold_start      ! .true. to initialize internal fields in shr_flux diurnal
     logical     :: read_restart    ! .true. => continue run
@@ -1366,6 +1397,7 @@ contains
        index_xao_So_re     = mct_aVect_indexRA(xao,'So_re')
        index_xao_So_ssq    = mct_aVect_indexRA(xao,'So_ssq')
        index_xao_So_u10    = mct_aVect_indexRA(xao,'So_u10')
+       index_xao_So_u10withgusts = mct_aVect_indexRA(xao,'So_u10withgusts')
        index_xao_So_duu10n = mct_aVect_indexRA(xao,'So_duu10n')
        index_xao_Faox_taux = mct_aVect_indexRA(xao,'Faox_taux')
        index_xao_Faox_tauy = mct_aVect_indexRA(xao,'Faox_tauy')
@@ -1431,6 +1463,11 @@ contains
        index_o2x_So_roce_16O = mct_aVect_indexRA(o2x,'So_roce_16O', perrWith='quiet')
        index_o2x_So_roce_HDO = mct_aVect_indexRA(o2x,'So_roce_HDO', perrWith='quiet')
        index_o2x_So_roce_18O = mct_aVect_indexRA(o2x,'So_roce_18O', perrWith='quiet')
+       if (wav_ocn_coup == 'twoway' .or. wav_atm_coup == 'twoway') then
+          index_w2x_Sw_Charn = mct_aVect_indexRA(w2x,'Sw_Charn')
+          index_w2x_Sw_Z0 = mct_aVect_indexRA(w2x,'Sw_Z0')
+          index_w2x_Sw_Ustar = mct_aVect_indexRA(w2x,'Sw_Ustar')
+       endif
        call shr_flux_adjust_constants(flux_convergence_tolerance=flux_convergence, &
             flux_convergence_max_iteration=flux_max_iteration, &
             coldair_outbreak_mod=coldair_outbreak_mod)
@@ -1444,6 +1481,7 @@ contains
     nloc = mct_aVect_lsize(xao)
     nloca = mct_aVect_lsize(a2x)
     nloco = mct_aVect_lsize(o2x)
+    nlocw = mct_aVect_lsize(w2x)
 
     if (nloc /= nloca .or. nloc /= nloco) then
        call shr_sys_abort(trim(subname)//' ERROR nloc sizes do not match')
@@ -1534,6 +1572,11 @@ contains
              tocn(n) = o2x%rAttr(index_o2x_So_t   ,n)
              uocn(n) = o2x%rAttr(index_o2x_So_u   ,n)
              vocn(n) = o2x%rAttr(index_o2x_So_v   ,n)
+             if (wav_atm_coup == 'twoway') then
+                     charnsea(n) = w2x%rAttr(index_w2x_Sw_Charn   ,n)
+                     ustarwav(n) = w2x%rAttr(index_w2x_Sw_Ustar   ,n)
+                     z0wav(n) = w2x%rAttr(index_w2x_Sw_Z0   ,n)
+             endif
              if ( index_o2x_So_roce_16O /= 0 ) roce_16O(n) = o2x%rAttr(index_o2x_So_roce_16O, n)
              if ( index_o2x_So_roce_HDO /= 0 ) roce_HDO(n) = o2x%rAttr(index_o2x_So_roce_HDO, n)
              if ( index_o2x_So_roce_18O /= 0 ) roce_18O(n) = o2x%rAttr(index_o2x_So_roce_18O, n)
@@ -1602,6 +1645,7 @@ contains
                                 !consistent with mrgx2a fraction
                                 !duu10n,ustar, re  , ssq, missval = 0.0_r8 )
             cold_start=cold_start, wsresp=wsresp, tau_est=tau_est)
+       u10res = sqrt(duu10n) ! atm-supplied gustiness not implemented for flux_diurnal
     else if (ocn_surface_flux_scheme.eq.2) then
        call shr_flux_atmOcn_UA(nloc , zbot , ubot, vbot, thbot, &
             shum , shum_16O , shum_HDO, shum_18O, dens , tbot, pslv, &
@@ -1609,16 +1653,30 @@ contains
             roce_16O, roce_HDO, roce_18O,    &
             evap , evap_16O, evap_HDO, evap_18O, taux , tauy, tref, qref , &
             duu10n,ustar, re  , ssq, wsresp=wsresp, tau_est=tau_est)
+       u10res = sqrt(duu10n) ! atm-supplied gustiness not implemented for UA
     else
-       call shr_flux_atmocn (nloc , zbot , ubot, vbot, thbot, &
+       if (wav_atm_coup == 'twoway') then     
+          call shr_flux_atmocn (nloc , zbot , ubot, vbot, thbot, &
             shum , shum_16O , shum_HDO, shum_18O, dens , tbot, uocn, vocn , &
             tocn , emask, seq_flux_atmocn_minwind, &
             sen , lat , lwup , &
             roce_16O, roce_HDO, roce_18O,    &
             evap , evap_16O, evap_HDO, evap_18O, taux , tauy, tref, qref , &
             ocn_surface_flux_scheme, &
-            duu10n,ustar, re  , ssq, &
-            wsresp=wsresp, tau_est=tau_est, ugust=ugust_atm)
+            duu10n, u10res, ustar, re  , ssq, &
+            wsresp=wsresp, tau_est=tau_est, ugust=ugust_atm, &
+            z0wav=z0wav, ustarwav=ustarwav, charnockSeaState=charnsea)
+       else     
+          call shr_flux_atmocn (nloc , zbot , ubot, vbot, thbot, &
+            shum , shum_16O , shum_HDO, shum_18O, dens , tbot, uocn, vocn , &
+            tocn , emask, seq_flux_atmocn_minwind, &
+            sen , lat , lwup , &
+            roce_16O, roce_HDO, roce_18O,    &
+            evap , evap_16O, evap_HDO, evap_18O, taux , tauy, tref, qref , &
+            ocn_surface_flux_scheme, &
+            duu10n, u10res, ustar, re  , ssq, &
+            wsresp=wsresp, tau_est=tau_est, ugust=ugust_atm) 
+       endif
        !missval should not be needed if flux calc
        !consistent with mrgx2a fraction
        !duu10n,ustar, re  , ssq, missval = 0.0_r8 )
@@ -1641,7 +1699,8 @@ contains
           xao%rAttr(index_xao_So_ssq   ,n) = ssq(n)    ! s.hum. saturation at Ts
           xao%rAttr(index_xao_Faox_lwup,n) = lwup(n)
           xao%rAttr(index_xao_So_duu10n,n) = duu10n(n)
-          xao%rAttr(index_xao_So_u10   ,n) = sqrt(duu10n(n))
+          xao%rAttr(index_xao_So_u10   ,n) = u10res(n)
+          xao%rAttr(index_xao_So_u10withgusts,n) = sqrt(duu10n(n))
           xao%rAttr(index_xao_So_warm_diurn       ,n) = warm(n)
           xao%rAttr(index_xao_So_salt_diurn       ,n) = salt(n)
           xao%rAttr(index_xao_So_speed_diurn      ,n) = speed(n)

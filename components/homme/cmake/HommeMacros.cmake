@@ -26,7 +26,7 @@ MACRO (HommeConfigFile CONFIG_FILE_IN CONFIG_FILE_C CONFIG_FILE_F90)
     FILE (READ ${CONFIG_FILE_C} CONFIG_FILE_C_STR)
     FILE (READ ${CONFIG_FILE_C}.tmp CONFIG_FILE_C_TMP_STR)
 
-    IF (${CONFIG_FILE_C_STR} STREQUAL ${CONFIG_FILE_C_TMP_STR})
+    IF (CONFIG_FILE_C_STR STREQUAL CONFIG_FILE_C_TMP_STR)
       # config file was present and appears unchanged
       SET (OUT_OF_DATE FALSE)
     ENDIF()
@@ -112,7 +112,13 @@ macro(createTestExec execName execType macroNP macroNC
   ADD_DEFINITIONS(-DHAVE_CONFIG_H)
 
   ADD_EXECUTABLE(${execName} ${EXEC_SOURCES})
-  SET_TARGET_PROPERTIES(${execName} PROPERTIES LINKER_LANGUAGE Fortran)
+  # For SYCL builds it is suggested to use CXX linker with `-fortlib`
+  # for mixed-language setups
+  IF(Kokkos_ENABLE_SYCL)
+    SET_TARGET_PROPERTIES(${execName} PROPERTIES LINKER_LANGUAGE CXX)
+  ELSE()
+    SET_TARGET_PROPERTIES(${execName} PROPERTIES LINKER_LANGUAGE Fortran)
+  ENDIF()
   IF(BUILD_HOMME_WITHOUT_PIOLIBRARY)
     TARGET_COMPILE_DEFINITIONS(${execName} PUBLIC HOMME_WITHOUT_PIOLIBRARY)
   ENDIF()
@@ -156,17 +162,20 @@ macro(createTestExec execName execType macroNP macroNC
   ENDIF ()
 
   IF (HOMME_USE_KOKKOS)
-    link_to_kokkos(${execName})
+    TARGET_LINK_LIBRARIES(${execName} Kokkos::kokkos)
   ENDIF ()
 
   # Move the module files out of the way so the parallel build
   # doesn't have a race condition
   SET_TARGET_PROPERTIES(${execName}
-                        PROPERTIES Fortran_MODULE_DIRECTORY ${EXEC_MODULE_DIR})
+    PROPERTIES Fortran_MODULE_DIRECTORY ${EXEC_MODULE_DIR})
 
   IF (HOMME_USE_MKL)
-    TARGET_COMPILE_OPTIONS(${execName} PUBLIC -mkl)
-    TARGET_LINK_LIBRARIES(${execName} -mkl)
+    IF (MKL_TYPE STREQUAL "oneMKL")
+      TARGET_LINK_LIBRARIES(${execName} -qmkl)
+    ELSEIF (MKL_TYPE STREQUAL "Intel MKL")
+      TARGET_LINK_LIBRARIES(${execName} -mkl)
+    ENDIF ()
   ELSE()
     IF (NOT HOMME_FIND_BLASLAPACK)
       TARGET_LINK_LIBRARIES(${execName} lapack blas)
@@ -240,47 +249,54 @@ macro(createExecLib libName execType libSrcs inclDirs macroNP
     TARGET_COMPILE_DEFINITIONS(${libName} PUBLIC HOMME_WITHOUT_PIOLIBRARY)
   ENDIF()
 
-  target_link_libraries(${execName} csm_share)
+  target_link_libraries(${libName} PUBLIC csm_share)
+  if (NOT HOMME_BUILD_SCORPIO)
+    # Needed for netcdf.mod usage in mesh_mod.F90.
+    target_link_libraries(${libName} PUBLIC piof)
+  endif()
 
   IF (CXXLIB_SUPPORTED_CACHE)
     MESSAGE(STATUS "   Linking Fortran with -cxxlib")
-    TARGET_LINK_LIBRARIES(${libName} -cxxlib)
+    TARGET_LINK_LIBRARIES(${libName} PUBLIC -cxxlib)
   ENDIF ()
 
   STRING(TOUPPER "${PERFORMANCE_PROFILE}" PERF_PROF_UPPER)
   IF ("${PERF_PROF_UPPER}" STREQUAL "VTUNE")
-    TARGET_LINK_LIBRARIES(${libName} ittnotify)
+    TARGET_LINK_LIBRARIES(${libName} PUBLIC ittnotify)
   ENDIF ()
 
   # COMPOSE_LIBRARY is empty if Compose SL transport is not enabled.
-  TARGET_LINK_LIBRARIES(${libName} timing ${COMPOSE_LIBRARY} ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
+  TARGET_LINK_LIBRARIES(${libName} PUBLIC timing ${COMPOSE_LIBRARY} ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
 
   IF (HOMME_USE_KOKKOS)
-    TARGET_LINK_LIBRARIES(${libName} kokkos)
+    TARGET_LINK_LIBRARIES(${libName} PUBLIC Kokkos::kokkos)
   ENDIF ()
 
   IF (HOMME_USE_MKL)
-    TARGET_COMPILE_OPTIONS(${libName} PUBLIC -mkl)
-    TARGET_LINK_LIBRARIES(${libName} -mkl)
+    IF (MKL_TYPE STREQUAL "oneMKL")
+      TARGET_LINK_LIBRARIES(${libName} PUBLIC -qmkl)
+    ELSEIF (MKL_TYPE STREQUAL "Intel MKL")
+      TARGET_LINK_LIBRARIES(${libName} PUBLIC -mkl)
+    ENDIF ()
   ELSE()
     IF (NOT HOMME_FIND_BLASLAPACK)
-      TARGET_LINK_LIBRARIES(${libName} lapack blas)
+      TARGET_LINK_LIBRARIES(${libName} PUBLIC lapack blas)
     ENDIF()
   ENDIF()
 
   IF (HAVE_EXTRAE)
-    TARGET_LINK_LIBRARIES(${libName} ${Extrae_LIBRARY})
+    TARGET_LINK_LIBRARIES(${libName} PUBLIC ${Extrae_LIBRARY})
   ENDIF ()
 
   IF (HOMME_USE_TRILINOS)
-    TARGET_LINK_LIBRARIES(${libName} ${Trilinos_LIBRARIES} ${Trilinos_TPL_LIBRARIES})
+    TARGET_LINK_LIBRARIES(${libName} PUBLIC ${Trilinos_LIBRARIES} ${Trilinos_TPL_LIBRARIES})
   ENDIF()
 
   IF (HOMME_USE_ARKODE AND "${execType}" STREQUAL "theta-l")
-    TARGET_LINK_LIBRARIES(${libName} sundials_farkode)
-    TARGET_LINK_LIBRARIES(${libName} sundials_arkode)
-    TARGET_LINK_LIBRARIES(${libName} sundials_nvecserial)
-    TARGET_LINK_LIBRARIES(${libName} sundials_fnvecserial)
+    TARGET_LINK_LIBRARIES(${libName} PUBLIC sundials_farkode)
+    TARGET_LINK_LIBRARIES(${libName} PUBLIC sundials_arkode)
+    TARGET_LINK_LIBRARIES(${libName} PUBLIC sundials_nvecserial)
+    TARGET_LINK_LIBRARIES(${libName} PUBLIC sundials_fnvecserial)
   ENDIF ()
 
 endmacro(createExecLib)
@@ -357,16 +373,108 @@ macro (setUpTestDir TEST_DIR)
     MESSAGE(FATAL_ERROR "In test ${TEST_NAME} NUM_CPUS not defined. Quitting")
   ENDIF ()
   IF (NOT ${HOMME_QUEUING})
-    IF (NOT ${USE_NUM_PROCS} STREQUAL "")
-    #IF (USE_NUM_PROCS)
-      #FILE(APPEND ${THIS_TEST_SCRIPT} "num_cpus=${USE_NUM_PROCS}\n") # new line
-      SET(NUM_CPUS ${USE_NUM_PROCS})
-    ELSEIF (${NUM_CPUS} GREATER ${MAX_NUM_PROCS})
-      ##MESSAGE(STATUS "For ${TEST_NAME} the requested number of CPU processes is larger than the number available")
-      ##MESSAGE(STATUS "  Changing NUM_CPU from ${NUM_CPUS} to ${MAX_NUM_PROCS}")
-      ##SET(NUM_CPUS ${MAX_NUM_PROCS})
-      #FILE(APPEND ${THIS_TEST_SCRIPT} "num_cpus=${MAX_NUM_PROCS}\n") # new line
-      SET(NUM_CPUS ${MAX_NUM_PROCS})
+    # Individual tests may set MAX_NUM_CPUS in their .cmake file to cap the
+    # maximum MPI rank count for that test (e.g. for RRM meshes or
+    # multi-element semi-Lagrangian halos).
+    SET(_HOMME_MAX_PROCS ${MAX_NUM_PROCS})
+    IF (MAX_NUM_CPUS AND MAX_NUM_CPUS LESS _HOMME_MAX_PROCS)
+      SET(_HOMME_MAX_PROCS ${MAX_NUM_CPUS})
+    ENDIF ()
+    IF (${NUM_CPUS} GREATER ${_HOMME_MAX_PROCS})
+      # Cap NUM_CPUS at _HOMME_MAX_PROCS.  When CIME passes USE_NUM_PROCS (e.g.
+      # from a _P96 test option), test_execs/CMakeLists.txt maps it to
+      # MAX_NUM_PROCS so it is treated as "up to N ranks available" rather than
+      # "every test must use exactly N ranks".
+      MESSAGE(STATUS "Test ${TEST_NAME}: lowering NUM_CPUS from ${NUM_CPUS} to ${_HOMME_MAX_PROCS} (MAX_NUM_PROCS=${MAX_NUM_PROCS}, MAX_NUM_CPUS=${MAX_NUM_CPUS})")
+      SET(NUM_CPUS ${_HOMME_MAX_PROCS})
+    ENDIF ()
+    # Raise NUM_CPUS toward _HOMME_MAX_PROCS when there is headroom.  Find the
+    # largest valid MPI count for this test's problem size: the largest divisor
+    # of the total element count that is <= _HOMME_MAX_PROCS.  For a cube-sphere
+    # grid (topology "cube" or no topology set) total_elements = 6*ne^2; for a
+    # planar grid total_elements = ne_x*ne_y.  We scan all namelist files for
+    # ne/ne_x/ne_y, using the first file that contains a non-zero value.  This
+    # is necessary because FILE(GLOB) sorts files alphabetically, so a mesh-file
+    # namelist with "ne = 0" may sort ahead of the regular namelist with a
+    # non-zero ne (e.g. swtc6-short-exodus.nl sorts before swtc6-short.nl).
+    # Both hard-coded values (e.g. ne = 10) and CMake-variable references
+    # (e.g. ne = ${HOMME_TEST_NE}) are handled.
+    IF (${NUM_CPUS} LESS ${_HOMME_MAX_PROCS} AND NAMELIST_FILES)
+      SET(_HOMME_TOTAL_ELEM 0)
+      FOREACH (_HOMME_NL_FILE ${NAMELIST_FILES})
+       IF (EXISTS "${_HOMME_NL_FILE}" AND _HOMME_TOTAL_ELEM EQUAL 0)
+        FILE(READ "${_HOMME_NL_FILE}" _HOMME_NL_CONTENTS)
+        # Determine topology: planar if ne_x/ne_y present, cube otherwise.
+          IF ("${_HOMME_NL_CONTENTS}" MATCHES "ne_x[ \t]*=[ \t]*([0-9]+)")
+          SET(_HOMME_NE_X "${CMAKE_MATCH_1}")
+          IF ("${_HOMME_NL_CONTENTS}" MATCHES "ne_y[ \t]*=[ \t]*([0-9]+)")
+            SET(_HOMME_NE_Y "${CMAKE_MATCH_1}")
+          ELSE ()
+            # ne_y not found; assume square domain (ne_y = ne_x).
+            # Note: this silently produces total_elem = ne_x^2, which is correct
+            # for square planar grids.  For non-square grids the namelist should
+            # always define ne_y explicitly to avoid miscalculation.
+            SET(_HOMME_NE_Y "${_HOMME_NE_X}")
+            MESSAGE(STATUS "Test ${TEST_NAME}: ne_y not found in namelist; assuming ne_y = ne_x = ${_HOMME_NE_X} for MPI-count computation")
+          ENDIF ()
+          MATH(EXPR _HOMME_TOTAL_ELEM "${_HOMME_NE_X} * ${_HOMME_NE_Y}")
+        ELSE ()
+          # Cube-sphere: look for ne = <literal> or ne = ${HOMME_TEST_NE}.
+          # Skip ne = 0, which means the namelist uses a mesh file; a later
+          # namelist in the list may supply the actual (non-zero) ne value.
+          IF ("${_HOMME_NL_CONTENTS}" MATCHES "[\n\t ]ne[ \t]*=[ \t]*([0-9]+)")
+            SET(_HOMME_NE_VAL "${CMAKE_MATCH_1}")
+          ELSEIF ("${_HOMME_NL_CONTENTS}" MATCHES "[\n\t ]ne[ \t]*=[ \t]*\\$\\{HOMME_TEST_NE\\}")
+            SET(_HOMME_NE_VAL "${HOMME_TEST_NE}")
+          ELSE ()
+            SET(_HOMME_NE_VAL "")
+          ENDIF ()
+          IF (_HOMME_NE_VAL)
+            MATH(EXPR _HOMME_TOTAL_ELEM "6 * ${_HOMME_NE_VAL} * ${_HOMME_NE_VAL}")
+          ENDIF ()
+          # If _HOMME_NE_VAL is empty or "0", _HOMME_TOTAL_ELEM stays 0 and
+          # the FOREACH loop continues to the next namelist file.
+        ENDIF ()
+       ENDIF ()
+      ENDFOREACH ()
+      # Determine the best MPI count to use, up to _HOMME_MAX_PROCS.
+      #
+      # When total_elem is still 0 after scanning all namelists (e.g. a pure
+      # RRM mesh-file test with ne = 0 and no regular namelist), keep the
+      # test's authored NUM_CPUS rather than blindly raising to _HOMME_MAX_PROCS,
+      # since the mesh file may have fewer elements than _HOMME_MAX_PROCS.
+      #
+      # Only apply the divisor search when total_elem < _HOMME_MAX_PROCS, where
+      # we must cap at total_elem to avoid giving some ranks zero elements.
+      IF (_HOMME_TOTAL_ELEM EQUAL 0)
+        # Unknown grid size (e.g., RRM mesh file): keep authored NUM_CPUS.
+        MESSAGE(STATUS "Test ${TEST_NAME}: keeping NUM_CPUS at ${NUM_CPUS} (total_elem unknown/mesh-file, max_procs=${_HOMME_MAX_PROCS})")
+      ELSEIF (_HOMME_TOTAL_ELEM GREATER_EQUAL ${_HOMME_MAX_PROCS})
+        # Large grid: every rank gets >= 1 element at _HOMME_MAX_PROCS.
+        SET(_HOMME_BEST_CPUS ${_HOMME_MAX_PROCS})
+        MESSAGE(STATUS "Test ${TEST_NAME}: raising NUM_CPUS from ${NUM_CPUS} to ${_HOMME_BEST_CPUS} (total_elem=${_HOMME_TOTAL_ELEM}, max_procs=${_HOMME_MAX_PROCS})")
+        SET(NUM_CPUS ${_HOMME_BEST_CPUS})
+      ELSE ()
+        # Small grid (total_elem < _HOMME_MAX_PROCS): find the largest divisor
+        # of total_elem that is <= _HOMME_MAX_PROCS so no rank gets 0 elements.
+        # Algorithm: linear scan downward from total_elem (the natural cap)
+        # to NUM_CPUS+1, stopping at the first candidate that evenly divides
+        # total_elem.
+        SET(_HOMME_BEST_CPUS ${NUM_CPUS})
+        SET(_HOMME_CANDIDATE ${_HOMME_TOTAL_ELEM})
+        WHILE (_HOMME_CANDIDATE GREATER ${NUM_CPUS})
+          MATH(EXPR _HOMME_REM "${_HOMME_TOTAL_ELEM} % ${_HOMME_CANDIDATE}")
+          IF (_HOMME_REM EQUAL 0)
+            SET(_HOMME_BEST_CPUS ${_HOMME_CANDIDATE})
+            BREAK()
+          ENDIF ()
+          MATH(EXPR _HOMME_CANDIDATE "${_HOMME_CANDIDATE} - 1")
+        ENDWHILE ()
+        IF (_HOMME_BEST_CPUS GREATER ${NUM_CPUS})
+          MESSAGE(STATUS "Test ${TEST_NAME}: raising NUM_CPUS from ${NUM_CPUS} to ${_HOMME_BEST_CPUS} (total_elem=${_HOMME_TOTAL_ELEM}, max_procs=${_HOMME_MAX_PROCS})")
+          SET(NUM_CPUS ${_HOMME_BEST_CPUS})
+        ENDIF ()
+      ENDIF ()
     ENDIF ()
   ENDIF ()
   FILE(APPEND ${THIS_TEST_SCRIPT} "NUM_CPUS=${NUM_CPUS}\n") # new line
@@ -493,6 +601,7 @@ macro(resetTestVariables)
   SET(NC_OUTPUT_CHECKREF)
   SET(TESTCASE_REF_TOL)
   SET(NUM_CPUS)
+  SET(MAX_NUM_CPUS)
   SET(OMP_NAMELIST_FILES)
   SET(OMP_NUM_THREADS)
   SET(TRILINOS_XML_FILE)
@@ -782,7 +891,6 @@ function (make_profiles_up_to profile profiles)
 endfunction ()
 
 MACRO(CREATE_CXX_VS_F90_TESTS_WITH_PROFILE TESTS_LIST testProfile)
-
   FOREACH (TEST ${${TESTS_LIST}})
     SET (TEST_FILE_F90 "${TEST}.cmake")
 
@@ -790,20 +898,21 @@ MACRO(CREATE_CXX_VS_F90_TESTS_WITH_PROFILE TESTS_LIST testProfile)
     set (PROFILE ${testProfile})
     INCLUDE (${HOMME_SOURCE_DIR}/test/reg_test/run_tests/${TEST_FILE_F90})
 
+    set (TEST_NAME_SUFFIX)
     if ("${TEST}" MATCHES "theta-f")
-      SET (TEST_NAME_SUFFIX "ne${HOMME_TEST_NE}-nu${HOMME_TEST_NU}-ndays${HOMME_TEST_NDAYS}")
+      SET (TEST_NAME_SUFFIX "-ne${HOMME_TEST_NE}-nu${HOMME_TEST_NU}-ndays${HOMME_TEST_NDAYS}")
     elseif ("${TEST}" MATCHES "preqx-nlev")
-      SET (TEST_NAME_SUFFIX "ne${HOMME_TEST_NE}-ndays${HOMME_TEST_NDAYS}")
+      SET (TEST_NAME_SUFFIX "-ne${HOMME_TEST_NE}-ndays${HOMME_TEST_NDAYS}")
     endif ()
 
-    SET (F90_TEST_NAME "${TEST}-${TEST_NAME_SUFFIX}")
-    SET (CXX_TEST_NAME "${TEST}-kokkos-${TEST_NAME_SUFFIX}")
+    SET (F90_TEST_NAME "${TEST}${TEST_NAME_SUFFIX}")
+    SET (CXX_TEST_NAME "${TEST}-kokkos${TEST_NAME_SUFFIX}")
     SET (F90_DIR ${HOMME_BINARY_DIR}/tests/${F90_TEST_NAME})
     SET (CXX_DIR ${HOMME_BINARY_DIR}/tests/${CXX_TEST_NAME})
 
     # Compare netcdf output files bit-for-bit AND compare diagnostic lines
     # in the raw output files
-    SET (TEST_NAME "${TEST}-${TEST_NAME_SUFFIX}_cxx_vs_f90")
+    SET (TEST_NAME "${TEST}${TEST_NAME_SUFFIX}_cxx_vs_f90")
     MESSAGE ("-- Creating cxx-f90 comparison test ${TEST_NAME}")
 
     CONFIGURE_FILE (${HOMME_SOURCE_DIR}/cmake/CxxVsF90.cmake.in
@@ -817,6 +926,24 @@ MACRO(CREATE_CXX_VS_F90_TESTS_WITH_PROFILE TESTS_LIST testProfile)
       LABELS ${testProfile})
   ENDFOREACH ()
 ENDMACRO(CREATE_CXX_VS_F90_TESTS_WITH_PROFILE)
+
+function(check_transport_error_norms
+    TEST_NAME TCEN_ERROR_ANCHOR TCEN_FILENAME TCEN_UPPER_BOUNDS)
+  # Check prescribed-wind tracer transport test error-norm output, which is
+  # available with some of these tests. This function encapsulates the setup
+  # steps to add a check after a tracer transport test runs. See
+  # TransportCheckErrorNorms.cmake.in for details.
+  configure_file(
+    ${HOMME_SOURCE_DIR}/cmake/TransportCheckErrorNorms.cmake.in
+    ${HOMME_BINARY_DIR}/tests/${TEST_NAME}/check.cmake
+    @ONLY)
+  add_test(
+    NAME "${TEST_NAME}_l2err"
+    COMMAND ${CMAKE_COMMAND} -P check.cmake
+    WORKING_DIRECTORY ${HOMME_BINARY_DIR}/tests/${TEST_NAME})
+  set_tests_properties(
+    "${TEST_NAME}_l2err" PROPERTIES DEPENDS "${TEST_NAME}")
+endfunction()
 
 macro(testQuadPrec HOMME_QUAD_PREC)
 
@@ -892,3 +1019,32 @@ macro(setSrcMods SRCMODS_PATH SRCS_ALL)
   ENDFOREACH()
   SET(${SRCS_ALL} ${TMP_SRCS_ALL} CACHE INTERNAL "modified sources")
 endmacro(setSrcMods)
+
+# Sets NUM_CPUS = min(USE_NUM_PROCS, MPI_MAX_PROCS).
+# MPI_MAX_PROCS: maximum MPI ranks this test supports (default: 24).
+# Override by setting MPI_MAX_PROCS before calling this macro.
+#
+# Implicit inputs  (read from calling scope, CMake macro convention):
+#   USE_NUM_PROCS  -- the total MPI rank budget allocated by CIME (e.g. from a
+#                     _P24 test option).  If unset or 0, MPI_MAX_PROCS is used
+#                     as the rank count.
+#   MPI_MAX_PROCS  -- per-test rank ceiling (max ranks the problem can use
+#                     without wasting tasks or triggering "too many MPI tasks"
+#                     aborts).  Defaults to 24 if not set before the call.
+# Output (written to calling scope):
+#   NUM_CPUS       -- the resolved MPI rank count: min(USE_NUM_PROCS, MPI_MAX_PROCS).
+macro(set_mpi_num_cpus)
+  if(NOT DEFINED MPI_MAX_PROCS)
+    set(MPI_MAX_PROCS 24)
+  endif()
+  IF (USE_NUM_PROCS)
+    IF (${USE_NUM_PROCS} GREATER ${MPI_MAX_PROCS})
+      MESSAGE(STATUS "Test ${TEST_NAME}: lowering NUM_CPUS from ${USE_NUM_PROCS} to ${MPI_MAX_PROCS} (MPI_MAX_PROCS=${MPI_MAX_PROCS})")
+      SET (NUM_CPUS ${MPI_MAX_PROCS})
+    ELSE ()
+      SET (NUM_CPUS ${USE_NUM_PROCS})
+    ENDIF ()
+  ELSE ()
+    SET (NUM_CPUS ${MPI_MAX_PROCS})
+  ENDIF ()
+endmacro()

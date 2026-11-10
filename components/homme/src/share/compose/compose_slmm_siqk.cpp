@@ -20,8 +20,8 @@ class TestSphereToRefKernel {
 public:
   typedef Info value_type;
 
-  TestSphereToRefKernel (const ConstVec3s::HostMirror& p_hm,
-                         const ConstIdxs::HostMirror& e_hm,
+  TestSphereToRefKernel (const ConstVec3s::host_mirror_type& p_hm,
+                         const ConstIdxs::host_mirror_type& e_hm,
                          const bool sphere,
                          const Real tol = 1e1*std::numeric_limits<Real>::epsilon())
     : tol_(tol), sphere_(sphere)
@@ -60,8 +60,8 @@ public:
     // tol is on dx, not (a,b), so adjust slightly.
     if ( ! info.success || err > 1e4*tol_) {
       jinfo.nfails++;
-      printf("calc_sphere_to_ref ei %d i %d j %d: nits %d re %1.1e\n",
-             ei, i, j, info.n_iterations, err);
+      Kokkos::printf("calc_sphere_to_ref ei %d i %d j %d: nits %d re %1.1e\n",
+                     ei, i, j, info.n_iterations, err);
     }
     jinfo.sum_nits += info.n_iterations;
     jinfo.max_nits = max(jinfo.max_nits, info.n_iterations);
@@ -75,15 +75,15 @@ public:
   }
 
   KOKKOS_INLINE_FUNCTION
-  void join (volatile value_type& dst, volatile value_type const& src) const {
+  void join (value_type& dst, value_type const& src) const {
     dst.max_nits = max(dst.max_nits, src.max_nits);
     dst.sum_nits += src.sum_nits;
     dst.nfails += src.nfails;
   }
 };
 
-Int test_sphere_to_ref (const ConstVec3s::HostMirror& p,
-                        const ConstIdxs::HostMirror& e,
+Int test_sphere_to_ref (const ConstVec3s::host_mirror_type& p,
+                        const ConstIdxs::host_mirror_type& e,
                         const bool sphere) {
   TestSphereToRefKernel k(p, e, sphere);
   Info info;

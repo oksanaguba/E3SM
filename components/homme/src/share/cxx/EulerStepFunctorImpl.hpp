@@ -311,7 +311,7 @@ public:
 
     }
 
-    ExecSpace::impl_static_fence();
+    Kokkos::fence();
     profiling_pause();
   }
 
@@ -328,7 +328,7 @@ public:
                            m_geometry.num_elems() * m_data.qsize, m_tpref),
                          *this);
     }
-    ExecSpace::impl_static_fence();
+    Kokkos::fence();
     profiling_pause();
   }
 
@@ -421,7 +421,7 @@ public:
       Homme::get_default_team_policy<ExecSpace, AALSetupPhase>(
         m_geometry.num_elems(), m_tpref),
       *this);
-    ExecSpace::impl_static_fence();
+    Kokkos::fence();
     m_kernel_will_run_limiters = true;
     Kokkos::parallel_for(
       //to play with launch bounds
@@ -429,7 +429,7 @@ public:
       Homme::get_default_team_policy<ExecSpace, AALTracerPhase >(
         m_geometry.num_elems() * m_data.qsize, m_tpref),
       *this);
-    ExecSpace::impl_static_fence();
+    Kokkos::fence();
     m_kernel_will_run_limiters = false;
     profiling_pause();
   }
@@ -457,7 +457,7 @@ public:
             m_geometry.num_elems(), m_tpref),
         *this);
 
-    ExecSpace::impl_static_fence();
+    Kokkos::fence();
     profiling_pause();
   }
 
@@ -575,7 +575,7 @@ public:
               });
           }
       });
-    ExecSpace::impl_static_fence();
+    Kokkos::fence();
   }
 
   void neighbor_minmax_start() {
@@ -652,7 +652,10 @@ public:
         minmax_and_biharmonic();
       }
     }
+
+    GPTLstart("tl-at adv-n-limit");
     advect_and_limit();
+    GPTLstop("tl-at adv-n-limit");
     exchange_qdp_dss_var();
   }
 
@@ -667,6 +670,7 @@ private:
   void run_tracer_phase (const KernelVariables& kv) const {
     compute_qtens(kv);
     kv.team_barrier();
+
     if (m_data.limiter_option == 8) {
       limiter_optim_iter_full(kv);
       kv.team_barrier();
@@ -674,6 +678,7 @@ private:
       limiter_clip_and_sum(kv);
       kv.team_barrier();
     }
+
     apply_spheremp(kv);
   }
 

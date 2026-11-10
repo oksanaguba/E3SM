@@ -77,7 +77,7 @@ int Timer::cnt_[Timer::NTIMERS];
 
 template <typename ES>
 void QLT<ES>::init (const std::string& name, IntList& d,
-                    typename IntList::HostMirror& h, size_t n) {
+                    typename IntList::host_mirror_type& h, size_t n) {
   d = IntList("QLT " + name, n);
   h = Kokkos::create_mirror_view(d);
 }
@@ -176,7 +176,7 @@ void QLT<ES>::BulkData::init (Real* buf1, const size_t& l2r_sz,
 }
 
 template <typename ES>
-void init_device_data (const tree::NodeSets& ns, tree::NodeSetsHostData& h,
+void init_device_data (const tree::NodeSets& ns, tree::NodeSetsHostData<ES>& h,
                        tree::NodeSetsDeviceData<ES>& d) {
   typedef tree::NodeSetsDeviceData<ES> NSDD;
   d.node = typename NSDD::NodeList("NSDD::node", ns.nnode());
@@ -209,7 +209,7 @@ void QLT<ES>::init (const Parallel::Ptr& p, const Int& ncells,
   p_ = p;
   Timer::start(Timer::analyze);
   ns_ = tree::analyze(p, ncells, tree);
-  nshd_ = std::make_shared<tree::NodeSetsHostData>();
+  nshd_ = std::make_shared<tree::NodeSetsHostData<ES> >();
   nsdd_ = std::make_shared<tree::NodeSetsDeviceData<ES> >();
   init_device_data(*ns_, *nshd_, *nsdd_);
   init_ordinals();
@@ -434,7 +434,7 @@ template <typename ES> void QLT<ES>
   for (size_t i = 0; i < lvl.me.size(); ++i) {
     const auto& mmd = lvl.me[i];
     mpi::isend(*p_, o.bd_.l2r_data.data() + mmd.offset*l2rndps, mmd.size*l2rndps,
-               mmd.rank, tree::NodeSets::mpitag);
+               mmd.rank, tree::NodeSets::mpitag, &lvl.me_send_req[i]);
   }  
 }
 
@@ -459,7 +459,7 @@ template <typename ES> void QLT<ES>
     // If QLT is enforcing global mass conservation, set root's r2l Qm value to
     // the l2r Qm_prev's sum; otherwise, copy the l2r Qm value to the r2l one.
     const Int os = (problem_type & ProblemType::conserve ?
-                    o.md_.get_problem_type_l2r_bulk_size(problem_type) - 1 :
+                    MetaData::get_problem_type_l2r_bulk_size(problem_type) - 1 :
                     (problem_type & ProblemType::nonnegative ? 0 : 1));
     r2l_data(n.offset*r2lndps + r2lbdi) = l2r_data(n.offset*l2rndps + l2rbdi + os);
     if ((problem_type & ProblemType::consistent) &&
@@ -484,6 +484,7 @@ template <typename ES> void QLT<ES>
   }
   Timer::start(Timer::waitall);
   mpi::waitall(lvl.me_recv_req.size(), lvl.me_recv_req.data());
+  mpi::waitall(lvl.me_send_req.size(), lvl.me_send_req.data());
   Timer::stop(Timer::waitall);
 }
 
@@ -608,7 +609,7 @@ template <typename ES> void QLT<ES>
   for (size_t i = 0; i < lvl.kids.size(); ++i) {
     const auto& mmd = lvl.kids[i];
     mpi::isend(*p_, o.bd_.r2l_data.data() + mmd.offset*r2lndps, mmd.size*r2lndps,
-               mmd.rank, tree::NodeSets::mpitag);
+               mmd.rank, tree::NodeSets::mpitag, &lvl.kids_req[i]);
   }
 }
 
@@ -636,6 +637,13 @@ void QLT<ES>::run () {
     r2l_solve_qp(il-1, l2rndps, r2lndps);
     if (lvl.kids.size()) r2l_send_to_kids(lvl, r2lndps);
   }
+  Timer::start(Timer::waitall);
+  for (size_t il = 0; il < ns_->levels.size(); ++il) {
+    auto& lvl = ns_->levels[il];
+    if (lvl.kids.size())
+      mpi::waitall(lvl.kids_req.size(), lvl.kids_req.data());
+  }
+  Timer::stop(Timer::waitall);
   Timer::stop(Timer::qltrunr2l);
 }
 
@@ -703,6 +711,7 @@ private:
       qlt_.set_buffers(buf1_.data(), buf2_.data());
     }
     qlt_.finish_setup();
+#ifndef NDEBUG
     cedr_assert(qlt_.get_num_tracers() == static_cast<Int>(tracers_.size()));
     for (size_t i = 0; i < tracers_.size(); ++i) {
       const auto pt = qlt_.get_problem_type(i);
@@ -711,6 +720,7 @@ private:
                   (pt == ((tracers_[i].problem_type | ProblemType::nonnegative) &
                           ~ProblemType::consistent)));
     }
+#endif
   }
   
   void run_impl (const Int trial) override {

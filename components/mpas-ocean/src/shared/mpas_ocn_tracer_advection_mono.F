@@ -66,7 +66,7 @@ module ocn_tracer_advection_mono
    subroutine ocn_tracer_advection_mono_tend( &
                                         tend, tracers, layerThickness, &
                                         normalThicknessFlux, w, dt,    &
-                                        computeBudgets)!{{{
+                                        computeBudgets, skipTracer)!{{{
 
       !-----------------------------------------------------------------
       ! Input/Output parameters
@@ -93,6 +93,9 @@ module ocn_tracer_advection_mono
       logical, intent(in) :: &
          computeBudgets        !< [in] Flag to compute active tracer budgets
 
+      logical, dimension(:), intent(in) :: &
+         skipTracer            !< [in] Flag to skip tracer in tracers
+
       !-----------------------------------------------------------------
       ! Local variables
       !-----------------------------------------------------------------
@@ -116,10 +119,6 @@ module ocn_tracer_advection_mono
          tracerWeight,      &! tracer weighting temporary
          invAreaCell1,      &! inverse cell area
          coef1, coef3        ! temporary coefficients
-
-      real (kind=RKIND), dimension(:), allocatable :: &
-         wgtTmp,            &! vertical temporaries for
-         flxTmp, sgnTmp      !   high-order flux computation
 
       real (kind=RKIND), dimension(:,:), allocatable :: &
          tracerCur,     &! reordered current tracer
@@ -148,10 +147,7 @@ module ocn_tracer_advection_mono
       numTracers  = size(tracers,dim=1)
 
       ! allocate temporary arrays
-      allocate(wgtTmp      (nVertLevels), &
-               flxTmp      (nVertLevels), &
-               sgnTmp      (nVertLevels), &
-               tracerCur   (nVertLevels  ,nCellsAll+1), &
+      allocate(tracerCur   (nVertLevels  ,nCellsAll+1), &
                tracerMin   (nVertLevels  ,nCellsAll), &
                tracerMax   (nVertLevels  ,nCellsAll), &
                hNewInv     (nVertLevels  ,nCellsAll), &
@@ -163,8 +159,7 @@ module ocn_tracer_advection_mono
                lowOrderFlx (nVertLevels+1,max(nCellsAll,nEdgesAll)+1), &
                highOrderFlx(nVertLevels+1,max(nCellsAll,nEdgesAll)+1))
 
-      !$acc enter data create(wgtTmp, flxTmp, sgnTmp, &
-      !$acc                   tracerCur, tracerMin, tracerMax, &
+      !$acc enter data create(tracerCur, tracerMin, tracerMax, &
       !$acc                   hNewInv, hProv, hProvInv, flxIn, flxOut, &
       !$acc                   workTend, lowOrderFlx, highOrderFlx)
 
@@ -228,6 +223,7 @@ module ocn_tracer_advection_mono
 
       ! Loop over tracers. One tracer is advected at a time.
       do iTracer = 1, numTracers
+        if (skipTracer(iTracer)) cycle
 
 #ifdef _ADV_TIMERS
         call mpas_timer_start('cell init')
@@ -315,12 +311,12 @@ module ocn_tracer_advection_mono
         !$acc            tracerCur, normalThicknessFlux, &
         !$acc            highOrderFlx, lowOrderFlx) &
         !$acc    private(i, k, icell, cell1, cell2, coef1, coef3, &
-        !$acc            wgtTmp, sgnTmp, flxTmp, tracerWeight)
+        !$acc            tracerWeight)
 #else
         !$omp parallel
         !$omp do schedule(runtime) &
         !$omp    private(i, k, icell, cell1, cell2, coef1, coef3, &
-        !$omp            wgtTmp, sgnTmp, flxTmp, tracerWeight)
+        !$omp            tracerWeight)
 #endif
         do iEdge = 1, nEdges
            cell1 = cellsOnEdge(1, iEdge)
@@ -328,11 +324,7 @@ module ocn_tracer_advection_mono
 
            ! compute some common intermediate factors
            do k = 1, nVertLevels
-              wgtTmp(k) = normalThicknessFlux(k,iEdge)* &
-                          advMaskHighOrder(k,iEdge)
-              sgnTmp(k) = sign(1.0_RKIND, &
-                               normalThicknessFlux(k,iEdge))
-              flxTmp(k) = 0.0_RKIND
+              highOrderFlx(k,iEdge) = 0.0_RKIND
            end do
 
            ! Compute 3rd or 4th fluxes where requested.
@@ -341,14 +333,15 @@ module ocn_tracer_advection_mono
               coef1 = advCoefs       (i,iEdge)
               coef3 = advCoefs3rd    (i,iEdge)*coef3rdOrder
               do k = minLevelCell(iCell), maxLevelCell(iCell)
-                 flxTmp(k) = flxTmp(k) + tracerCur(k,iCell)* &
-                             wgtTmp(k)*(coef1 + coef3*sgnTmp(k))
+                 highOrderFlx(k,iEdge) = highOrderFlx(k,iEdge) &
+                           + tracerCur(k,iCell)* &
+                             normalThicknessFlux(k,iEdge)* &
+                             advMaskHighOrder(k,iEdge)* &
+                             (coef1 + coef3* &
+                              sign(1.0_RKIND, &
+                                   normalThicknessFlux(k,iEdge)))
               end do ! k loop
            end do ! i loop over nAdvCellsForEdge
-
-           do k=1,nVertLevels
-              highOrderFlx(k,iEdge) = flxTmp(k)
-           end do
 
            ! Compute 2nd order fluxes where needed.
            ! Also compute low order upwind horizontal flux (monotonic)
@@ -975,15 +968,11 @@ module ocn_tracer_advection_mono
 #ifdef _ADV_TIMERS
       call mpas_timer_start('deallocates')
 #endif
-      !$acc exit data delete(wgtTmp, flxTmp, sgnTmp, &
-      !$acc                  tracerCur, tracerMin, tracerMax, &
+      !$acc exit data delete(tracerCur, tracerMin, tracerMax, &
       !$acc                  hNewInv, hProv, hProvInv, flxIn, flxOut, &
       !$acc                  workTend, lowOrderFlx, highOrderFlx)
 
-      deallocate(wgtTmp,       &
-                 flxTmp,       &
-                 sgnTmp,       &
-                 tracerCur,    &
+      deallocate(tracerCur,    &
                  tracerMin,    &
                  tracerMax,    &
                  hNewInv,      &

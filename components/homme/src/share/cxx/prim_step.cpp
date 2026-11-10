@@ -17,6 +17,7 @@ namespace Homme
 {
 
 void prim_advance_exp (TimeLevel& tl, const Real dt, const bool compute_diagnostics);
+void prim_advec_tracers_observe_velocity (const int step);
 void prim_advec_tracers_remap (const Real);
 void vertical_remap (const Real);
 
@@ -60,7 +61,7 @@ static void set_tracer_transport_derived_values (
       }
     });
   }
-  ExecSpace::impl_static_fence();
+  Kokkos::fence();
   GPTLstop("tl-s deep_copy+derived_dp");  
 }
 
@@ -131,20 +132,19 @@ void prim_step_flexible (const Real dt, const bool compute_diagnostics) {
   bool apply_forcing;
 
   const auto dt_q =        dt * params.dt_tracer_factor;
-  //standalone homme nsplit=1
+  // In standalone HOMME, nsplit=1 always.
   const auto dt_q_nsplit = dt * params.dt_tracer_factor * params.nsplit;
   
-  //decide on tracer forcing
+  // Decide on tracer forcing.
 #if defined(CAM) || defined(SCREAM)
-  //CAM + xx supports only ftype2 and ftype0
-  apply_forcing = ( params.ftype == ForcingAlg::FORCING_0 ) ||
-                  ( params.ftype == ForcingAlg::FORCING_2  && params.nsplit_iteration == 1 );
+  // CAM + xx supports only ftype 0 and 2.
+  apply_forcing = (params.ftype == ForcingAlg::FORCING_0) ||
+                  (params.ftype == ForcingAlg::FORCING_2 && params.nsplit_iteration == 1);
 #else
   apply_forcing = forcing_0or2;
 #endif
 
   if (apply_forcing) {
-
     if (params.ftype == ForcingAlg::FORCING_0) apply_cam_forcing_tracers(dt_q);
     if (params.ftype == ForcingAlg::FORCING_2) apply_cam_forcing_tracers(dt_q_nsplit);
   }
@@ -167,13 +167,15 @@ void prim_step_flexible (const Real dt, const bool compute_diagnostics) {
       }
     }
 
-    prim_advance_exp(tl, dt, compute_diagnostics);
+    prim_advance_exp(tl, dt, compute_diagnostics_it);
     tl.tevolve += dt;
 
+    bool observe = false;
     if (params.dt_remap_factor == 0) {
       // Since dt_remap == 0, the only part of vertical_remap that is active is
       // the updates to ps_v(:,:,np1) and dp3d(:,:,:,np1).
       vertical_remap(dt_remap);
+      observe = true;
     } else if ((n+1) % params.dt_remap_factor == 0) {
       if (compute_diagnostics)
         context.get<Diagnostics>().run_diagnostics(false, 3);
@@ -184,9 +186,14 @@ void prim_step_flexible (const Real dt, const bool compute_diagnostics) {
                               Errors::err_not_implemented);
       } else {
         // Remap dynamics variables but not tracers.
+        GPTLstart("tl-sc vertical_remap");
         vertical_remap(dt_remap);
+        GPTLstop("tl-sc vertical_remap");
       }
+      observe = true;
     }
+    if (observe)
+      prim_advec_tracers_observe_velocity(n);
   }
 
   if (params.qsize > 0)

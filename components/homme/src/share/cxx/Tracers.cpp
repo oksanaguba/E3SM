@@ -32,7 +32,10 @@ void Tracers::init(const int num_elems, const int num_tracers)
   nt = num_tracers;
 
   qdp = decltype(qdp)("tracers mass", num_elems);
-  qtens_biharmonic = decltype(qtens_biharmonic)("qtens(_biharmonic)", num_elems);
+  // Also used in ComposeTransportImplEnhancedTrajectory for communication,
+  // where 4 slots are needed.
+  qtens_biharmonic = decltype(qtens_biharmonic)(
+    "qtens(_biharmonic)", num_elems, std::max(4, num_tracers));
   qlim = decltype(qlim)("qlim", num_elems);
 
   Q = decltype(Q)("tracers concentration", num_elems,num_tracers);
@@ -67,6 +70,22 @@ void Tracers::push_qdp(F90Ptr &state_qdp) const {
       Real * [Q_NUM_TIME_LEVELS][QSIZE_D][NUM_PHYSICAL_LEV][NP][NP]>
   state_qdp_f90(state_qdp, qdp.extent_int(0));
   sync_to_host(qdp, state_qdp_f90);
+}
+
+void Tracers::push_qdp(F90Ptr &state_qdp, const int src_qdp_tl,
+                       const int dst_qdp_tl) const {
+  HostViewUnmanaged<
+      Real * [Q_NUM_TIME_LEVELS][QSIZE_D][NUM_PHYSICAL_LEV][NP][NP]>
+  state_qdp_f90(state_qdp, qdp.extent_int(0));
+  sync_to_host(qdp, state_qdp_f90, src_qdp_tl, dst_qdp_tl);
+}
+
+HashType Tracers::hash (const int tl) const {  
+  HashType accum = 0;
+  Homme::hash(tl, qdp, NUM_PHYSICAL_LEV, accum);
+  Homme::hash(      Q, NUM_PHYSICAL_LEV, accum);
+  Homme::hash(     fq, NUM_PHYSICAL_LEV, accum);
+  return accum;
 }
 
 } // namespace Homme

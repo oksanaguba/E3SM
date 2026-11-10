@@ -3,17 +3,17 @@ module atm_comp_mct
   use pio              , only: file_desc_t, io_desc_t, var_desc_t, pio_double, pio_def_dim, &
                                pio_put_att, pio_enddef, pio_initdecomp, pio_read_darray, pio_freedecomp, &
                                pio_closefile, pio_write_darray, pio_def_var, pio_inq_varid, &
-	                       pio_noerr, pio_bcast_error, pio_internal_error, pio_seterrorhandling 
+	                       pio_noerr, pio_bcast_error, pio_internal_error, pio_seterrorhandling
   use mct_mod
   use seq_comm_mct     , only: info_taskmap_comp
   use seq_cdata_mod
   use esmf
 
-  use seq_flds_mod
+  use seq_flds_mod ! for seq_flds_x2a_fields, seq_flds_dom_fields, etc
   use seq_infodata_mod
   use seq_timemgr_mod
 
-  use shr_kind_mod     , only: r8 => shr_kind_r8, cl=>shr_kind_cl
+  use shr_kind_mod     , only: r8 => shr_kind_r8, cl=>shr_kind_cl, cxx=>shr_kind_cxx
   use shr_kind_mod     , only: cs => shr_kind_cs
   use shr_file_mod     , only: shr_file_getunit, shr_file_freeunit, &
                                shr_file_setLogUnit, shr_file_setLogLevel, &
@@ -23,16 +23,19 @@ module atm_comp_mct
   use shr_taskmap_mod  , only: shr_taskmap_write
 
   use cam_cpl_indices
+
+  ! this has atm_import, atm_export
   use atm_import_export
+
   use cam_comp
   use cam_instance     , only: cam_instance_init, inst_index, inst_suffix
   use cam_control_mod  , only: nsrest, aqua_planet, eccen, obliqr, lambm0, mvelpp
   use radiation        , only: radiation_do, radiation_nextsw_cday
   use phys_grid        , only: get_ncols_p, ngcols, get_gcol_p, get_rlat_all_p, &
 	                       get_rlon_all_p, get_area_all_p
-  use ppgrid           , only: pcols, begchunk, endchunk       
+  use ppgrid           , only: pcols, begchunk, endchunk
   use dyn_grid         , only: get_horiz_grid_dim_d
-  use camsrfexch       , only: cam_out_t, cam_in_t     
+  use camsrfexch       , only: cam_out_t, cam_in_t
   use cam_restart      , only: get_restcase, get_restartdir
   use cam_history      , only: outfld, ctitle
   use cam_abortutils       , only: endrun
@@ -53,8 +56,18 @@ module atm_comp_mct
   use cam_logfile      , only: iulog
   use co2_cycle        , only: co2_readFlux_ocn, co2_readFlux_fuel
   use runtime_opts     , only: read_namelist
-  use scamMod          , only: single_column,scmlat,scmlon
+
+  use iop_data_mod     , only: single_column,scmlat,scmlon,scm_multcols
   use lnd_infodata     , only: precip_downscaling_method !Precipitation downscaling method used in the land model
+
+#ifdef HAVE_MOAB
+  use seq_comm_mct     , only: mphaid ! atm physics grid id in MOAB, on atm pes
+  use iso_c_binding
+  use seq_comm_mct,     only : num_moab_exports
+  use iMOAB, only:    iMOAB_SetDoubleTagStorage, iMOAB_WriteMesh, iMOAB_GetDoubleTagStorage
+#endif
+
+
 !
 ! !PUBLIC TYPES:
   implicit none
@@ -75,9 +88,13 @@ module atm_comp_mct
 
   private :: atm_setgsmap_mct
   private :: atm_domain_mct
+#ifdef HAVE_MOAB
+  private :: atm_read_srfrest_moab
+  private :: atm_write_srfrest_moab
+#else
   private :: atm_read_srfrest_mct
   private :: atm_write_srfrest_mct
-
+#endif
 !--------------------------------------------------------------------------
 ! Private data
 !--------------------------------------------------------------------------
@@ -92,18 +109,31 @@ module atm_comp_mct
   ! Filename specifier for restart surface file
   character(len=cl) :: rsfilename_spec_cam
 
-  ! Are all surface types present   
+  ! Are all surface types present
   logical :: lnd_present ! if true => land is present
   logical :: ocn_present ! if true => ocean is present
 
   integer,                 pointer :: dof(:) ! needed for pio_init decomp for restarts
   type(seq_infodata_type), pointer :: infodata
-!
+
+#ifdef HAVE_MOAB
+  integer,       pointer :: global_ids(:) ! they could be dof(), but better maintain our own list
+  ! to store all fields to be set in moab
+  integer                :: mblsize, totalmbls, nsend, totalmbls_r, nrecv
+  real(r8) , allocatable :: a2x_am(:,:) ! atm to coupler, on atm mesh, on atm component pes
+  real(r8) , allocatable :: a2x_am2(:,:) !transposed a2x_am2
+  real(r8) , allocatable :: x2a_am(:,:) ! coupler to atm, on atm mesh, on atm component pes
+  real(r8) , allocatable :: x2a_am2(:,:) ! transposed x2a_am
+#endif
+
 !================================================================================
 CONTAINS
 !================================================================================
 
   subroutine atm_init_mct( EClock, cdata_a, x2a_a, a2x_a, NLFilename )
+
+    use phys_control,     only: iac_present
+    use shr_log_mod      , only : errMsg => shr_log_errMsg
 
     !-----------------------------------------------------------------------
     !
@@ -112,7 +142,7 @@ CONTAINS
     type(ESMF_Clock),intent(inout)              :: EClock
     type(seq_cdata), intent(inout)              :: cdata_a
     type(mct_aVect), intent(inout)              :: x2a_a
-    type(mct_aVect), intent(inout)              :: a2x_a   
+    type(mct_aVect), intent(inout)              :: a2x_a
     character(len=*), optional,   intent(IN)    :: NLFilename ! Namelist filename
     !
     ! Locals
@@ -127,11 +157,11 @@ CONTAINS
     integer :: iradsw
     logical :: exists           ! true if file exists
     real(r8):: nextsw_cday      ! calendar of next atm shortwave
-    integer :: stepno           ! time step			 
+    integer :: stepno           ! time step
     integer :: dtime_sync       ! integer timestep size
     integer :: currentymd       ! current year-month-day
     integer :: dtime            ! time step increment (sec)
-    integer :: atm_cpl_dt       ! driver atm coupling time step 
+    integer :: atm_cpl_dt       ! driver atm coupling time step
     integer :: nstep            ! CAM nstep
     real(r8):: caldayp1         ! CAM calendar day for for next cam time step
     integer :: dtime_cam        ! Time-step increment (sec)
@@ -159,6 +189,12 @@ CONTAINS
                                 ! data structure, If 1D data structure, then
                                 ! hdim2_d == 1.
     character(len=64) :: filein ! Input namelist filename
+
+#ifdef HAVE_MOAB
+    integer :: ent_type, ierr
+    character(CXX) :: tagname
+#endif
+
     !-----------------------------------------------------------------------
     !
     ! Determine cdata points
@@ -167,14 +203,18 @@ CONTAINS
     if(masterproc) then
       lbnum=1
       call memmon_dump_fort('memmon.out','atm_init_mct:start::',lbnum)
-    endif                      
-#endif                         
+    endif
+#endif
 
     call seq_cdata_setptrs(cdata_a, ID=ATMID, mpicom=mpicom_atm, &
          gsMap=gsMap_atm, dom=dom_a, infodata=infodata)
 
+#ifdef MOABDEBUG
+    call seq_timemgr_EClockGetData( EClock, stepno=cur_atm_stepno )
+#endif
+
     if (first_time) then
-       
+
        call cam_instance_init(ATMID)
 
        ! Set filename specifier for restart surface file
@@ -183,14 +223,18 @@ CONTAINS
 
        ! Determine attribute vector indices
 
+       ! Get iac_present from infodata BEFORE cam_cpl_indices_set
+       ! so that IAC coupling indices are properly initialized
+       call seq_infodata_GetData( infodata, iac_present=iac_present)
+
        call cam_cpl_indices_set()
 
        ! Initialize MPI for CAM
 
        call spmdinit(mpicom_atm, calc_proc_smp_map=.false.)
-       
+
        ! Redirect share output to cam log
-       
+
        if (masterproc) then
           inquire(file='atm_modelio.nml'//trim(inst_suffix), exist=exists)
           if (exists) then
@@ -199,7 +243,7 @@ CONTAINS
           endif
           write(iulog,*) "CAM atmosphere model initialization"
        endif
-       
+
        call shr_file_getLogUnit (shrlogunit)
        call shr_file_getLogLevel(shrloglev)
        call shr_file_setLogUnit (iulog)
@@ -245,14 +289,14 @@ CONTAINS
        call shr_sys_flush(iulog)
        call t_stopf('shr_taskmap_write')
 
-       ! 
-       ! Consistency check                              
+       !
+       ! Consistency check
        !
        if (co2_readFlux_ocn .and. index_x2a_Faoo_fco2_ocn /= 0) then
           write(iulog,*)'error co2_readFlux_ocn and index_x2a_Faoo_fco2_ocn cannot both be active'
           call shr_sys_abort()
        end if
-       ! 
+       !
        ! Get data from infodata object
        !
        call seq_infodata_GetData( infodata,                                           &
@@ -262,9 +306,18 @@ CONTAINS
             brnch_retain_casename=brnch_retain_casename,                              &
             hostname=hostname, username=username, model_version=version,              &
             single_column=single_column, scmlat=scmlat, scmlon=scmlon,                &
+            scm_multcols=scm_multcols,                                                &
             orb_eccen=eccen, orb_mvelpp=mvelpp, orb_lambm0=lambm0, orb_obliqr=obliqr, &
-            lnd_present=lnd_present, ocn_present=ocn_present,                         &
+            lnd_present=lnd_present, ocn_present=ocn_present, iac_present=iac_present, & 
             perpetual=perpetual_run, perpetual_ymd=perpetual_ymd)
+
+       ! Don't read in co2 data if iac is present
+       ! Currently, iac is always prognostic if it is present - may need to
+       ! check this if this changes
+       if (iac_present .and. co2_readFlux_fuel) then
+          call endrun('co2_readFlux_fuel should be false as it is not supported if EHC component is present'//errMsg(__FILE__, __LINE__))
+       end if
+
        !
        ! Get nsrest from startup type methods
        !
@@ -292,7 +345,7 @@ CONTAINS
        call t_startf('read_namelist')
        filein = "atm_in" // trim(inst_suffix)
        call read_namelist(single_column_in=single_column, scmlat_in=scmlat, &
-            scmlon_in=scmlon, nlfilename_in=filein)
+            scmlon_in=scmlon, scm_multcols_in=scm_multcols, nlfilename_in=filein)
        call t_stopf('read_namelist')
        !
        ! Initialize cam time manager
@@ -306,11 +359,11 @@ CONTAINS
                perpetual_ymd=perpetual_ymd )
        end if
        !
-       ! First phase of cam initialization 
-       ! Initialize mpicom_atm, allocate cam_in and cam_out and determine 
-       ! atm decomposition (needed to initialize gsmap) 
+       ! First phase of cam initialization
+       ! Initialize mpicom_atm, allocate cam_in and cam_out and determine
+       ! atm decomposition (needed to initialize gsmap)
        ! for an initial run, cam_in and cam_out are allocated in cam_initial
-       ! for a restart/branch run, cam_in and cam_out are allocated in restart 
+       ! for a restart/branch run, cam_in and cam_out are allocated in restart
        ! Set defaults then override with user-specified input and initialize time manager
        ! Note that the following arguments are needed to cam_init for timemgr_restart only
        !
@@ -336,21 +389,53 @@ CONTAINS
        ! Set dof (module variable, needed for pio for restarts)
        call mct_gsmap_orderedpoints(gsmap_atm, iam, dof)
        !
-       ! Initialize MCT domain 
+       ! Initialize MCT domain and add data
        !
        call atm_domain_mct( lsize, gsMap_atm, dom_a )
-       !
+
        ! Initialize MCT attribute vectors
        !
        call mct_aVect_init(a2x_a, rList=seq_flds_a2x_fields, lsize=lsize)
        call mct_aVect_zero(a2x_a)
-       
-       call mct_aVect_init(x2a_a, rList=seq_flds_x2a_fields, lsize=lsize) 
+
+       call mct_aVect_init(x2a_a, rList=seq_flds_x2a_fields, lsize=lsize)
        call mct_aVect_zero(x2a_a)
+
+#ifdef HAVE_MOAB
+       ! Initialize MOAB physgrid mesh and add coordinate,mask data
+       ! NOTE:  dynamics mesh is initialized in homme source
+       ! as part of cam_init above
+       call init_moab_atm_phys( cdata_a )
+       ! initialize arrays to hold data for MOAB
+       mblsize = lsize
+       nsend = mct_avect_nRattr(a2x_a)
+       totalmbls = mblsize * nsend   ! size of the double array
+       allocate (a2x_am(mblsize, nsend) )
+       allocate (a2x_am2(nsend,mblsize) )
+
+       nrecv = mct_avect_nRattr(x2a_a)
+       totalmbls_r = mblsize * nrecv   ! size of the double array used to receive
+       allocate (x2a_am(mblsize, nrecv) ) ! these will be received by moab tags, then used to set cam in surf data
+       allocate (x2a_am2(nrecv, mblsize) ) ! transpose of moab receive array
+       ! initialize/reset all export data to zero
+       a2x_am2 = 0.0D0
+#endif
        !
        ! Create initial atm export state
        !
+#ifdef HAVE_MOAB
+       a2x_am2 = 0.0_r8
+       call atm_export( cam_out, a2x_am2 )
+       a2x_am=transpose(a2x_am2)
+       tagname=trim(seq_flds_a2x_fields)//C_NULL_CHAR
+       ent_type = 0 ! vertices, point cloud
+       ierr = iMOAB_SetDoubleTagStorage ( mphaid, tagname, totalmbls , ent_type, a2x_am )
+       if ( ierr > 0) then
+         call endrun('Error: fail to set  seq_flds_a2x_fields for atm physgrid moab mesh')
+       endif
+#else
        call atm_export( cam_out, a2x_a%rattr )
+#endif
        !
        ! Set flag to specify that an extra albedo calculation is to be done (i.e. specify active)
        !
@@ -371,21 +456,22 @@ CONTAINS
           nextsw_cday = get_curr_calday()
           call seq_infodata_PutData( infodata, nextsw_cday=nextsw_cday )
        end if
-       
+
        ! End redirection of share output to cam log
-       
+
        call shr_file_setLogUnit (shrlogunit)
        call shr_file_setLogLevel(shrloglev)
 
+
        first_time = .false.
 
-    else
-       
+    else ! so here first_time == .false.
+
        ! For initial run, run cam radiation/clouds and return
        ! For restart run, read restart x2a_a
        ! Note - a2x_a is computed upon the completion of the previous run - cam_run1 is called
        ! only for the purposes of finishing the flux averaged calculation to compute a2x_a
-       ! Note - cam_run1 is called on restart only to have cam internal state consistent with the 
+       ! Note - cam_run1 is called on restart only to have cam internal state consistent with the
        ! a2x_a state sent to the coupler
 
        !Obtain the precipitation downscaling method from the land model
@@ -400,50 +486,111 @@ CONTAINS
        call shr_file_setLogUnit (iulog)
 
        call seq_timemgr_EClockGetData(EClock,curr_ymd=CurrentYMD, StepNo=StepNo, dtime=DTime_Sync )
+
+!
+!  Initial step actions
+!
        if (StepNo == 0) then
+
+#ifdef HAVE_MOAB
+          tagname=trim(seq_flds_x2a_fields)//C_NULL_CHAR
+          ent_type = 0 ! vertices, point cloud
+          ierr = iMOAB_GetDoubleTagStorage ( mphaid, tagname, totalmbls_r , ent_type, x2a_am )
+          if ( ierr > 0) then
+            call endrun('Error: fail to get  seq_flds_x2a_fields for atm physgrid moab mesh')
+          endif
+          ! transpose x2a_am into x2a_am2
+          x2a_am2 = transpose(x2a_am)
+          call atm_import( x2a_am2, cam_in )
+#else
           call atm_import( x2a_a%rattr, cam_in )
+#endif
+
+
+         ! for examining surface cflx update timing - aldivi
+         if (masterproc) write(iulog,*)'cflx-log: after atm_import and before cam_run1 for StepNo=0 in atm_init_mct'
+         if (masterproc) write(iulog,*)'sync ymd=',CurrentYMD
+
 
           call t_startf('CAM_run1')
-          call cam_run1 ( cam_in, cam_out ) 
+          call cam_run1 ( cam_in, cam_out )
           call t_stopf('CAM_run1')
-          
-          call atm_export( cam_out, a2x_a%rattr )
-       else
 
+#ifdef HAVE_MOAB
+          a2x_am2 = 0.0_r8
+          call atm_export( cam_out, a2x_am2 )
+          a2x_am=transpose(a2x_am2)
+          tagname=trim(seq_flds_a2x_fields)//C_NULL_CHAR
+          ent_type = 0 ! vertices, point cloud
+          ierr = iMOAB_SetDoubleTagStorage ( mphaid, tagname, totalmbls , ent_type, a2x_am )
+          if ( ierr > 0) then
+            call endrun('Error: fail to set  seq_flds_a2x_fields for atm physgrid moab mesh')
+          endif
+#else
+          call atm_export( cam_out, a2x_a%rattr )
+#endif
+
+!  If StepNo != 0 in atm_init, must be a resart
+       else ! if (StepNo != 0) then
+          
+#ifdef HAVE_MOAB
+          call t_startf('atm_read_srfrest_moab')
+          call atm_read_srfrest_moab ( EClock )
+          call t_stopf('atm_read_srfrest_moab')
+#else
           call t_startf('atm_read_srfrest_mct')
           call atm_read_srfrest_mct( EClock, x2a_a, a2x_a )
           call t_stopf('atm_read_srfrest_mct')
+#endif
+
+#ifdef HAVE_MOAB
+          tagname=trim(seq_flds_x2a_fields)//C_NULL_CHAR
+          ent_type = 0 ! vertices, point cloud
+          ierr = iMOAB_GetDoubleTagStorage ( mphaid, tagname, totalmbls_r , ent_type, x2a_am )
+          if ( ierr > 0) then
+            call endrun('Error: fail to get  seq_flds_x2a_fields for atm physgrid moab mesh')
+          endif
+          ! transpose x2a_am into x2a_am2
+          x2a_am2 = transpose(x2a_am)
 
           ! Sent .true. as an optional argument so that restart_init is set to .true.  in atm_import
-	      ! This will ensure BFB restarts whenever qneg4 updates fluxes on the restart time step
+          ! This will ensure BFB restarts whenever qneg4 updates fluxes on the restart time step
+          call atm_import( x2a_am2, cam_in, .true. )
+#else
           call atm_import( x2a_a%rattr, cam_in, .true. )
+#endif
 
           call t_startf('cam_run1')
-          call cam_run1 ( cam_in, cam_out ) 
+          call cam_run1 ( cam_in, cam_out )
           call t_stopf('cam_run1')
+
+         ! for examining surface cflx update timing - aldivi
+         if (masterproc) write(iulog,*)'cflx-log: after atm_import and after cam_run1 for restart in atm_init_mct'
+         if (masterproc) write(iulog,*)'sync ymd=',CurrentYMD
+
        end if
 
        ! Compute time of next radiation computation, like in run method for exact restart
 
        call seq_timemgr_EClockGetData(Eclock,dtime=atm_cpl_dt)
-       dtime = get_step_size()          
+       dtime = get_step_size()
        nstep = get_nstep()
        if (nstep < 1 .or. dtime < atm_cpl_dt) then
-          nextsw_cday = radiation_nextsw_cday() 
+          nextsw_cday = radiation_nextsw_cday()
        else if (dtime == atm_cpl_dt) then
           caldayp1 = get_curr_calday(offset=int(dtime))
-          nextsw_cday = radiation_nextsw_cday() 
+          nextsw_cday = radiation_nextsw_cday()
           if (caldayp1 /= nextsw_cday) nextsw_cday = -1._r8
        else
           call shr_sys_abort('dtime must be less than or equal to atm_cpl_dt')
        end if
-       call seq_infodata_PutData( infodata, nextsw_cday=nextsw_cday ) 
+       call seq_infodata_PutData( infodata, nextsw_cday=nextsw_cday )
 
        ! End redirection of share output to cam log
-       
+
        call shr_file_setLogUnit (shrlogunit)
        call shr_file_setLogLevel(shrloglev)
-       
+
     end if
 
 #if (defined _MEMTRACE )
@@ -453,7 +600,7 @@ CONTAINS
       call memmon_reset_addr()
     endif
 #endif
-    
+
     call shr_sys_flush(iulog)
 
  end subroutine atm_init_mct
@@ -470,7 +617,7 @@ CONTAINS
     use constituents,    only: pcnst
     use shr_sys_mod,     only: shr_sys_flush
 
-    ! 
+    !
     ! Arguments
     !
     type(ESMF_Clock)            ,intent(inout) :: EClock
@@ -481,13 +628,13 @@ CONTAINS
     ! Local variables
     !
     integer :: lsize           ! size of attribute vector
-    integer :: StepNo          ! time step			 
+    integer :: StepNo          ! time step
     integer :: DTime_Sync      ! integer timestep size
     integer :: CurrentYMD      ! current year-month-day
-    integer :: iradsw          ! shortwave radation frequency (time steps) 
+    integer :: iradsw          ! shortwave radation frequency (time steps)
     logical :: dosend          ! true => send data back to driver
     integer :: dtime           ! time step increment (sec)
-    integer :: atm_cpl_dt      ! driver atm coupling time step 
+    integer :: atm_cpl_dt      ! driver atm coupling time step
     integer :: ymd_sync        ! Sync date (YYYYMMDD)
     integer :: yr_sync         ! Sync current year
     integer :: mon_sync        ! Sync current month
@@ -510,6 +657,10 @@ CONTAINS
     integer :: lbnum
     character(len=*), parameter :: subname="atm_run_mct"
     !-----------------------------------------------------------------------
+#ifdef HAVE_MOAB
+    integer :: ent_type, ierr
+    character(CXX) :: tagname
+#endif
 
 #if (defined _MEMTRACE)
     if(masterproc) then
@@ -518,18 +669,22 @@ CONTAINS
     endif
 #endif
 
+#ifdef MOABDEBUG
+    call seq_timemgr_EClockGetData( EClock, stepno=cur_atm_stepno )
+#endif
+
     ! Redirect share output to cam log
-    
+
     call shr_file_getLogUnit (shrlogunit)
     call shr_file_getLogLevel(shrloglev)
     call shr_file_setLogUnit (iulog)
-    
+
     ! Note that sync clock time should match cam time at end of time step/loop not beginning
-    
+
     call seq_timemgr_EClockGetData(EClock,curr_ymd=ymd_sync,curr_tod=tod_sync, &
        curr_yr=yr_sync,curr_mon=mon_sync,curr_day=day_sync)
 
-    !load orbital parameters 
+    !load orbital parameters
 
     call seq_infodata_GetData( infodata,                                           &
        orb_eccen=eccen, orb_mvelpp=mvelpp, orb_lambm0=lambm0, orb_obliqr=obliqr)
@@ -537,41 +692,59 @@ CONTAINS
     nlend_sync = seq_timemgr_StopAlarmIsOn(EClock)
     rstwr_sync = seq_timemgr_RestartAlarmIsOn(EClock)
 
-    ! Map input from mct to cam data structure
 
+    ! Map input from cpl7 to eam data structure
     call t_startf ('CAM_import')
+#ifdef HAVE_MOAB
+    tagname=trim(seq_flds_x2a_fields)//C_NULL_CHAR
+    ent_type = 0 ! vertices, point cloud
+    ierr = iMOAB_GetDoubleTagStorage ( mphaid, tagname, totalmbls_r , ent_type, x2a_am )
+    if ( ierr > 0) then
+      call endrun('Error: fail to get  seq_flds_x2a_fields for atm physgrid moab mesh')
+    endif
+    ! transpose x2a_am into x2a_am2
+    x2a_am2 = transpose(x2a_am)
+    call atm_import( x2a_am2, cam_in )
+#else
     call atm_import( x2a_a%rattr, cam_in )
+#endif
     call t_stopf  ('CAM_import')
-    
+
     ! Cycle over all time steps in the atm coupling interval
-    
+
     dosend = .false.
     do while (.not. dosend)
 
        ! Determine if dosend
        ! When time is not updated at the beginning of the loop - then return only if
        ! are in sync with clock before time is updated
-       
+
        call get_curr_date( yr, mon, day, tod )
        ymd = yr*10000 + mon*100 + day
        tod = tod
        dosend = (seq_timemgr_EClockDateInSync( EClock, ymd, tod))
-       
+
+       ! for examining surface cflx update timing - aldivi
+       if (masterproc) write(iulog,*)'cflx-log: at beginning of while(!dosend) loop in atm_run_mct, calling cam_run 2-4'
+       if (masterproc) write(iulog,*)' cam ymd=',ymd     ,'  cam tod= ',tod
+       if (masterproc) write(iulog,*)'sync ymd=',ymd_sync,' sync tod= ',tod_sync
+
+
        ! Determine if time to write cam restart and stop
-       
+
        rstwr = .false.
        if (rstwr_sync .and. dosend) rstwr = .true.
        nlend = .false.
        if (nlend_sync .and. dosend) nlend = .true.
-       
-       ! Single column specific input 
-       
+
+       ! Single column specific input
+
        if (single_column) then
           call scam_use_iop_srf( cam_in )
        endif
 
        ! Run CAM (run2, run3, run4)
-       
+
        call t_startf ('CAM_run2')
        call cam_run2( cam_out, cam_in )
        call t_stopf  ('CAM_run2')
@@ -579,60 +752,87 @@ CONTAINS
        call t_startf ('CAM_run3')
        call cam_run3( cam_out )
        call t_stopf  ('CAM_run3')
-       
+
        call t_startf ('CAM_run4')
        call cam_run4( cam_out, cam_in, rstwr, nlend, &
             yr_spec=yr_sync, mon_spec=mon_sync, day_spec=day_sync, sec_spec=tod_sync)
        call t_stopf  ('CAM_run4')
-       
-       ! Advance cam time step 
-       
+
+       ! Advance cam time step
+
        call t_startf ('CAM_adv_timestep')
        call advance_timestep()
        call t_stopf  ('CAM_adv_timestep')
-       
+
+
+       ! for examining surface cflx update timing - aldivi
+       if (masterproc) write(iulog,*)'cflx-log: after cam time advance in while(!dosend) loop in atm_run_mct, calling cam_run1 and atm_export'
+       if (masterproc) write(iulog,*)'adding the advance manually: cam ymd=',ymd,'  cam tod= ',tod + get_step_size()
+       if (masterproc) write(iulog,*)'sync ymd=',ymd_sync,' sync tod= ',tod_sync
+
+
        ! Run cam radiation/clouds (run1)
-          
+
        call t_startf ('CAM_run1')
-       call cam_run1 ( cam_in, cam_out ) 
+       call cam_run1 ( cam_in, cam_out )
        call t_stopf  ('CAM_run1')
-       
-       ! Map output from cam to mct data structures
-       
+
+       ! Map output from eam to cpl7 data structures
+
        call t_startf ('CAM_export')
+#ifdef HAVE_MOAB
+       a2x_am2 = 0.0_r8
+       call atm_export( cam_out, a2x_am2 )
+       a2x_am=transpose(a2x_am2)
+       tagname=trim(seq_flds_a2x_fields)//C_NULL_CHAR
+       ent_type = 0 ! vertices, point cloud
+       ierr = iMOAB_SetDoubleTagStorage ( mphaid, tagname, totalmbls , ent_type, a2x_am )
+       if ( ierr > 0) then
+         call endrun('Error: fail to set  seq_flds_a2x_fields for atm physgrid moab mesh')
+       endif
+#else
        call atm_export( cam_out, a2x_a%rattr )
+#endif
        call t_stopf ('CAM_export')
-       
+
     end do
 
-    ! Get time of next radiation calculation - albedos will need to be 
+
+
+    ! Get time of next radiation calculation - albedos will need to be
     ! calculated by each surface model at this time
-    
+
     call seq_timemgr_EClockGetData(Eclock,dtime=atm_cpl_dt)
-    dtime = get_step_size()          
+    dtime = get_step_size()
     if (dtime < atm_cpl_dt) then
-       nextsw_cday = radiation_nextsw_cday() 
+       nextsw_cday = radiation_nextsw_cday()
     else if (dtime == atm_cpl_dt) then
        caldayp1 = get_curr_calday(offset=int(dtime))
-       nextsw_cday = radiation_nextsw_cday() 
+       nextsw_cday = radiation_nextsw_cday()
        if (caldayp1 /= nextsw_cday) nextsw_cday = -1._r8
     else
        call shr_sys_abort('dtime must be less than or equal to atm_cpl_dt')
     end if
 
-    call seq_infodata_PutData( infodata, nextsw_cday=nextsw_cday ) 
-    
+    call seq_infodata_PutData( infodata, nextsw_cday=nextsw_cday )
+
     ! Write merged surface data restart file if appropriate
-    
+
     if (rstwr_sync) then
+       
        call t_startf('atm_write_srfrest_mct')
+#ifdef HAVE_MOAB
+       call atm_write_srfrest_moab(yr_spec=yr_sync, &
+            mon_spec=mon_sync, day_spec=day_sync, sec_spec=tod_sync)
+#else
        call atm_write_srfrest_mct( x2a_a, a2x_a, &
             yr_spec=yr_sync, mon_spec=mon_sync, day_spec=day_sync, sec_spec=tod_sync)
+#endif
        call t_stopf('atm_write_srfrest_mct')
     end if
-    
-    ! Check for consistency of internal cam clock with master sync clock 
-    
+
+    ! Check for consistency of internal cam clock with master sync clock
+
     dtime = get_step_size()
     call get_curr_date( yr, mon, day, tod, offset=-dtime )
     ymd = yr*10000 + mon*100 + day
@@ -643,7 +843,14 @@ CONTAINS
        write(iulog,*)'sync ymd=',ymd_sync,' sync tod= ',tod_sync
        call shr_sys_abort( subname//': CAM clock is not in sync with master Sync Clock' )
     end if
-    
+
+
+   ! for examining surface cflx update timing - aldivi
+   if (masterproc) write(iulog,*)'cflx-log: after writing srfc rstrt, at end of atm_run_mct'
+   if (masterproc) write(iulog,*)'including -dtime offset: cam ymd=',ymd     ,'  cam tod= ',tod
+   if (masterproc) write(iulog,*)'sync ymd=',ymd_sync,' sync tod= ',tod_sync
+
+
     ! End redirection of share output to cam log
 
     call shr_file_setLogUnit (shrlogunit)
@@ -697,7 +904,7 @@ CONTAINS
     ! Build the atmosphere grid numbering for MCT
     ! NOTE:  Numbering scheme is: West to East and South to North
     ! starting at south pole.  Should be the same as what's used in SCRIP
-    
+
     ! Determine global seg map
 
     sizebuf=0
@@ -736,11 +943,11 @@ CONTAINS
     !
     integer        , intent(in)   :: lsize
     type(mct_gsMap), intent(in)   :: gsMap_a
-    type(mct_ggrid), intent(inout):: dom_a  
+    type(mct_ggrid), intent(inout):: dom_a
     !
     ! Local Variables
     !
-    integer  :: n,i,c,ncols           ! indices	
+    integer  :: n,i,c,ncols           ! indices
     real(r8) :: lats(pcols)           ! array of chunk latitudes
     real(r8) :: lons(pcols)           ! array of chunk longitude
     real(r8) :: area(pcols)           ! area in radians squared for each grid point
@@ -767,13 +974,13 @@ CONTAINS
     ! Determine domain (numbering scheme is: West to East and South to North to South pole)
     ! Initialize attribute vector with special value
     !
-    data(:) = -9999.0_R8 
-    call mct_gGrid_importRAttr(dom_a,"lat"  ,data,lsize) 
-    call mct_gGrid_importRAttr(dom_a,"lon"  ,data,lsize) 
-    call mct_gGrid_importRAttr(dom_a,"area" ,data,lsize) 
-    call mct_gGrid_importRAttr(dom_a,"aream",data,lsize) 
-    data(:) = 0.0_R8     
-    call mct_gGrid_importRAttr(dom_a,"mask" ,data,lsize) 
+    data(:) = -9999.0_R8
+    call mct_gGrid_importRAttr(dom_a,"lat"  ,data,lsize)
+    call mct_gGrid_importRAttr(dom_a,"lon"  ,data,lsize)
+    call mct_gGrid_importRAttr(dom_a,"area" ,data,lsize)
+    call mct_gGrid_importRAttr(dom_a,"aream",data,lsize)
+    data(:) = 0.0_R8
+    call mct_gGrid_importRAttr(dom_a,"mask" ,data,lsize)
     data(:) = 1.0_R8
     call mct_gGrid_importRAttr(dom_a,"frac" ,data,lsize)
     !
@@ -788,7 +995,7 @@ CONTAINS
           data(n) = lats(i)*radtodeg
        end do
     end do
-    call mct_gGrid_importRAttr(dom_a,"lat",data,lsize) 
+    call mct_gGrid_importRAttr(dom_a,"lat",data,lsize)
 
     n=0
     do c = begchunk, endchunk
@@ -799,7 +1006,7 @@ CONTAINS
           data(n) = lons(i)*radtodeg
        end do
     end do
-    call mct_gGrid_importRAttr(dom_a,"lon",data,lsize) 
+    call mct_gGrid_importRAttr(dom_a,"lon",data,lsize)
 
     n=0
     do c = begchunk, endchunk
@@ -807,10 +1014,10 @@ CONTAINS
        call get_area_all_p(c, ncols, area)
        do i=1,ncols
           n = n+1
-          data(n) = area(i) 
+          data(n) = area(i)
        end do
     end do
-    call mct_gGrid_importRAttr(dom_a,"area",data,lsize) 
+    call mct_gGrid_importRAttr(dom_a,"area",data,lsize)
 
     n=0
     do c = begchunk, endchunk
@@ -820,10 +1027,242 @@ CONTAINS
           data(n) = 1._r8 ! mask
        end do
     end do
-    call mct_gGrid_importRAttr(dom_a,"mask"   ,data,lsize) 
+    call mct_gGrid_importRAttr(dom_a,"mask"   ,data,lsize)
     deallocate(data)
 
   end subroutine atm_domain_mct
+
+#ifdef HAVE_MOAB
+  !===========================================================================================
+
+  subroutine atm_read_srfrest_moab( EClock )
+
+   !-----------------------------------------------------------------------
+   use cam_pio_utils, only: cam_pio_openfile, cam_pio_closefile, pio_subsystem
+   use iMOAB, only:    iMOAB_SetDoubleTagStorage, iMOAB_WriteMesh
+   !
+   ! Arguments
+   !
+   type(ESMF_Clock),intent(inout) :: EClock
+   !
+   ! Local variables
+   !
+   integer               :: rcode        ! return error code
+   integer               :: yr_spec      ! Current year
+   integer               :: mon_spec     ! Current month
+   integer               :: day_spec     ! Current day
+   integer               :: sec_spec     ! Current time of day (sec)
+   integer               :: k
+   real(r8), allocatable :: tmp(:)
+   type(file_desc_t)     :: file
+   type(io_desc_t)       :: iodesc
+   type(var_desc_t)      :: varid
+   character(CL)         :: itemc       ! string converted to char
+   type(mct_string)      :: mstring     ! mct char type
+   character(CXX)        :: tagname
+
+   type(mct_list) :: temp_list
+   integer :: size_list, index_list, ent_type, ierr
+
+   !-----------------------------------------------------------------------
+
+   ! Determine and open surface restart dataset
+
+   call seq_timemgr_EClockGetData( EClock, curr_yr=yr_spec,curr_mon=mon_spec, &
+        curr_day=day_spec, curr_tod=sec_spec )
+   fname_srf_cam = interpret_filename_spec( rsfilename_spec_cam, case=get_restcase(), &
+        yr_spec=yr_spec, mon_spec=mon_spec, day_spec=day_spec, sec_spec= sec_spec )
+
+   pname_srf_cam = trim(get_restartdir() )//trim(fname_srf_cam)
+   call getfil(pname_srf_cam, fname_srf_cam)
+
+   call cam_pio_openfile(File, fname_srf_cam, 0)
+
+   call pio_initdecomp(pio_subsystem, pio_double, (/ngcols/), global_ids, iodesc)
+
+   allocate(tmp(size(global_ids)))
+
+   call mct_list_init(temp_list, seq_flds_x2a_fields)
+   size_list=mct_list_nitem (temp_list) ! it should be the same as nrecv
+
+   do k=1,nrecv
+      call mct_list_get(mstring, k, temp_list)
+      itemc = mct_string_toChar(mstring)
+      call pio_seterrorhandling(File, pio_bcast_error)
+      rcode = pio_inq_varid(File,'x2a_'//trim(itemc) ,varid)
+      call mct_string_clean(mstring)
+      if (rcode == pio_noerr) then
+         call pio_read_darray(File, varid, iodesc, tmp, rcode)
+         x2a_am(:,k) = tmp(:)
+      else
+         if (masterproc) then
+            write(iulog,*)'srfrest warning: field ',trim(itemc),' is not on restart file'
+            write(iulog,*)'for backwards compatibility will set it to 0'
+         end if
+         x2a_am(:,k) = 0._r8
+      end if
+      call pio_seterrorhandling(File, pio_internal_error)
+   end do
+
+   tagname=trim(seq_flds_x2a_fields)//C_NULL_CHAR
+    ent_type = 0 ! vertices, point cloud
+    ierr = iMOAB_SetDoubleTagStorage ( mphaid, tagname, totalmbls_r , ent_type, x2a_am )
+    if ( ierr > 0) then
+      call endrun('Error: fail to set  seq_flds_a2x_fields for atm physgrid moab mesh in restart')
+    endif
+
+
+   call mct_list_clean(temp_list)
+
+   call mct_list_init(temp_list, seq_flds_a2x_fields)
+
+   do k=1,nsend
+      call mct_list_get(mstring, k, temp_list)
+      itemc = mct_string_toChar(mstring)
+      rcode = pio_inq_varid(File,'a2x_'//trim(itemc) ,varid)
+      call mct_string_clean(mstring)
+
+      if (rcode == pio_noerr) then
+         call pio_read_darray(File, varid, iodesc, tmp, rcode)
+         a2x_am(:,k) = tmp(:)
+      else
+         if (masterproc) then
+            write(iulog,*)'srfrest warning: field ',trim(itemc),' is not on restart file'
+            write(iulog,*)'for backwards compatibility will set it to 0'
+         end if
+         a2x_am(:,k) = 0._r8
+      endif
+   end do
+   call mct_list_clean(temp_list)
+   tagname=trim(seq_flds_a2x_fields)//C_NULL_CHAR
+    ent_type = 0 ! vertices, point cloud
+    ierr = iMOAB_SetDoubleTagStorage ( mphaid, tagname, totalmbls , ent_type, a2x_am )
+    if ( ierr > 0) then
+      call endrun('Error: fail to set  seq_flds_a2x_fields for atm physgrid moab mesh in restart')
+    endif
+
+   ! write moab phys atm after reading restart surface file
+
+   call pio_freedecomp(File,iodesc)
+   call cam_pio_closefile(File)
+   deallocate(tmp)
+
+ end subroutine atm_read_srfrest_moab
+
+ !===========================================================================================
+
+ subroutine atm_write_srfrest_moab( yr_spec, mon_spec, day_spec, sec_spec )
+
+   !-----------------------------------------------------------------------
+   use cam_pio_utils, only: cam_pio_createfile, cam_pio_closefile, pio_subsystem
+   use cam_pio_utils, only: cam_pio_openfile
+   use cam_history_support, only: fillvalue
+   use iMOAB, only:    iMOAB_GetDoubleTagStorage, iMOAB_WriteMesh
+   !
+   ! Arguments
+   !
+   integer        , intent(in) :: yr_spec         ! Simulation year
+   integer        , intent(in) :: mon_spec        ! Simulation month
+   integer        , intent(in) :: day_spec        ! Simulation day
+   integer        , intent(in) :: sec_spec        ! Seconds into current simulation day
+   !
+   ! Local variables
+   !
+   integer                   :: rcode        ! return error code
+   integer                   :: dimid(1), k
+   type(file_desc_t)         :: file
+   real(r8), allocatable     :: tmp(:)
+   type(var_desc_t), pointer :: varid_x2a(:), varid_a2x(:)
+   type(io_desc_t)           :: iodesc
+   character(CL)             :: itemc       ! string converted to char
+
+   type(mct_string)          :: mstring     ! mct char type
+   character(CXX)            :: tagname
+
+   type(mct_list) :: temp_list
+   integer :: size_list, index_list, ent_type, ierr
+
+   !-----------------------------------------------------------------------
+
+   ! Determine and open surface restart dataset
+
+   fname_srf_cam = interpret_filename_spec( rsfilename_spec_cam, &
+   yr_spec=yr_spec, mon_spec=mon_spec, day_spec=day_spec, sec_spec= sec_spec )
+
+   call cam_pio_createfile(File, trim(fname_srf_cam))
+   if (masterproc) then
+      write(iulog,*)'create file :', trim(fname_srf_cam)
+   end if
+
+   call pio_initdecomp(pio_subsystem, pio_double, (/ngcols/), global_ids, iodesc)
+   allocate(tmp(size(global_ids)))
+
+   rcode = pio_def_dim(File,'x2a_nx',ngcols,dimid(1))
+   call mct_list_init(temp_list ,seq_flds_x2a_fields)
+   size_list=mct_list_nitem (temp_list) ! it should be the same as nrecv
+   allocate(varid_x2a(size_list))
+   if (masterproc) then
+      write(iulog,*)'size list:', size_list, seq_flds_x2a_fields
+   end if
+
+   do k = 1, size_list
+      call mct_list_get(mstring, k, temp_list)
+      itemc = mct_string_toChar(mstring)
+      rcode = pio_def_var(File,'x2a_'//trim(itemc),PIO_DOUBLE,dimid,varid_x2a(k))
+      call mct_string_clean(mstring)
+      rcode = pio_put_att(File,varid_x2a(k),"_fillvalue",fillvalue)
+   enddo
+   call mct_list_clean(temp_list)
+
+   call mct_list_init(temp_list ,seq_flds_a2x_fields)
+   size_list=mct_list_nitem (temp_list) ! it should be the same as nsend
+   allocate(varid_a2x(size_list))
+
+   rcode = pio_def_dim(File,'a2x_nx',ngcols,dimid(1))
+   do k = 1,size_list
+      call mct_list_get(mstring,k,temp_list)
+      itemc = mct_string_toChar(mstring)
+      rcode = PIO_def_var(File,'a2x_'//trim(itemc),PIO_DOUBLE,dimid,varid_a2x(k))
+      call mct_string_clean(mstring)
+      rcode = PIO_put_att(File,varid_a2x(k),"_fillvalue",fillvalue)
+   enddo
+
+   rcode = pio_enddef(File)  ! don't check return code, might be enddef already
+
+! do we need to fill it up with values?
+   ! ccsm sign convention is that fluxes are positive downward
+   tagname=trim(seq_flds_x2a_fields)//C_NULL_CHAR
+   ent_type = 0 ! vertices, point cloud
+   ierr = iMOAB_GetDoubleTagStorage ( mphaid, tagname, totalmbls_r , ent_type, x2a_am )
+   if ( ierr > 0) then
+     call endrun('Error: fail to get  seq_flds_x2a_fields for atm physgrid moab mesh for writing restart surface')
+   endif
+
+   tagname=trim(seq_flds_a2x_fields)//C_NULL_CHAR
+   ent_type = 0 ! vertices, point cloud
+   ierr = iMOAB_GetDoubleTagStorage ( mphaid, tagname, totalmbls , ent_type, a2x_am )
+   if ( ierr > 0) then
+     call endrun('Error: fail to get  seq_flds_a2x_fields for atm physgrid moab mesh for writing restart surface')
+   endif
+
+   do k=1,nrecv
+      call pio_write_darray(File, varid_x2a(k), iodesc, x2a_am(:,k), rcode)
+   end do
+
+   do k=1,nsend
+      call pio_write_darray(File, varid_a2x(k), iodesc, a2x_am(:,k), rcode)
+   end do
+
+   deallocate(varid_x2a, varid_a2x)
+   deallocate(tmp)
+   call mct_list_clean(temp_list)
+
+   call pio_freedecomp(File,iodesc)
+   call cam_pio_closefile(file)
+
+
+ end subroutine atm_write_srfrest_moab
+#endif
 
   !===========================================================================================
 
@@ -837,7 +1276,7 @@ CONTAINS
     type(ESMF_Clock),intent(inout) :: EClock
     type(mct_aVect), intent(inout) :: x2a_a
     type(mct_aVect), intent(inout) :: a2x_a
-    ! 
+    !
     ! Local variables
     !
     integer               :: rcode        ! return error code
@@ -857,16 +1296,15 @@ CONTAINS
     ! Determine and open surface restart dataset
 
     call seq_timemgr_EClockGetData( EClock, curr_yr=yr_spec,curr_mon=mon_spec, &
-         curr_day=day_spec, curr_tod=sec_spec ) 
+         curr_day=day_spec, curr_tod=sec_spec )
     fname_srf_cam = interpret_filename_spec( rsfilename_spec_cam, case=get_restcase(), &
          yr_spec=yr_spec, mon_spec=mon_spec, day_spec=day_spec, sec_spec= sec_spec )
     pname_srf_cam = trim(get_restartdir() )//fname_srf_cam
     call getfil(pname_srf_cam, fname_srf_cam)
-    
     call cam_pio_openfile(File, fname_srf_cam, 0)
     call pio_initdecomp(pio_subsystem, pio_double, (/ngcols/), dof, iodesc)
     allocate(tmp(size(dof)))
-    
+
     nf_x2a = mct_aVect_nRattr(x2a_a)
     do k=1,nf_x2a
        call mct_aVect_getRList(mstring,k,x2a_a)
@@ -879,9 +1317,9 @@ CONTAINS
           call pio_read_darray(File, varid, iodesc, tmp, rcode)
           x2a_a%rattr(k,:) = tmp(:)
        else
-	  if (masterproc) then
-             write(iulog,*)'srfrest warning: field ',trim(itemc),' is not on restart file'
-             write(iulog,*)'for backwards compatibility will set it to 0'
+       if (masterproc) then
+            write(iulog,*)'srfrest warning: field ',trim(itemc),' is not on restart file'
+            write(iulog,*)'for backwards compatibility will set it to 0'
           end if
           x2a_a%rattr(k,:) = 0._r8
        end if
@@ -907,7 +1345,7 @@ CONTAINS
 
   !===========================================================================================
 
-  subroutine atm_write_srfrest_mct( x2a_a, a2x_a, & 
+  subroutine atm_write_srfrest_mct( x2a_a, a2x_a, &
        yr_spec, mon_spec, day_spec, sec_spec)
 
     !-----------------------------------------------------------------------
@@ -932,6 +1370,7 @@ CONTAINS
     type(io_desc_t)           :: iodesc
     character(CL)             :: itemc       ! string converted to char
     type(mct_string)          :: mstring     ! mct char type
+    character(len=nlen)       :: tmp_fname_srf_cam 
     !-----------------------------------------------------------------------
 
     ! Determine and open surface restart dataset
@@ -944,7 +1383,7 @@ CONTAINS
 
     nf_x2a = mct_aVect_nRattr(x2a_a)
     allocate(varid_x2a(nf_x2a))
-    
+
     rcode = pio_def_dim(File,'x2a_nx',ngcols,dimid(1))
     do k = 1,nf_x2a
        call mct_aVect_getRList(mstring,k,x2a_a)
@@ -956,7 +1395,7 @@ CONTAINS
 
     nf_a2x = mct_aVect_nRattr(a2x_a)
     allocate(varid_a2x(nf_a2x))
-    
+
     rcode = pio_def_dim(File,'a2x_nx',ngcols,dimid(1))
     do k = 1,nf_a2x
        call mct_aVect_getRList(mstring,k,a2x_a)
@@ -974,7 +1413,7 @@ CONTAINS
     end do
 
     do k=1,nf_a2x
-       call pio_write_darray(File, varid_a2x(k), iodesc, a2x_a%rattr(k,:), rcode)       
+       call pio_write_darray(File, varid_a2x(k), iodesc, a2x_a%rattr(k,:), rcode)
     end do
 
     deallocate(varid_x2a, varid_a2x)
@@ -984,5 +1423,217 @@ CONTAINS
 
 
   end subroutine atm_write_srfrest_mct
+
+#ifdef HAVE_MOAB
+  subroutine init_moab_atm_phys( cdata_a )
+
+    use shr_mpi_mod,       only: shr_mpi_commrank, shr_mpi_commsize
+    use shr_const_mod, only: SHR_CONST_PI
+!-------------------------------------------------------------------
+    use phys_grid, only : get_nlcols_p ! used to det local size ?
+    use iMOAB, only : iMOAB_RegisterApplication, iMOAB_CreateVertices, iMOAB_WriteMesh, &
+      iMOAB_DefineTagStorage, iMOAB_SetIntTagStorage, iMOAB_SetDoubleTagStorage, &
+      iMOAB_ResolveSharedEntities, iMOAB_UpdateMeshInfo
+
+    type(seq_cdata), intent(in)              :: cdata_a
+
+
+    integer :: ATMID
+    integer :: mpicom_atm
+
+    integer :: ATM_PHYS ! our numbering
+
+    ! local variables to fill in data
+    integer, dimension(:), allocatable :: vgids
+    !  retrieve everything we need from mct
+    ! number of vertices is the size of mct grid
+    real(r8), dimension(:), allocatable :: moab_vert_coords  ! temporary
+    real(r8), dimension(:), allocatable :: areavals
+    ! r
+    real(r8)   :: latv, lonv
+    integer   dims, i, ilat, ilon, igdx, ierr, tagindex
+    integer tagtype, numco, ent_type
+
+    integer ::  n, c, ncols, nlcols
+
+    real(r8) :: lats(pcols)           ! array of chunk latitudes pcol is defined in ppgrid
+    real(r8) :: lons(pcols)           ! array of chunk longitude
+    real(r8) :: area(pcols)           ! area in radians squared for each grid point
+    integer , dimension(:), allocatable :: chunk_index(:)    ! temporary
+    real(r8), parameter:: radtodeg = 180.0_r8/SHR_CONST_PI
+
+    character*100 outfile, wopts
+    character(CXX) :: tagname ! will store all seq_flds_a2x_fields
+    character*32 appname
+
+
+    call seq_cdata_setptrs(cdata_a, ID=ATMID, mpicom=mpicom_atm, &
+         infodata=infodata)
+
+    appname="ATM_PHYS"
+    ATM_PHYS = 200 + ATMID !
+    ierr = iMOAB_RegisterApplication(trim(appname)//C_NULL_CHAR, mpicom_atm, ATM_PHYS, mphaid)
+    if (ierr > 0 )  &
+       call endrun('Error: cannot register moab app for atm physics')
+    if(masterproc) then
+       write(iulog,*) " "
+       write(iulog,*) "register MOAB app:", trim(appname), "  mphaid=", mphaid
+       write(iulog,*) " "
+    endif
+
+    ! first, determine the size of local vertices
+
+    nlcols = get_nlcols_p()
+    dims = 3 !
+    allocate(vgids(nlcols))
+    allocate(global_ids(nlcols))
+    allocate(moab_vert_coords(nlcols*dims))
+    allocate(areavals(nlcols))
+    allocate(chunk_index(nlcols))
+    n=0
+    do c = begchunk, endchunk
+       ncols = get_ncols_p(c)
+       call get_rlat_all_p(c, ncols, lats) !
+       call get_rlon_all_p(c, ncols, lons)
+       call get_area_all_p(c, ncols, area)
+       do i = 1,ncols
+          n=n+1
+          vgids(n) = get_gcol_p(c,i)
+          global_ids(n) = vgids(n)
+          latv = lats(i) ! these are in rads ?
+          lonv = lons(i)
+          moab_vert_coords(3*n-2)=COS(latv)*COS(lonv)
+          moab_vert_coords(3*n-1)=COS(latv)*SIN(lonv)
+          moab_vert_coords(3*n  )=SIN(latv)
+          areavals(n) = area(i)
+          chunk_index(n) = c ! this is just for us, to see the chunk
+       end do
+    end do
+
+
+    ierr = iMOAB_CreateVertices(mphaid, nlcols*3, dims, moab_vert_coords)
+    if (ierr > 0 )  &
+      call endrun('Error: fail to create MOAB vertices in phys atm model')
+
+    tagtype = 0  ! dense, integer
+    numco = 1
+    tagname='GLOBAL_ID'//C_NULL_CHAR
+    ierr = iMOAB_DefineTagStorage(mphaid, tagname, tagtype, numco,  tagindex )
+    if (ierr > 0 )  &
+      call endrun('Error: fail to retrieve GLOBAL_ID tag ')
+
+    ent_type = 0 ! vertex type
+    ierr = iMOAB_SetIntTagStorage ( mphaid, tagname, nlcols , ent_type, vgids)
+    if (ierr > 0 )  &
+      call endrun('Error: fail to set GLOBAL_ID tag ')
+
+    ierr = iMOAB_ResolveSharedEntities( mphaid, nlcols, vgids );
+    if (ierr > 0 )  &
+      call endrun('Error: fail to resolve shared entities')
+
+    ierr = iMOAB_UpdateMeshInfo(mphaid)
+    if (ierr > 0 )  &
+      call endrun('Error: fail to update mesh info')
+
+    !there are no shared entities, but we will set a special partition tag, in order to see the
+    ! partitions ; it will be visible with a Pseudocolor plot in VisIt
+    tagname='partition'//C_NULL_CHAR
+    ierr = iMOAB_DefineTagStorage(mphaid, tagname, tagtype, numco,  tagindex )
+    if (ierr > 0 )  &
+      call endrun('Error: fail to create new partition tag ')
+
+    vgids = iam
+    ierr = iMOAB_SetIntTagStorage ( mphaid, tagname, nlcols , ent_type, vgids)
+    if (ierr > 0 )  &
+      call endrun('Error: fail to set partition tag ')
+
+    ! chunk_index ; it will be visible with a Pseudocolor plot in VisIt
+    tagname='chunk_id'//C_NULL_CHAR
+    ierr = iMOAB_DefineTagStorage(mphaid, tagname, tagtype, numco,  tagindex )
+    if (ierr > 0 )  &
+      call endrun('Error: fail to create new chunk index tag ')
+
+    ierr = iMOAB_SetIntTagStorage ( mphaid, tagname, nlcols , ent_type, chunk_index)
+    if (ierr > 0 )  &
+      call endrun('Error: fail to set chunk id tag tag ')
+
+    ! use areavals for area, aream; define also dom fields
+    ! define all  on moab
+
+    tagname=trim(seq_flds_dom_fields)//C_NULL_CHAR !  mask is double too lat:lon:hgt:area:aream:mask:frac
+    tagtype = 1 ! dense, double
+    ierr = iMOAB_DefineTagStorage(mphaid, tagname, tagtype, numco,  tagindex )
+    if (ierr > 0 )  &
+      call endrun('Error: fail to create  tags from seq_flds_dom_fields ')
+
+    tagname='area'//C_NULL_CHAR
+    ierr = iMOAB_SetDoubleTagStorage ( mphaid, tagname, nlcols , ent_type, areavals)
+    if (ierr > 0 )  &
+      call endrun('Error: fail to set area tag ')
+
+    areavals = 1._r8 ! double
+    tagname='mask'//C_NULL_CHAR
+    ierr = iMOAB_SetDoubleTagStorage ( mphaid, tagname, nlcols , ent_type, areavals)
+    if (ierr > 0 )  &
+      call endrun('Error: fail to set mask tag ')
+
+    areavals = 1._r8 ! double
+
+    ! set lat, lon, and frac tags at the same time, reusing the moab_vert_coords array already allocated
+    ! we set all at the same time, so use the 1-d array carefully, with values interlaced/or not
+    n=0
+    do c = begchunk, endchunk
+       ncols = get_ncols_p(c)
+       call get_rlat_all_p(c, ncols, lats) !
+       call get_rlon_all_p(c, ncols, lons)
+       do i = 1,ncols
+          n=n+1
+          vgids(n) = get_gcol_p(c,i)
+          latv = lats(i) ! these are in rads ?
+          lonv = lons(i)
+          moab_vert_coords(            n ) = lats(i) * radtodeg
+          moab_vert_coords(  nlcols +  n ) = lons(i) * radtodeg
+          moab_vert_coords( 2*nlcols + n )= 1._r8 ! this for fractions
+       end do
+    end do
+    tagname = 'lat:lon:frac'//C_NULL_CHAR
+    ierr = iMOAB_SetDoubleTagStorage ( mphaid, tagname, nlcols*3 , ent_type, moab_vert_coords)
+    if (ierr > 0 )  &
+      call endrun('Error: fail to set lat lon frac tag ')
+
+
+#ifdef MOABDEBUG
+    outfile = 'AtmPhys.h5m'//C_NULL_CHAR
+    wopts   = 'PARALLEL=WRITE_PART'//C_NULL_CHAR
+    ierr = iMOAB_WriteMesh(mphaid, outfile, wopts)
+    if (ierr > 0 )  &
+      call endrun('Error: fail to write the atm phys mesh file')
+#endif
+   ! define fields seq_flds_a2x_fields
+    tagtype = 1  ! dense, double
+    numco = 1 !  one value per vertex / entity
+    tagname = trim(seq_flds_a2x_fields)//C_NULL_CHAR
+    ierr = iMOAB_DefineTagStorage(mphaid, tagname, tagtype, numco,  tagindex )
+    if ( ierr > 0) then
+       call endrun('Error: fail to define seq_flds_a2x_fields for atm physgrid moab mesh')
+    endif
+    ! make sure this is defined too; it could have the same fields, but in different order, or really different
+    ! fields; need to make sure we have them
+    tagname = trim(seq_flds_x2a_fields)//C_NULL_CHAR
+    ierr = iMOAB_DefineTagStorage(mphaid, tagname, tagtype, numco,  tagindex )
+    if ( ierr > 0) then
+       call endrun('Error: fail to define seq_flds_x2a_fields for atm physgrid moab mesh')
+    endif
+
+    deallocate(moab_vert_coords)
+    deallocate(vgids)
+    deallocate(areavals)
+    deallocate(chunk_index)
+
+  end subroutine init_moab_atm_phys
+
+#endif
+
+
 
 end module atm_comp_mct

@@ -48,6 +48,9 @@ module seq_diag_mct
   use shr_reprosum_mod, only : shr_reprosum_calc
   use seq_diagBGC_mct,  only : seq_diagBGC_preprint_mct, seq_diagBGC_print_mct
 
+  use prep_glc_mod,  only : prep_glc_get_l2gacc_lx_cnt_avg
+  use glc_elevclass_mod, only: glc_get_num_elevation_classes 
+
   implicit none
   save
   private
@@ -129,7 +132,7 @@ module seq_diag_mct
   !--- F for field ---
 
   integer(in),parameter :: f_area      = 1     ! area (wrt to unit sphere)
-  integer(in),parameter :: f_hfrz      = 2     ! heat : latent, freezing
+  integer(in),parameter :: f_hfrz      = 2     ! heat : frazil from ocean
   integer(in),parameter :: f_hmelt     = 3     ! heat : latent, melting
   integer(in),parameter :: f_hswnet    = 4     ! heat : short wave, net
   integer(in),parameter :: f_hlwdn     = 5     ! heat : longwave down
@@ -138,44 +141,52 @@ module seq_diag_mct
   integer(in),parameter :: f_hlatf     = 8     ! heat : latent, fusion, snow
   integer(in),parameter :: f_hioff     = 9     ! heat : latent, fusion, frozen runoff
   integer(in),parameter :: f_hsen      =10     ! heat : sensible
-  integer(in),parameter :: f_hberg     =11     ! heat : data icebergs
+  integer(in),parameter :: f_hpolar    =11     ! heat : AIS imbalance
   integer(in),parameter :: f_hh2ot     =12     ! heat : water temperature
-  integer(in),parameter :: f_wfrz      =13     ! water: freezing
-  integer(in),parameter :: f_wmelt     =14     ! water: melting
-  integer(in),parameter :: f_wrain     =15     ! water: precip, liquid
-  integer(in),parameter :: f_wsnow     =16     ! water: precip, frozen
-  integer(in),parameter :: f_wberg     =17     ! water: data icebergs
-  integer(in),parameter :: f_wevap     =18     ! water: evaporation
-  integer(in),parameter :: f_wroff     =19     ! water: runoff/flood
-  integer(in),parameter :: f_wioff     =20     ! water: frozen runoff
-  integer(in),parameter :: f_wirrig    =21     ! water: irrigation
-  integer(in),parameter :: f_wfrz_16O  =22     ! water: freezing
-  integer(in),parameter :: f_wmelt_16O =23     ! water: melting
-  integer(in),parameter :: f_wrain_16O =24     ! water: precip, liquid
-  integer(in),parameter :: f_wsnow_16O =25     ! water: precip, frozen
-  integer(in),parameter :: f_wevap_16O =26     ! water: evaporation
-  integer(in),parameter :: f_wroff_16O =27     ! water: runoff/flood
-  integer(in),parameter :: f_wioff_16O =28     ! water: frozen runoff
-  integer(in),parameter :: f_wfrz_18O  =29     ! water: freezing
-  integer(in),parameter :: f_wmelt_18O =30     ! water: melting
-  integer(in),parameter :: f_wrain_18O =31     ! water: precip, liquid
-  integer(in),parameter :: f_wsnow_18O =32     ! water: precip, frozen
-  integer(in),parameter :: f_wevap_18O =33     ! water: evaporation
-  integer(in),parameter :: f_wroff_18O =34     ! water: runoff/flood
-  integer(in),parameter :: f_wioff_18O =35     ! water: frozen runoff
-  integer(in),parameter :: f_wfrz_HDO  =36     ! water: freezing
-  integer(in),parameter :: f_wmelt_HDO =37     ! water: melting
-  integer(in),parameter :: f_wrain_HDO =38     ! water: precip, liquid
-  integer(in),parameter :: f_wsnow_HDO =39     ! water: precip, frozen
-  integer(in),parameter :: f_wevap_HDO =40     ! water: evaporation
-  integer(in),parameter :: f_wroff_HDO =41     ! water: runoff/flood
-  integer(in),parameter :: f_wioff_HDO =42     ! water: frozen runoff
-
-  integer(in),parameter :: f_size     = f_wioff_HDO   ! Total array size of all elements
+  integer(in),parameter :: f_hgsmb     =13     ! heat : Greenland ice sheet surface mass balance
+  integer(in),parameter :: f_hfrazi    =14     ! heat : frazil from ice
+  integer(in),parameter :: f_wfrz      =15     ! water: freezing (frazil ocean)
+  integer(in),parameter :: f_wfrzi     =16     ! water: frazil ice
+  integer(in),parameter :: f_wmelt     =17     ! water: melting
+  integer(in),parameter :: f_wrain     =18     ! water: precip, liquid
+  integer(in),parameter :: f_wsnow     =19     ! water: precip, frozen
+  integer(in),parameter :: f_wpolar    =20     ! water: AIS imbalance
+  integer(in),parameter :: f_wgsmb     =21     ! water: Greenland ice sheet surface mass balance
+  integer(in),parameter :: f_wevap     =22     ! water: evaporation
+  integer(in),parameter :: f_wroff     =23     ! water: runoff/flood
+  integer(in),parameter :: f_wioff     =24     ! water: frozen runoff
+  integer(in),parameter :: f_wirrig    =25     ! water: irrigation
+  integer(in),parameter :: f_wfrz_16O  =26     ! water: freezing
+  integer(in),parameter :: f_wmelt_16O =27     ! water: melting
+  integer(in),parameter :: f_wrain_16O =28     ! water: precip, liquid
+  integer(in),parameter :: f_wsnow_16O =29     ! water: precip, frozen
+  integer(in),parameter :: f_wevap_16O =30     ! water: evaporation
+  integer(in),parameter :: f_wroff_16O =31     ! water: runoff/flood
+  integer(in),parameter :: f_wioff_16O =32     ! water: frozen runoff
+  integer(in),parameter :: f_wfrz_18O  =33     ! water: freezing
+  integer(in),parameter :: f_wmelt_18O =34     ! water: melting
+  integer(in),parameter :: f_wrain_18O =35     ! water: precip, liquid
+  integer(in),parameter :: f_wsnow_18O =36     ! water: precip, frozen
+  integer(in),parameter :: f_wevap_18O =37     ! water: evaporation
+  integer(in),parameter :: f_wroff_18O =38     ! water: runoff/flood
+  integer(in),parameter :: f_wioff_18O =39     ! water: frozen runoff
+  integer(in),parameter :: f_wfrz_HDO  =40     ! water: freezing
+  integer(in),parameter :: f_wmelt_HDO =41     ! water: melting
+  integer(in),parameter :: f_wrain_HDO =42     ! water: precip, liquid
+  integer(in),parameter :: f_wsnow_HDO =43     ! water: precip, frozen
+  integer(in),parameter :: f_wevap_HDO =44     ! water: evaporation
+  integer(in),parameter :: f_wroff_HDO =45     ! water: runoff/flood
+  integer(in),parameter :: f_wioff_HDO =46     ! water: frozen runoff
+  integer(in),parameter :: f_salt      =47     ! salt: salinity flux from sea ice
+  integer(in),parameter :: f_sfrazo    =48     ! salt: salinity flux frazil from ocean
+  integer(in),parameter :: f_sfrazi    =49     ! salt: salinity flux frazil from ice
+  
+  integer(in),parameter :: f_size     = f_sfrazi      ! Total array size of all elements
   integer(in),parameter :: f_a        = f_area        ! 1st index for area
   integer(in),parameter :: f_a_end    = f_area        ! last index for area
   integer(in),parameter :: f_h        = f_hfrz        ! 1st index for heat
-  integer(in),parameter :: f_h_end    = f_hh2ot       ! Last index for heat
+  !integer(in),parameter :: f_h_end    = f_hh2ot       ! Last index for heat
+  integer(in),parameter :: f_h_end    = f_hfrazi      ! Last index for heat
   integer(in),parameter :: f_w        = f_wfrz        ! 1st index for water
   integer(in),parameter :: f_w_end    = f_wirrig      ! Last index for water
   integer(in),parameter :: f_16O      = f_wfrz_16O    ! 1st index for 16O water isotope
@@ -184,20 +195,24 @@ module seq_diag_mct
   integer(in),parameter :: f_16O_end  = f_wioff_16O   ! Last index for 16O water isotope
   integer(in),parameter :: f_18O_end  = f_wioff_18O   ! Last index for 18O water isotope
   integer(in),parameter :: f_HDO_end  = f_wioff_HDO   ! Last index for HDO water isotope
+  integer(in),parameter :: f_s        = f_salt        ! 1st index for salt
+  integer(in),parameter :: f_s_end    = f_sfrazi      ! last index for salt
 
   character(len=12),parameter :: fname(f_size) = &
 
        (/'        area','     hfreeze','       hmelt','      hnetsw','       hlwdn', &
        '       hlwup','     hlatvap','     hlatfus','      hiroff','        hsen', &
-       '       hberg','    hh2otemp','     wfreeze','       wmelt','       wrain', &
-       '       wsnow','       wberg','       wevap','     wrunoff','     wfrzrof', &
+       '      hpolar','    hh2otemp','       hgsmb','      hfrazi', &
+       '     wfreeze','    wfreezei','   wmeltbase','       wrain','       wsnow', &
+       '      wpolar','       wgsmb','       wevap','     wrunoff','     wfrzrof', &
        '      wirrig',                                                             &
        ' wfreeze_16O','   wmelt_16O','   wrain_16O','   wsnow_16O',                &
        '   wevap_16O',' wrunoff_16O',' wfrzrof_16O',                               &
        ' wfreeze_18O','   wmelt_18O','   wrain_18O','   wsnow_18O',                &
        '   wevap_18O',' wrunoff_18O',' wfrzrof_18O',                               &
        ' wfreeze_HDO','   wmelt_HDO','   wrain_HDO','   wsnow_HDO',                &
-       '   wevap_HDO',' wrunoff_HDO',' wfrzrof_HDO'/)
+       '   wevap_HDO',' wrunoff_HDO',' wfrzrof_HDO',                               &
+       '    saltbase','      sfrazo','      sfrazi'/)
 
   !--- P for period ---
 
@@ -262,6 +277,9 @@ module seq_diag_mct
   integer :: index_l2x_Flrl_irrig
   integer :: index_l2x_Flrl_wslake
 
+  integer :: index_x2l_Sg_icemask
+  integer, allocatable :: index_l2x_Flgl_qice(:) 
+  integer, allocatable :: index_x2l_Sg_ice_covered(:)
 
   integer :: index_x2l_Faxa_lwdn
   integer :: index_x2l_Faxa_rainc
@@ -285,8 +303,17 @@ module seq_diag_mct
   integer :: index_x2r_Flrl_irrig
 
   integer :: index_o2x_Faoo_h2otemp
-  integer :: index_o2x_Fioo_frazil
-  integer :: index_o2x_Fioo_q
+  integer :: index_o2x_Fioo_frazilm
+  integer :: index_o2x_Fioo_frazils
+  integer :: index_o2x_Fioo_frazilh
+  integer :: index_o2x_Foxo_frazil_li
+  integer :: index_o2x_Foxo_q_li
+
+  integer :: index_o2x_Foxo_ismw
+  integer :: index_o2x_Foxo_rrofl
+  integer :: index_o2x_Foxo_rrofi
+  integer :: index_o2x_Foxo_ismh
+  integer :: index_o2x_Foxo_rrofih
 
   integer :: index_xao_Faox_lwup
   integer :: index_xao_Faox_lat
@@ -308,12 +335,16 @@ module seq_diag_mct
   integer :: index_x2o_Fioi_bergh
   integer :: index_x2o_Fioi_bergw
   integer :: index_x2o_Fioi_salt
+  integer :: index_x2o_Fioi_frazilm
+  integer :: index_x2o_Fioi_frazils
+  integer :: index_x2o_Fioi_frazilh
 
   integer :: index_i2x_Fioi_melth
   integer :: index_i2x_Fioi_meltw
-  integer :: index_i2x_Fioi_bergh
-  integer :: index_i2x_Fioi_bergw
   integer :: index_i2x_Fioi_salt
+  integer :: index_i2x_Fioi_frazilm
+  integer :: index_i2x_Fioi_frazils
+  integer :: index_i2x_Fioi_frazilh
   integer :: index_i2x_Faii_swnet
   integer :: index_i2x_Fioi_swpen
   integer :: index_i2x_Faii_lwup
@@ -324,13 +355,17 @@ module seq_diag_mct
   integer :: index_x2i_Faxa_lwdn
   integer :: index_x2i_Faxa_rain
   integer :: index_x2i_Faxa_snow
-  integer :: index_x2i_Fioo_frazil
-  integer :: index_x2i_Fioo_q
+  integer :: index_x2i_Fioo_frazilm
+  integer :: index_x2i_Fioo_frazils
+  integer :: index_x2i_Fioo_frazilh
   integer :: index_x2i_Fixx_rofi
 
   integer :: index_g2x_Fogg_rofl
   integer :: index_g2x_Fogg_rofi
   integer :: index_g2x_Figg_rofi
+
+  integer :: index_x2g_Flgl_qice 
+  integer :: index_g2x_Sg_icemask
 
   integer :: index_x2o_Foxx_rofl_16O
   integer :: index_x2o_Foxx_rofi_16O
@@ -427,6 +462,9 @@ module seq_diag_mct
   integer :: index_x2i_Faxa_snow_16O
   integer :: index_x2i_Faxa_snow_18O
   integer :: index_x2i_Faxa_snow_HDO
+
+  integer :: glc_nec
+  integer :: l2gacc_lx_cnt_avg
 
   !===============================================================================
 contains
@@ -860,13 +898,20 @@ contains
     type(mct_aVect), pointer :: l2x_l        ! model to drv bundle
     type(mct_aVect), pointer :: x2l_l        ! drv to model bundle
     type(mct_ggrid), pointer :: dom_l
-    integer(in)              :: n,ic,nf,ip ! generic index
+    integer(in)              :: n,ic,nf,ip   ! generic index
     integer(in)              :: kArea        ! index of area field in aVect
     integer(in)              :: kl           ! fraction indices
     integer(in)              :: lSize        ! size of aVect
     real(r8)                 :: ca_l         ! area of a grid cell
     logical,save             :: first_time    = .true.
     logical,save             :: flds_wiso_lnd = .false.
+
+    real(r8)                 :: l2x_Flgl_qice_col_sum ! for summing fluxes over no. of elev. classes 
+    real(r8)                 :: effective_area
+
+    character(len=64)        :: name
+    character(len= 2)        :: cnum         
+    integer(in)              :: num               
 
     !----- formats -----
     character(*),parameter :: subName = '(seq_diag_lnd_mct) '
@@ -888,6 +933,15 @@ contains
     kArea = mct_aVect_indexRA(dom_l%data,afldname)
     kl    = mct_aVect_indexRA(frac_l,lfrinname)
 
+    ! get number of elevation classes and allocate relevant sets of indices 
+    glc_nec = glc_get_num_elevation_classes()
+    if (glc_nec.ge.1) then
+       if (first_time) then
+          allocate(index_l2x_Flgl_qice(0:glc_nec))
+          allocate(index_x2l_Sg_ice_covered(0:glc_nec))
+       end if
+    end if
+   
     if (present(do_l2x)) then
        if (first_time) then
           index_l2x_Fall_swnet  = mct_aVect_indexRA(l2x_l,'Fall_swnet')
@@ -902,6 +956,17 @@ contains
           index_l2x_Flrl_rofi   = mct_aVect_indexRA(l2x_l,'Flrl_rofi')
           index_l2x_Flrl_irrig  = mct_aVect_indexRA(l2x_l,'Flrl_irrig', perrWith='quiet')
           index_l2x_Flrl_wslake   = mct_aVect_indexRA(l2x_l,'Flrl_wslake')
+
+          if (glc_nec.ge.1) then
+             index_x2l_Sg_icemask = mct_avect_indexRA(x2l_l,'Sg_icemask')
+             do num=0,glc_nec
+                write(cnum,'(i2.2)') num
+                name = 'Flgl_qice' // cnum
+                index_l2x_Flgl_qice(num) = mct_avect_indexRA(l2x_l,trim(name))
+                name = 'Sg_ice_covered' // cnum
+                index_x2l_Sg_ice_covered(num) = mct_avect_indexRA(x2l_l,trim(name))
+             end do
+          end if
 
           index_l2x_Fall_evap_16O    = mct_aVect_indexRA(l2x_l,'Fall_evap_16O',perrWith='quiet')
           if ( index_l2x_Fall_evap_16O /= 0 ) flds_wiso_lnd = .true.
@@ -936,7 +1001,19 @@ contains
           if (index_l2x_Flrl_irrig /= 0) then
              nf = f_wroff ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - ca_l*l2x_l%rAttr(index_l2x_Flrl_irrig,n)
           end if
-          nf = f_wioff ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - ca_l*l2x_l%rAttr(index_l2x_Flrl_rofi,n)
+          nf = f_wioff ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - ca_l*l2x_l%rAttr(index_l2x_Flrl_rofi,n) ! contribution from land ice calving currently zero
+
+          l2x_Flgl_qice_col_sum = 0.0d0
+          if (glc_nec.ge.1) then
+             effective_area = min(frac_l%rAttr(kl,n),x2l_l%rAttr(index_x2l_Sg_icemask,n)) * dom_l%data%rAttr(kArea,n)
+             do num=0,glc_nec 
+                ! sums the contributions from fluxes in each set of elevation classes 
+                ! RHS product is flux times fraction of area in specific elevation class times land cell area 
+                l2x_Flgl_qice_col_sum = l2x_Flgl_qice_col_sum + l2x_l%rAttr(index_l2x_Flgl_qice(num),n) * &
+                                                                x2l_l%rAttr(index_x2l_Sg_ice_covered(num),n) * effective_area
+             end do
+          end if
+          nf = f_wgsmb ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - l2x_Flgl_qice_col_sum
 
           if ( flds_wiso_lnd )then
              nf = f_wevap_16O;
@@ -970,7 +1047,14 @@ contains
                   ca_l*l2x_l%rAttr(index_l2x_Flrl_rofi_HDO,n)
           end if
        end do
-       budg_dataL(f_hioff,ic,ip) = -budg_dataL(f_wioff,ic,ip)*shr_const_latice
+
+       budg_dataL(f_hioff,ic,ip) = -budg_dataL(f_wioff,ic,ip)*shr_const_latice ! contribution from land ice calving currently zero 
+       budg_dataL(f_hgsmb,ic,ip) = budg_dataL(f_wgsmb,ic,ip)*shr_const_latice
+
+       ! Nneeded? Not sure if / when these should be deallocated
+       !deallocate(index_l2x_Flgl_qice(0:glc_nec))
+       !deallocate(index_x2l_Sg_ice_covered(0:glc_nec))
+
     end if
 
     if (present(do_x2l)) then
@@ -1246,15 +1330,18 @@ contains
   !     Compute global glc input/output flux diagnostics
   !
   ! !REVISION HISTORY:
-  !    2008-jul-10 - T. Craig - update
+  !    2008-Jul-10 - T. Craig - update
+  !    2024-Dec-06 - S. Price, J. Wolfe - update
   !
   ! !INTERFACE: ------------------------------------------------------------------
 
-  subroutine seq_diag_glc_mct( glc, frac_g, infodata)
+  subroutine seq_diag_glc_mct( glc, frac_g, infodata, do_x2g, do_g2x )
 
     type(component_type)    , intent(in) :: glc    ! component type for instance1
-    type(mct_aVect)         , intent(in) :: frac_g ! frac bundle
+    type(mct_aVect)         , intent(in) :: frac_g ! frac bundle (may not be used / needed here) 
     type(seq_infodata_type) , intent(in) :: infodata
+    logical                 , intent(in), optional :: do_x2g
+    logical                 , intent(in), optional :: do_g2x
 
     !EOP
 
@@ -1263,9 +1350,9 @@ contains
     type(mct_aVect), pointer :: x2g_g
     type(mct_ggrid), pointer :: dom_g
     integer(in)              :: n,ic,nf,ip      ! generic index
-    integer(in)              :: kArea             ! index of area field in aVect
-    integer(in)              :: lSize             ! size of aVect
-    real(r8)                 :: ca_g ! area of a grid cell
+    integer(in)              :: kArea           ! index of area field in aVect
+    integer(in)              :: lSize           ! size of aVect
+    real(r8)                 :: ca_g            ! area of a grid cell
     logical,save             :: first_time = .true.
 
     !----- formats -----
@@ -1283,23 +1370,59 @@ contains
     g2x_g => component_get_c2x_cx(glc)
     x2g_g => component_get_x2c_cx(glc)
 
+    ip = p_inst
+
     if (first_time) then
+
+       ! we calc these both first rather then in their respective "if" constructs
+       ! below to avoid g2x indices not getting calculated (because the call to
+       ! x2g and g2x happen separately, in budgets1 and budgets2, respectively).
+
+       ! indices needed for g2x
        index_g2x_Fogg_rofl   = mct_aVect_indexRA(g2x_g,'Fogg_rofl')
        index_g2x_Fogg_rofi   = mct_aVect_indexRA(g2x_g,'Fogg_rofi')
        index_g2x_Figg_rofi   = mct_aVect_indexRA(g2x_g,'Figg_rofi')
+
+       ! indices needed for x2g
+       index_x2g_Flgl_qice  = mct_aVect_indexRA(x2g_g,'Flgl_qice')
+       index_g2x_Sg_icemask = mct_avect_indexRA(g2x_g,'Sg_icemask')
+
     end if
 
-    ip = p_inst
-    ic = c_glc_gs
-    kArea = mct_aVect_indexRA(dom_g%data,afldname)
-    lSize = mct_avect_lSize(g2x_g)
-    do n=1,lSize
-       ca_g =  dom_g%data%rAttr(kArea,n)
-       nf = f_wroff; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - ca_g*g2x_g%rAttr(index_g2x_Fogg_rofl,n)
-       nf = f_wioff; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - ca_g*g2x_g%rAttr(index_g2x_Fogg_rofi,n) &
-            - ca_g*g2x_g%rAttr(index_g2x_Figg_rofi,n)
-    end do
-    budg_dataL(f_hioff,ic,ip) = -budg_dataL(f_wioff,ic,ip)*shr_const_latice
+    if( present(do_g2x))then  ! do fields from glc to coupler (g2x_)
+
+       ic = c_glc_gr
+       kArea = mct_aVect_indexRA(dom_g%data,afldname)
+       lSize = mct_avect_lSize(g2x_g)
+
+       do n=1,lSize
+           ca_g =  dom_g%data%rAttr(kArea,n)
+           nf = f_wroff; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - ca_g*g2x_g%rAttr(index_g2x_Fogg_rofl,n)
+           nf = f_wioff; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - ca_g*g2x_g%rAttr(index_g2x_Fogg_rofi,n) &
+                   - ca_g*g2x_g%rAttr(index_g2x_Figg_rofi,n)
+       end do
+
+       budg_dataL(f_hioff,ic,ip) = -budg_dataL(f_wioff,ic,ip)*shr_const_latice
+
+    endif ! end do fields from glc to coupler (g2x_)
+
+    if( present(do_x2g))then  ! do fields from coupler to glc (x2g_)
+
+       l2gacc_lx_cnt_avg = prep_glc_get_l2gacc_lx_cnt_avg() ! counter for how many times SMB flux accumulation has occured 
+       ic = c_glc_gs
+       kArea = mct_aVect_indexRA(dom_g%data,afldname)
+       lSize = mct_avect_lSize(x2g_g)
+
+       do n=1,lSize
+          ca_g =  dom_g%data%rAttr(kArea,n)*g2x_g%rAttr(index_g2x_Sg_icemask,n)
+          nf = f_wgsmb; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + ca_g*x2g_g%rAttr(index_x2g_Flgl_qice,n)
+       end do
+
+       budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) * l2gacc_lx_cnt_avg
+
+       budg_dataL(f_hgsmb,ic,ip) = budg_dataL(f_wgsmb,ic,ip)*shr_const_latice 
+
+    end if ! end do fields from coupler to glc (x2g_)
 
     first_time = .false.
 
@@ -1337,9 +1460,10 @@ contains
     integer(in)              :: kArea        ! index of area field in aVect
     integer(in)              :: ko,ki  ! fraction indices
     integer(in)              :: lSize        ! size of aVect
-    real(r8)                 :: ca_i,ca_o  ! area of a grid cell
+    real(r8)                 :: ca_i,ca_o,ca_c  ! area of a grid cell
     logical,save             :: first_time    = .true.
     logical,save             :: flds_wiso_ocn = .false.
+    logical,save             :: flds_polar = .false.
 
     !----- formats -----
     character(*),parameter :: subName = '(seq_diag_ocn_mct) '
@@ -1370,9 +1494,20 @@ contains
 
     if (present(do_o2x)) then
        if (first_time) then
-          index_o2x_Fioo_frazil  = mct_aVect_indexRA(o2x_o,'Fioo_frazil')
-          index_o2x_Fioo_q       = mct_aVect_indexRA(o2x_o,'Fioo_q')
+          index_o2x_Fioo_frazilm = mct_aVect_indexRA(o2x_o,'Fioo_frazilm')
+          index_o2x_Fioo_frazils = mct_aVect_indexRA(o2x_o,'Fioo_frazils')
+          index_o2x_Fioo_frazilh = mct_aVect_indexRA(o2x_o,'Fioo_frazilh')
+          index_o2x_Foxo_frazil_li= mct_aVect_indexRA(o2x_o,'Foxo_frazil_li',perrWith='quiet')
+          index_o2x_Foxo_q_li    = mct_aVect_indexRA(o2x_o,'Foxo_q_li',perrWith='quiet')
           index_o2x_Faoo_h2otemp = mct_aVect_indexRA(o2x_o,'Faoo_h2otemp')
+          index_o2x_Foxo_ismw    = mct_aVect_indexRA(o2x_o,'Foxo_ismw',perrWith='quiet')
+          if ( index_o2x_Foxo_ismw /= 0 ) flds_polar = .true.
+          if ( flds_polar ) then
+             index_o2x_Foxo_rrofl   = mct_aVect_indexRA(o2x_o,'Foxo_rrofl',perrWith='quiet')
+             index_o2x_Foxo_rrofi   = mct_aVect_indexRA(o2x_o,'Foxo_rrofi',perrWith='quiet')
+             index_o2x_Foxo_ismh    = mct_aVect_indexRA(o2x_o,'Foxo_ismh',perrWith='quiet')
+             index_o2x_Foxo_rrofih  = mct_aVect_indexRA(o2x_o,'Foxo_rrofih',perrWith='quiet')
+          end if
        end if
 
        lSize = mct_avect_lSize(o2x_o)
@@ -1380,10 +1515,21 @@ contains
        do n=1,lSize
           ca_o =  dom_o%data%rAttr(kArea,n) * frac_o%rAttr(ko,n)
           ca_i =  dom_o%data%rAttr(kArea,n) * frac_o%rAttr(ki,n)
+          ca_c =  dom_o%data%rAttr(kArea,n)
           nf = f_area; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + ca_o
-          nf = f_wfrz;  budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - (ca_o+ca_i)*max(0.0_r8,o2x_o%rAttr(index_o2x_Fioo_frazil,n))
-          nf = f_hfrz;  budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + (ca_o+ca_i)*max(0.0_r8,o2x_o%rAttr(index_o2x_Fioo_q,n))
+          nf = f_wfrz;  budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - (ca_o+ca_i)*max(0.0_r8,o2x_o%rAttr(index_o2x_Fioo_frazilm,n))
+          nf = f_hfrz;  budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + (ca_o+ca_i)*max(0.0_r8,o2x_o%rAttr(index_o2x_Fioo_frazilh,n))
+          nf = f_sfrazo;  budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - (ca_o+ca_i)*o2x_o%rAttr(index_o2x_Fioo_frazils,n)
           nf = f_hh2ot; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + (ca_o+ca_i)*o2x_o%rAttr(index_o2x_Faoo_h2otemp,n)
+          if (flds_polar) then
+             nf = f_wpolar;budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - ca_c*o2x_o%rAttr(index_o2x_Foxo_frazil_li,n)
+             nf = f_wpolar;budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + ca_c*o2x_o%rAttr(index_o2x_Foxo_ismw,n)
+             nf = f_wpolar;budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - (ca_o+ca_i)*o2x_o%rAttr(index_o2x_Foxo_rrofl,n)
+             nf = f_wpolar;budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - (ca_o+ca_i)*o2x_o%rAttr(index_o2x_Foxo_rrofi,n)
+             nf = f_hpolar;budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + ca_c*o2x_o%rAttr(index_o2x_Foxo_q_li,n)
+             nf = f_hpolar;budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + ca_c*o2x_o%rAttr(index_o2x_Foxo_ismh,n)
+             nf = f_hpolar;budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + ca_c*o2x_o%rAttr(index_o2x_Foxo_rrofih,n)
+          end if
        end do
     end if
 
@@ -1433,8 +1579,11 @@ contains
           index_x2o_Fioi_meltw  = mct_aVect_indexRA(x2o_o,'Fioi_meltw')
           index_x2o_Fioi_bergh  = mct_aVect_indexRA(x2o_o,'PFioi_bergh')
           index_x2o_Fioi_bergw  = mct_aVect_indexRA(x2o_o,'PFioi_bergw')
-          index_x2o_Fioi_salt   = mct_aVect_indexRA(x2o_o,'Fioi_salt')
           index_x2o_Foxx_swnet  = mct_aVect_indexRA(x2o_o,'Foxx_swnet')
+          index_x2o_Fioi_salt   = mct_aVect_indexRA(x2o_o,'Fioi_salt')
+          index_x2o_Fioi_frazils = mct_aVect_indexRA(x2o_o,'Fioi_frazils')
+          index_x2o_Fioi_frazilh = mct_aVect_indexRA(x2o_o,'Fioi_frazilh')
+          index_x2o_Fioi_frazilm = mct_aVect_indexRA(x2o_o,'Fioi_frazilm')
           index_x2o_Faxa_lwdn   = mct_aVect_indexRA(x2o_o,'Faxa_lwdn')
           index_x2o_Faxa_rain   = mct_aVect_indexRA(x2o_o,'Faxa_rain')
           index_x2o_Faxa_snow   = mct_aVect_indexRA(x2o_o,'Faxa_snow')
@@ -1490,14 +1639,19 @@ contains
           nf = f_hmelt ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + (ca_o+ca_i)*x2o_o%rAttr(index_x2o_Fioi_melth,n)
           nf = f_hswnet; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + (ca_o+ca_i)*x2o_o%rAttr(index_x2o_Foxx_swnet,n)
           nf = f_hlwdn ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + (ca_o+ca_i)*x2o_o%rAttr(index_x2o_Faxa_lwdn,n)
-          nf = f_hberg ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + (ca_o+ca_i)*x2o_o%rAttr(index_x2o_Fioi_bergh,n)
-          nf = f_wmelt ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + (ca_o+ca_i)*x2o_o%rAttr(index_x2o_Fioi_meltw,n)
+          nf = f_hpolar; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + (ca_o+ca_i)*x2o_o%rAttr(index_x2o_Fioi_bergh,n)
+          nf = f_wmelt ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + (ca_o+ca_i) * &
+            (x2o_o%rAttr(index_x2o_Fioi_meltw,n) - x2o_o%rAttr(index_x2o_Fioi_frazilm,n))
           nf = f_wrain ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + (ca_o+ca_i)*x2o_o%rAttr(index_x2o_Faxa_rain,n)
           nf = f_wsnow ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + (ca_o+ca_i)*x2o_o%rAttr(index_x2o_Faxa_snow,n)
-          nf = f_wberg ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + (ca_o+ca_i)*x2o_o%rAttr(index_x2o_Fioi_bergw,n)
+          nf = f_wpolar; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + (ca_o+ca_i)*x2o_o%rAttr(index_x2o_Fioi_bergw,n)
           nf = f_wroff ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + (ca_o+ca_i)*x2o_o%rAttr(index_x2o_Foxx_rofl,n)
           nf = f_wioff ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + (ca_o+ca_i)*x2o_o%rAttr(index_x2o_Foxx_rofi,n)
-
+          nf = f_salt  ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + (ca_o+ca_i) * &
+            (x2o_o%rAttr(index_x2o_Fioi_salt,n) - x2o_o%rAttr(index_x2o_Fioi_frazils,n))
+          nf = f_wfrzi ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + (ca_o+ca_i)*x2o_o%rAttr(index_x2o_Fioi_frazilm,n)
+          nf = f_hfrazi; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + (ca_o+ca_i)*x2o_o%rAttr(index_x2o_Fioi_frazilh,n)
+          nf = f_sfrazi; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + (ca_o+ca_i)*x2o_o%rAttr(index_x2o_Fioi_frazils,n)
 
           if ( flds_wiso_ocn )then
              nf = f_wmelt_16O;
@@ -1613,8 +1767,6 @@ contains
     if (present(do_i2x)) then
        index_i2x_Fioi_melth  = mct_aVect_indexRA(i2x_i,'Fioi_melth')
        index_i2x_Fioi_meltw  = mct_aVect_indexRA(i2x_i,'Fioi_meltw')
-       index_i2x_Fioi_bergh  = mct_aVect_indexRA(i2x_i,'PFioi_bergh')
-       index_i2x_Fioi_bergw  = mct_aVect_indexRA(i2x_i,'PFioi_bergw')
        index_i2x_Fioi_swpen  = mct_aVect_indexRA(i2x_i,'Fioi_swpen')
        index_i2x_Faii_swnet  = mct_aVect_indexRA(i2x_i,'Faii_swnet')
        index_i2x_Faii_lwup   = mct_aVect_indexRA(i2x_i,'Faii_lwup')
@@ -1622,6 +1774,9 @@ contains
        index_i2x_Faii_sen    = mct_aVect_indexRA(i2x_i,'Faii_sen')
        index_i2x_Faii_evap   = mct_aVect_indexRA(i2x_i,'Faii_evap')
        index_i2x_Fioi_salt   = mct_aVect_indexRA(i2x_i,'Fioi_salt')
+       index_i2x_Fioi_frazilm= mct_aVect_indexRA(i2x_i,'Fioi_frazilm')
+       index_i2x_Fioi_frazils= mct_aVect_indexRA(i2x_i,'Fioi_frazils')
+       index_i2x_Fioi_frazilh= mct_aVect_indexRA(i2x_i,'Fioi_frazilh')
 
        index_i2x_Fioi_meltw_16O   = mct_aVect_indexRA(i2x_i,'Fioi_meltw_16O',perrWith='quiet')
        if ( index_i2x_Fioi_meltw_16O /= 0 ) flds_wiso_ice = .true.
@@ -1650,10 +1805,14 @@ contains
           nf = f_hlwup ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + ca_i*i2x_i%rAttr(index_i2x_Faii_lwup,n)
           nf = f_hlatv ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + ca_i*i2x_i%rAttr(index_i2x_Faii_lat,n)
           nf = f_hsen  ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + ca_i*i2x_i%rAttr(index_i2x_Faii_sen,n)
-          nf = f_hberg ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - (ca_o+ca_i)*i2x_i%rAttr(index_i2x_Fioi_bergh,n)
-          nf = f_wmelt ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - ca_i*i2x_i%rAttr(index_i2x_Fioi_meltw,n)
-          nf = f_wberg ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - (ca_o+ca_i)*i2x_i%rAttr(index_i2x_Fioi_bergw,n)
+          nf = f_wmelt ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - ca_i * &
+            (i2x_i%rAttr(index_i2x_Fioi_meltw,n) - i2x_i%rAttr(index_i2x_Fioi_frazilm,n))
           nf = f_wevap ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + ca_i*i2x_i%rAttr(index_i2x_Faii_evap,n)
+          nf = f_salt  ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - ca_i * &
+            (i2x_i%rAttr(index_i2x_Fioi_salt,n) - i2x_i%rAttr(index_i2x_Fioi_frazils,n))
+          nf = f_wfrzi ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - ca_i*i2x_i%rAttr(index_i2x_Fioi_frazilm,n)
+          nf = f_sfrazi; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - ca_i*i2x_i%rAttr(index_i2x_Fioi_frazils,n)
+          nf = f_hfrazi; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + ca_i*i2x_i%rAttr(index_i2x_Fioi_frazilh,n)
 
           if ( flds_wiso_ice )then
              nf = f_wmelt_16O;
@@ -1684,8 +1843,9 @@ contains
           index_x2i_Faxa_lwdn   = mct_aVect_indexRA(x2i_i,'Faxa_lwdn')
           index_x2i_Faxa_rain   = mct_aVect_indexRA(x2i_i,'Faxa_rain')
           index_x2i_Faxa_snow   = mct_aVect_indexRA(x2i_i,'Faxa_snow')
-          index_x2i_Fioo_frazil = mct_aVect_indexRA(x2i_i,'Fioo_frazil')
-          index_x2i_Fioo_q      = mct_aVect_indexRA(x2i_i,'Fioo_q')
+          index_x2i_Fioo_frazilm= mct_aVect_indexRA(x2i_i,'Fioo_frazilm')
+          index_x2i_Fioo_frazils= mct_aVect_indexRA(x2i_i,'Fioo_frazils')
+          index_x2i_Fioo_frazilh= mct_aVect_indexRA(x2i_i,'Fioo_frazilh')
           index_x2i_Fixx_rofi   = mct_aVect_indexRA(x2i_i,'Fixx_rofi')
 
           index_x2i_Faxa_rain_16O   = mct_aVect_indexRA(x2i_i,'Faxa_rain_16O', perrWith='quiet')
@@ -1716,9 +1876,11 @@ contains
           nf = f_wioff; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + ca_i*x2i_i%rAttr(index_x2i_Fixx_rofi,n)
 
           nf = f_wfrz ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + &
-               (ca_o+ca_i)*max(0.0_r8,x2i_i%rAttr(index_x2i_Fioo_frazil,n))
+               (ca_o+ca_i)*max(0.0_r8,x2i_i%rAttr(index_x2i_Fioo_frazilm,n))
+          nf = f_sfrazo ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) + &
+               (ca_o+ca_i)*max(0.0_r8,x2i_i%rAttr(index_x2i_Fioo_frazils,n))
           nf = f_hfrz ; budg_dataL(nf,ic,ip) = budg_dataL(nf,ic,ip) - &
-               (ca_o+ca_i)*max(0.0_r8,x2i_i%rAttr(index_x2i_Fioo_q,n))
+               (ca_o+ca_i)*max(0.0_r8,x2i_i%rAttr(index_x2i_Fioo_frazilh,n))
 
           if ( flds_wiso_ice_x2i )then
              nf  = f_wrain_16O;
@@ -1867,6 +2029,7 @@ contains
              if ( flds_wiso )then
                 dataGpr(iso0(1):isof(nisotopes),:,:) = dataGpr(iso0(1):isof(nisotopes),:,:) * 1.0e6_r8
              end if
+             dataGpr(f_s:f_s_end,:,:) = dataGpr(f_s:f_s_end,:,:) * 1.0e8_r8
              dataGpr = dataGpr/budg_ns
 
              if (iam /= 0) return
@@ -1958,6 +2121,21 @@ contains
                            sum(dataGpr(iso0(is):isof(is),ico,ip))
                    end do
                 end if
+
+                write(logunit,*) ' '
+                write(logunit,FAH) subname,trim(str)//' SALT BUDGET ((kg/s)/m^2*1e8): period = ',trim(pname(ip)),': date = ',cdate,sec
+                write(logunit,FA0) cname(ica),cname(icl),cname(icn),cname(ics),cname(ico),' *SUM*  '
+                do nf = f_s, f_s_end
+                   write(logunit,FA1)    fname(nf),dataGpr(nf,ica,ip),dataGpr(nf,icl,ip), &
+                        dataGpr(nf,icn,ip),dataGpr(nf,ics,ip),dataGpr(nf,ico,ip), &
+                        dataGpr(nf,ica,ip)+dataGpr(nf,icl,ip)+ &
+                        dataGpr(nf,icn,ip)+dataGpr(nf,ics,ip)+dataGpr(nf,ico,ip)
+                enddo
+                write(logunit,FA1)    '   *SUM*'   ,sum(dataGpr(f_s:f_s_end,ica,ip)),sum(dataGpr(f_s:f_s_end,icl,ip)), &
+                     sum(dataGpr(f_s:f_s_end,icn,ip)),sum(dataGpr(f_s:f_s_end,ics,ip)),sum(dataGpr(f_s:f_s_end,ico,ip)), &
+                     sum(dataGpr(f_s:f_s_end,ica,ip))+sum(dataGpr(f_s:f_s_end,icl,ip))+ &
+                     sum(dataGpr(f_s:f_s_end,icn,ip))+sum(dataGpr(f_s:f_s_end,ics,ip))+sum(dataGpr(f_s:f_s_end,ico,ip))
+                write(logunit,*) ' '
 
              enddo
           endif   ! plev
@@ -2064,6 +2242,21 @@ contains
                            -sum(dataGpr(iso0(is):isof(is),icas,ip))
                    end do
                 end if
+
+                write(logunit,*) ' '
+                write(logunit,FAH) subname,trim(str)//' SALT BUDGET (kg/m2s*1e8): period = ',trim(pname(ip)),': date = ',cdate,sec
+                write(logunit,FA0) cname(icar),cname(icxs),cname(icxr),cname(icas),' *SUM*  '
+                do nf = f_s, f_s_end
+                   write(logunit,FA1)    fname(nf),-dataGpr(nf,icar,ip),dataGpr(nf,icxs,ip), &
+                        dataGpr(nf,icxr,ip),-dataGpr(nf,icas,ip), &
+                        -dataGpr(nf,icar,ip)+dataGpr(nf,icxs,ip)+ &
+                        dataGpr(nf,icxr,ip)-dataGpr(nf,icas,ip)
+                enddo
+                write(logunit,FA1)    '   *SUM*',-sum(dataGpr(f_s:f_s_end,icar,ip)),sum(dataGpr(f_s:f_s_end,icxs,ip)), &
+                    sum(dataGpr(f_s:f_s_end,icxr,ip)),-sum(dataGpr(f_s:f_s_end,icas,ip)), &
+                    -sum(dataGpr(f_s:f_s_end,icar,ip))+sum(dataGpr(f_s:f_s_end,icxs,ip))+ &
+                    sum(dataGpr(f_s:f_s_end,icxr,ip))-sum(dataGpr(f_s:f_s_end,icas,ip))
+                write(logunit,*) ' '
              enddo
           endif   ! plev
 
@@ -2211,6 +2404,27 @@ contains
                         sum(dataGpr(iso0(is):isof(is),c_glc_gs,ip))
                 end do
              end if
+
+             write(logunit,*) ' '
+             write(logunit,FAH) subname,'NET SALT BUDGET (kg/m2s*1e8): period = ',trim(pname(ip)),': date = ',cdate,sec
+             write(logunit,FA0r) '     atm','     lnd','     rof','     ocn','  ice nh','  ice sh','     glc',' *SUM*  '
+             do nf = f_s, f_s_end
+                write(logunit,FA1r)   fname(nf),dataGpr(nf,c_atm_ar,ip)+dataGpr(nf,c_atm_as,ip), &
+                     dataGpr(nf,c_lnd_lr,ip)+dataGpr(nf,c_lnd_ls,ip), &
+                     dataGpr(nf,c_rof_rr,ip)+dataGpr(nf,c_rof_rs,ip), &
+                     dataGpr(nf,c_ocn_or,ip)+dataGpr(nf,c_ocn_os,ip), &
+                     dataGpr(nf,c_inh_ir,ip)+dataGpr(nf,c_inh_is,ip), &
+                     dataGpr(nf,c_ish_ir,ip)+dataGpr(nf,c_ish_is,ip), &
+                     dataGpr(nf,c_glc_gr,ip)+dataGpr(nf,c_glc_gs,ip), &
+                     dataGpr(nf,c_atm_ar,ip)+dataGpr(nf,c_atm_as,ip)+ &
+                     dataGpr(nf,c_lnd_lr,ip)+dataGpr(nf,c_lnd_ls,ip)+ &
+                     dataGpr(nf,c_rof_rr,ip)+dataGpr(nf,c_rof_rs,ip)+ &
+                     dataGpr(nf,c_ocn_or,ip)+dataGpr(nf,c_ocn_os,ip)+ &
+                     dataGpr(nf,c_inh_ir,ip)+dataGpr(nf,c_inh_is,ip)+ &
+                     dataGpr(nf,c_ish_ir,ip)+dataGpr(nf,c_ish_is,ip)+ &
+                     dataGpr(nf,c_glc_gr,ip)+dataGpr(nf,c_glc_gs,ip)
+             enddo
+             write(logunit,*) ' '
 
           endif
 

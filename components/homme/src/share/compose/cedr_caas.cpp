@@ -276,6 +276,8 @@ struct TestCAAS : public cedr::test::TestRandomized {
   struct TestAllReducer : public CAAST::UserAllReducer {
     TestAllReducer (const Int n_accum) : n_(n_accum) {}
 
+    virtual ~TestAllReducer () {}
+
     Int n_accum_in_place () const override { return n_; }
 
     int operator() (const mpi::Parallel& p, Real* sendbuf, Real* rcvbuf,
@@ -384,10 +386,17 @@ Int unittest (const mpi::Parallel::Ptr& p) {
   for (Int nlclcells : {1, 2, 4, 11}) {
     Long ncells = np*nlclcells;
     if (ncells > np) ncells -= np/2;
-    for (const bool own_reducer : {false, true})
+    for (const bool own_reducer : {false, true}) {
+#if defined COMPOSE_MPI_ON_HOST && defined CEDR_ENABLE_GPU
+      // Without a user reducer, CAAS hands its device buffers straight to MPI,
+      // which is not possible if MPI is not device aware. (Production code
+      // always provides a reducer, which stages through host memory.)
+      if ( ! own_reducer) continue;
+#endif
       for (const bool external_memory : {false, true})
         nerr += TestCAAS(p, ncells, own_reducer, external_memory, false)
           .run<TestCAAS::CAAST>(1, false);
+    }
   }
   return nerr;
 }

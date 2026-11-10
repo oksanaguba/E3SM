@@ -19,12 +19,11 @@ use spmd_utils,      only: masterproc, iam, npes
 use ppgrid,          only: pcols, pver, pverp, begchunk, endchunk
 use physics_types,   only: physics_state, physics_ptend
 use physconst,       only: cappa
-use time_manager,    only: get_nstep, is_first_restart_step
+use time_manager,    only: get_nstep, is_first_restart_step, is_first_step
 use cam_abortutils,      only: endrun
 use error_messages,  only: handle_err
 use cam_control_mod, only: lambm0, obliqr, mvelpp, eccen
-use scamMod,         only: scm_crm_mode, single_column,have_cld,cldobs,&
-                           have_clwp,clwpobs,have_tg,tground
+use iop_data_mod,    only: single_column
 use perf_mod,        only: t_startf, t_stopf
 use cam_logfile,     only: iulog
 
@@ -73,9 +72,13 @@ integer :: irad_always = 0 ! Specifies length of time in timesteps (positive)
                            ! run continuously from the start of an
                            ! initial or restart run
 logical :: spectralflux  = .false. ! calculate fluxes (up and down) per band.
+logical :: rad_asym_splt  = .false.
 
 logical :: use_rad_dt_cosz  = .false. ! if true, uses the radiation dt for all cosz calculations !BSINGH - Added for solar insolation calc.
 
+! Flag to indicate whether to read optics from spa netcdf file
+! NOTE: added for consistency with RRTMGP; this is non-functioning for RRTMG!
+logical :: do_spa_optics = .false.
 
 character(len=4) :: diag(0:N_DIAG) =(/'    ','_d1 ','_d2 ','_d3 ','_d4 ','_d5 ','_d6 ','_d7 ','_d8 ','_d9 ','_d10'/)
 
@@ -117,7 +120,8 @@ subroutine radiation_readnl(nlfile, dtime_in)
 
    ! Variables defined in namelist
    namelist /radiation_nl/ iradsw, iradlw, irad_always, &
-                           use_rad_dt_cosz, spectralflux
+                           use_rad_dt_cosz, spectralflux, &
+                           do_spa_optics, rad_asym_splt
 
    ! Read the namelist, only if called from master process
    ! TODO: better documentation and cleaner logic here?
@@ -142,7 +146,14 @@ subroutine radiation_readnl(nlfile, dtime_in)
    call mpibcast(irad_always, 1, mpi_integer, mstrid, mpicom, ierr)
    call mpibcast(use_rad_dt_cosz, 1, mpi_logical, mstrid, mpicom, ierr)
    call mpibcast(spectralflux, 1, mpi_logical, mstrid, mpicom, ierr)
+   call mpibcast(do_spa_optics, 1, mpi_logical, mstrid, mpicom, ierr)
+   call mpibcast(rad_asym_splt, 1, mpi_logical, mstrid, mpicom, ierr)
 #endif
+
+   ! Make sure nobody tries to use SPA optics with RRTMG
+   if (do_spa_optics) then
+      call endrun(trim(subroutine_name) // ':: SPA optics is not supported with RRTMG')
+   end if
 
    ! Convert iradsw, iradlw and irad_always from hours to timesteps if necessary
    if (present(dtime_in)) then
@@ -363,13 +374,13 @@ end function radiation_nextsw_cday
 
 !================================================================================================
 
-  subroutine radiation_init(phys_state)
+  subroutine radiation_init(phys_state, pbuf)
 !-----------------------------------------------------------------------
 !
 ! Initialize the radiation parameterization, add fields to the history buffer
 ! 
 !-----------------------------------------------------------------------
-    use physics_buffer, only: pbuf_get_index
+    use physics_buffer, only: pbuf_get_index, physics_buffer_desc
     use phys_grid,      only: npchunks, get_ncols_p, chunks, knuhcs, ngcols, dyn_to_latlon_gcol_map
     use cam_history,    only: addfld, horiz_only, add_default
     use constituents,   only: cnst_get_ind
@@ -392,6 +403,7 @@ end function radiation_nextsw_cday
 #endif
 
     type(physics_state), intent(in) :: phys_state(begchunk:endchunk)
+    type(physics_buffer_desc), pointer :: pbuf(:,:)  ! Added for compatibility with SPA
 
     integer :: icall, nmodes
     logical :: active_calls(0:N_DIAG)
@@ -631,6 +643,9 @@ end function radiation_nextsw_cday
           call addfld('FSDS'//diag(icall),  horiz_only,     'A',    'W/m2', 'Downwelling solar flux at surface', &
                       sampling_seq='rad_lwsw', flag_xyfill=.true., &
                       standard_name='surface_downwelling_shortwave_flux_in_air')
+          call addfld('FSUS'//diag(icall),  horiz_only,     'A',    'W/m2', 'Upwelling solar flux at surface', &
+                      sampling_seq='rad_lwsw', flag_xyfill=.true., &
+                      standard_name='surface_upwelling_shortwave_flux_in_air')
           call addfld('FUS'//diag(icall),  (/ 'ilev' /), 'I',     'W/m2', 'Shortwave upward flux', &
                       sampling_seq='rad_lwsw', flag_xyfill=.true.)
           call addfld('FDS'//diag(icall),  (/ 'ilev' /), 'I',     'W/m2', 'Shortwave downward flux', &
@@ -671,15 +686,6 @@ end function radiation_nextsw_cday
        end if
     end do
 
-
-    if (single_column .and. scm_crm_mode) then
-       call add_default ('FUS     ', 1, ' ')
-       call add_default ('FUSC    ', 1, ' ')
-       call add_default ('FDS     ', 1, ' ')
-       call add_default ('FDSC    ', 1, ' ')
-    endif
-
-
     ! Longwave radiation
 
     do icall = 0, N_DIAG
@@ -693,6 +699,9 @@ end function radiation_nextsw_cday
           call addfld('FLDS'//diag(icall), horiz_only,    'A',    'W/m2', 'Downwelling longwave flux at surface', &
                       sampling_seq='rad_lwsw', flag_xyfill=.true., &
                       standard_name='surface_downwelling_longwave_flux_in_air')
+          call addfld('FLUS'//diag(icall), horiz_only,    'A',    'W/m2', 'Upwelling longwave flux at surface', &
+                      sampling_seq='rad_lwsw', flag_xyfill=.true., &
+                      standard_name='surface_upwelling_longwave_flux_in_air')
           call addfld('FLDSC'//diag(icall), horiz_only,    'A',   'W/m2', 'Clearsky Downwelling longwave flux at surface', &
                       sampling_seq='rad_lwsw', flag_xyfill=.true.)
           call addfld('FLNS'//diag(icall), horiz_only,    'A',    'W/m2', 'Net longwave flux at surface', &
@@ -741,13 +750,6 @@ end function radiation_nextsw_cday
 
     call addfld('EMIS', (/ 'lev' /), 'A', '1', 'Cloud longwave emissivity', &
                 sampling_seq='rad_lwsw', flag_xyfill=.true.)
-
-    if (single_column.and.scm_crm_mode) then
-       call add_default ('FUL     ', 1, ' ')
-       call add_default ('FULC    ', 1, ' ')
-       call add_default ('FDL     ', 1, ' ')
-       call add_default ('FDLC    ', 1, ' ')
-    endif
 
     ! HIRS/MSU diagnostic brightness temperatures
     if (dohirs) then
@@ -924,8 +926,9 @@ end function radiation_nextsw_cday
     real(r8) cllow(pcols)                      !       "     low  cloud cover
     real(r8) clmed(pcols)                      !       "     mid  cloud cover
     real(r8) clhgh(pcols)                      !       "     hgh  cloud cover
-    real(r8) :: ftem(pcols,pver)              ! Temporary workspace for outfld variables
-
+    real(r8) :: ftem(pcols,pver)               ! Temporary workspace for outfld variables
+    real(r8) :: vis_frc                        ! Fraction of surface insolation blueward of 0.7microns 
+                                               ! in rrtmg_sw split band 
     ! combined cloud radiative parameters are "in cloud" not "in cell"
     real(r8) :: c_cld_tau    (nbndsw,pcols,pver) ! cloud extinction optical depth
     real(r8) :: c_cld_tau_w  (nbndsw,pcols,pver) ! cloud single scattering albedo * tau
@@ -1097,18 +1100,21 @@ end function radiation_nextsw_cday
       call pbuf_get_field(pbuf, sd_idx, sd)
       call pbuf_get_field(pbuf, lu_idx, lu)
       call pbuf_get_field(pbuf, ld_idx, ld)
-    end if
- 
+   end if
+
+   !JPT 20250702: "rad_asym_splt" namelist switch partitions the flux within the RRMTG_SW split band
+   ! (Band 9, overlapping the 0.7micron) between the VIS/NIR coupling channels. The default (false)
+   ! splits flux in this band evenly between the VIS and NIR bands. Tolento et al. (2025) suggest
+   ! a ratio of 55.5/44.5 would be more appropriate, which results in cooling over cryospheric surfaces
+    if (rad_asym_splt) then 
+       vis_frc = 0.555_r8
+    else
+       vis_frc = 0.5_r8
+    endif
+    
     if (do_aerocom_ind3) then
       cld_tau_idx = pbuf_get_index('cld_tau')
     end if
-   
-!  For CRM, make cloud equal to input observations:
-    if (single_column.and.scm_crm_mode.and.have_cld) then
-       do k = 1,pver
-          cld(:ncol,k)= cldobs(k)
-       enddo
-    endif
 
     if (cldfsnow_idx > 0) then
       call outfld('CLDFSNOW',cldfsnow,pcols,lchnk)
@@ -1139,18 +1145,32 @@ end function radiation_nextsw_cday
     dosw     = radiation_do('sw')      ! do shortwave heating calc this timestep?
     dolw     = radiation_do('lw')      ! do longwave heating calc this timestep?
 
+    ! In sensitivity experiments with iradsw = 0, dosw is always .false.;
+    ! consequently, the "if (dosw) then" blocks later in this subroutine are skipped.
+    ! With a debug build, arrays like qrs, fsnt, and fsns may be left
+    ! in an uninitialized state and subsequently cause floating-point exception.
+    ! Here, we initialize these arrays with zero at the first timestep to avoid trouble.
+
+    if ( (.not.dosw) .and. is_first_step() ) then
+       qrs(1:ncol,1:pver) = 0._r8
+       fsnt(1:ncol) = 0._r8
+       fsns(1:ncol) = 0._r8
+    end if
+
+    ! Similarly, initialize qrl, flnt, and flns with 0 for experiments that have iradlw = 0.
+
+    if ( (.not.dolw) .and. is_first_step() ) then
+       qrl(1:ncol,1:pver) = 0._r8
+       flnt(1:ncol) = 0._r8
+       flns(1:ncol) = 0._r8
+    end if
+
+    !-----------
+
     if (dosw .or. dolw) then
 
        ! construct an RRTMG state object
        r_state => rrtmg_state_create( state, cam_in )
-
-       ! For CRM, make cloud liquid water path equal to input observations
-       if(single_column.and.scm_crm_mode.and.have_clwp)then
-          call endrun('cloud water path must be passed through radiation interface')
-          !do k=1,pver
-          !   cliqwp(:ncol,k) = clwpobs(k)
-          !end do
-       endif
 
        call t_stopf ('radiation_tend_init')
 
@@ -1313,7 +1333,7 @@ end function radiation_nextsw_cday
                        state%pmid,   cldfprime,                                                &
                        aer_tau,      aer_tau_w,    aer_tau_w_g,  aer_tau_w_f,                  &
                        eccf,         coszrs,       solin,        sfac,                         &
-                       cam_in%asdir, cam_in%asdif, cam_in%aldir, cam_in%aldif,                 &
+                       cam_in%asdir, cam_in%asdif, cam_in%aldir, cam_in%aldif, vis_frc,         &
                        qrs,          qrsc,         fsnt,         fsntc,        fsntoa, fsutoa, &
                        fsntoac,      fsnirt,       fsnrtc,       fsnirtsq,     fsns,           &
                        fsnsc,        fsdsc,        fsds,         cam_out%sols, cam_out%soll,   &
@@ -1323,7 +1343,6 @@ end function radiation_nextsw_cday
                        E_cld_tau=c_cld_tau, E_cld_tau_w=c_cld_tau_w, E_cld_tau_w_g=c_cld_tau_w_g, E_cld_tau_w_f=c_cld_tau_w_f, &
                        old_convert = .false.)
                   call t_stopf ('rad_rrtmg_sw')
-
                   !  Output net fluxes at 200 mb
                   call vertinterp(ncol, pcols, pverp, state%pint, 20000._r8, fcns, fsn200c)
                   call vertinterp(ncol, pcols, pverp, state%pint, 20000._r8, fns, fsn200)
@@ -1379,6 +1398,9 @@ end function radiation_nextsw_cday
                   call outfld('FSNRTOAS'//diag(icall),fsnirtsq,pcols,lchnk)
                   call outfld('FSNT'//diag(icall),fsnt  ,pcols,lchnk)
                   call outfld('FSNS'//diag(icall),fsns  ,pcols,lchnk)
+                  ! FSUS = upwelling SW at surface = FSDS - FSNS
+                  ftem(:ncol,1) = fsds(:ncol) - fsns(:ncol)
+                  call outfld('FSUS'//diag(icall),ftem  ,pcols,lchnk)
                   call outfld('FSNTC'//diag(icall),fsntc ,pcols,lchnk)
                   call outfld('FSNSC'//diag(icall),fsnsc ,pcols,lchnk)
                   call outfld('FSDSC'//diag(icall),fsdsc ,pcols,lchnk)
@@ -1405,10 +1427,10 @@ end function radiation_nextsw_cday
           if (cldfsnow_idx > 0) then
              snow_icld_vistau(:ncol,:) = snow_tau(idx_sw_diag,:ncol,:)
           endif
-	  ! multiply by total cloud fraction to get gridbox value
-	  tot_cld_vistau(:ncol,:) = c_cld_tau(idx_sw_diag,:ncol,:)*cldfprime(:ncol,:)
+          ! multiply by total cloud fraction to get gridbox value
+          tot_cld_vistau(:ncol,:) = c_cld_tau(idx_sw_diag,:ncol,:)*cldfprime(:ncol,:)
 
-	  ! add fillvalue for night columns
+          ! add fillvalue for night columns
           do i = 1, Nnite
               tot_cld_vistau(IdxNite(i),:)   = fillvalue
               tot_icld_vistau(IdxNite(i),:)  = fillvalue
@@ -1426,7 +1448,6 @@ end function radiation_nextsw_cday
           if (cldfsnow_idx > 0) then
              call outfld('SNOW_ICLD_VISTAU', snow_icld_vistau, pcols, lchnk)
           endif
-
           call t_stopf ('rad_sw')
        end if   ! dosw
 
@@ -1437,14 +1458,6 @@ end function radiation_nextsw_cday
 
        if (dolw) then
           call t_startf ('rad_lw')
-          !
-          ! Convert upward longwave flux units to CGS
-          !
-          do i=1,ncol
-             lwupcgs(i) = cam_in%lwup(i)*1000._r8
-             if(single_column.and.scm_crm_mode.and.have_tg) &
-                  lwupcgs(i) = 1000*stebol*tground(1)**4
-          end do
 
           call rad_cnst_get_call_list(active_calls)
 
@@ -1491,6 +1504,9 @@ end function radiation_nextsw_cday
                   call outfld('FLN200'//diag(icall),fln200,pcols,lchnk)
                   call outfld('FLN200C'//diag(icall),fln200c,pcols,lchnk)
                   call outfld('FLDS'//diag(icall),cam_out%flwds ,pcols,lchnk)
+                  ! FLUS = upwelling LW at surface = FLNS + FLDS
+                  ftem(:ncol,1) = flns(:ncol) + cam_out%flwds(:ncol)
+                  call outfld('FLUS'//diag(icall),ftem  ,pcols,lchnk)
 
               end if
           end do

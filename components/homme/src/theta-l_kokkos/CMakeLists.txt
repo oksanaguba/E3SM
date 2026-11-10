@@ -11,17 +11,12 @@ MACRO(THETAL_KOKKOS_SETUP)
   SET(TEST_SRC_DIR      ${HOMME_SOURCE_DIR}/src/test_src)
   SET(ARKODE_DIR        ${HOMME_SOURCE_DIR}/src/arkode)
 
-  SET(UTILS_TIMING_SRC_DIR  ${CMAKE_SOURCE_DIR}/utils/cime/CIME/non_py/src/timing)
-  SET(UTILS_TIMING_DIR      ${CMAKE_BINARY_DIR}/utils/cime/CIME/non_py/src/timing)
-
   # Make INCLUDE_DIRS global so the tests can access it
   SET (EXEC_LIB_INCLUDE_DIRS
     ${TARGET_DIR}/cxx
-    ${UTILS_TIMING_SRC_DIR}
-    ${UTILS_TIMING_DIR}
     ${SRC_SHARE_DIR}/cxx
     ${SRC_SHARE_DIR}/compose
-    ${CMAKE_BINARY_DIR}/src/share/cxx
+    ${HOMME_BINARY_DIR}/src/share/cxx
   )
   IF (NOT HOMME_ENABLE_COMPOSE)
     LIST(REMOVE_ITEM EXEC_LIB_INCLUDE_DIRS ${SRC_SHARE_DIR}/compose)
@@ -35,9 +30,6 @@ MACRO(THETAL_KOKKOS_SETUP)
   # Find F90 files in share and test directories
   # TODO: share files among different theta folders
   SET (TARGET_F90
-    ${THETA_SHARE_DIR}/bndry_mod.F90
-    ${THETA_SHARE_DIR}/derivative_mod.F90
-    ${THETA_SHARE_DIR}/edge_mod.F90
     ${THETA_SHARE_DIR}/element_ops.F90
     ${THETA_SHARE_DIR}/eos.F90
     ${THETA_SHARE_DIR}/model_init_mod.F90
@@ -54,19 +46,19 @@ MACRO(THETAL_KOKKOS_SETUP)
   )
 
   SET (SRC_SHARE_F90
-    ${SRC_SHARE_DIR}/bndry_mod_base.F90
+    ${SRC_SHARE_DIR}/bndry_mod.F90
     ${SRC_SHARE_DIR}/cg_mod.F90
     ${SRC_SHARE_DIR}/compose_mod.F90
     ${SRC_SHARE_DIR}/compose_test_mod.F90
     ${SRC_SHARE_DIR}/coordinate_systems_mod.F90
     ${SRC_SHARE_DIR}/control_mod.F90
     ${SRC_SHARE_DIR}/cube_mod.F90
-    ${SRC_SHARE_DIR}/derivative_mod_base.F90
+    ${SRC_SHARE_DIR}/derivative_mod.F90
     ${SRC_SHARE_DIR}/dimensions_mod.F90
     ${SRC_SHARE_DIR}/dof_mod.F90
     ${SRC_SHARE_DIR}/domain_mod.F90
     ${SRC_SHARE_DIR}/edgetype_mod.F90
-    ${SRC_SHARE_DIR}/edge_mod_base.F90
+    ${SRC_SHARE_DIR}/edge_mod.F90
     ${SRC_SHARE_DIR}/element_mod.F90
     ${SRC_SHARE_DIR}/gllfvremap_mod.F90
     ${SRC_SHARE_DIR}/gllfvremap_util_mod.F90
@@ -106,6 +98,7 @@ MACRO(THETAL_KOKKOS_SETUP)
     ${SRC_SHARE_DIR}/planar_mod.F90
     ${SRC_SHARE_DIR}/geometry_mod.F90
     ${SRC_SHARE_DIR}/planar_mesh_mod.F90
+    ${SRC_SHARE_DIR}/semoab_mod.F90
   )
 
   IF (NOT HOMME_ENABLE_COMPOSE)
@@ -118,7 +111,7 @@ MACRO(THETAL_KOKKOS_SETUP)
     ${TEST_SRC_DIR}/baroclinic_inst_mod.F90
     ${TEST_SRC_DIR}/dcmip12_wrapper.F90
     ${TEST_SRC_DIR}/dcmip16_wrapper.F90
-    ${TEST_SRC_DIR}/dcmip2012_test1_conv.F90
+    ${TEST_SRC_DIR}/dcmip2012_test1_conv_mod.F90
     ${TEST_SRC_DIR}/dcmip2012_test1_2_3.F90
     ${TEST_SRC_DIR}/dcmip2012_test4.F90
     ${TEST_SRC_DIR}/dcmip2016-baroclinic.F90
@@ -129,6 +122,7 @@ MACRO(THETAL_KOKKOS_SETUP)
     ${TEST_SRC_DIR}/dcmip2016-tropical-cyclone.F90
     ${TEST_SRC_DIR}/held_suarez_mod.F90
     ${TEST_SRC_DIR}/dry_planar.F90
+    ${TEST_SRC_DIR}/planar_transport.F90
     ${TEST_SRC_DIR}/moist_planar.F90
     ${TEST_SRC_DIR}/mtests.F90
   )
@@ -147,6 +141,7 @@ MACRO(THETAL_KOKKOS_SETUP)
     ${TARGET_DIR}/cxx/ElementsState.cpp
     ${TARGET_DIR}/cxx/HyperviscosityFunctorImpl.cpp
     ${TARGET_DIR}/cxx/DirkFunctor.cpp
+    ${TARGET_DIR}/cxx/LimiterFunctor.hpp
     ${TARGET_DIR}/cxx/cxx_f90_interface_theta.cpp
     ${TARGET_DIR}/cxx/prim_advance_exp.cpp
     ${SRC_SHARE_DIR}/cxx/CaarFunctor.cpp
@@ -159,8 +154,11 @@ MACRO(THETAL_KOKKOS_SETUP)
     ${SRC_SHARE_DIR}/cxx/ComposeTransport.cpp
     ${SRC_SHARE_DIR}/cxx/ComposeTransportImplGeneral.cpp
     ${SRC_SHARE_DIR}/cxx/ComposeTransportImplTrajectory.cpp
+    ${SRC_SHARE_DIR}/cxx/ComposeTransportImplEnhancedTrajectory.cpp
+    ${SRC_SHARE_DIR}/cxx/ComposeTransportImplEnhancedTrajectoryTests.cpp
     ${SRC_SHARE_DIR}/cxx/ComposeTransportImplVerticalRemap.cpp
     ${SRC_SHARE_DIR}/cxx/ComposeTransportImplHypervis.cpp
+    ${SRC_SHARE_DIR}/cxx/ComposeTransportImplHorizTurb.cpp
     ${SRC_SHARE_DIR}/cxx/ComposeTransportImplTest2D.cpp
     ${SRC_SHARE_DIR}/cxx/GllFvRemap.cpp
     ${SRC_SHARE_DIR}/cxx/GllFvRemapImpl.cpp
@@ -182,6 +180,8 @@ MACRO(THETAL_KOKKOS_SETUP)
     ${SRC_SHARE_DIR}/cxx/mpi/MpiBuffersManager.cpp
     ${SRC_SHARE_DIR}/cxx/mpi/mpi_cxx_f90_interface.cpp
     ${SRC_SHARE_DIR}/cxx/utilities/BfbUtils.cpp
+    ${SRC_SHARE_DIR}/cxx/utilities/InternalDiagnostics.cpp
+    ${SRC_SHARE_DIR}/cxx/utilities/Hash.cpp
   )
 
   IF (HOMME_USE_ARKODE)

@@ -1,0 +1,676 @@
+#include "share/grid/abstract_grid.hpp"
+#include "share/util/gid_directory.hpp"
+
+#include "share/field/field_utils.hpp"
+
+#include <ekat_assert.hpp>
+
+#include <algorithm>
+#include <cstring>
+#include <string>
+#include <type_traits>
+
+namespace scream
+{
+
+static_assert (std::is_same<GidDirectory<AbstractGrid::gid_type>::gid_view_h,AbstractGrid::gid_view_h>::value,
+               "Error! GidDirectory::gid_view_h must match AbstractGrid::gid_view_h.\n");
+
+// Constructor(s) & Destructor
+AbstractGrid::AbstractGrid(const std::string &name, const GridType type, const int num_local_dofs,
+                           const int num_vertical_lev, const ekat::Comm &comm)
+ : m_type(type),
+   m_name(name),
+   m_num_local_dofs(num_local_dofs),
+   m_num_vert_levs(num_vertical_lev),
+   m_comm(comm)
+{
+  // Sanity checks
+  EKAT_REQUIRE_MSG (m_num_local_dofs>=0, "Error! Number of local dofs must be non-negative.\n");
+
+  m_comm.all_reduce(&m_num_local_dofs,&m_num_global_dofs,1,MPI_SUM);
+
+  // This grid name is also an alias
+  m_aliases.push_back(m_name);
+
+  // Ensure each grid object gets a different id
+  static int counter = 0;
+  m_unique_grid_id = counter;
+  ++counter;
+}
+
+AbstractGrid::
+AbstractGrid (const std::string& name,
+              const GridType type,
+              const int num_local_dofs,
+              const int num_global_dofs,
+              const int num_vertical_lev,
+              const ekat::Comm& comm)
+ : AbstractGrid(name,type,num_local_dofs,num_vertical_lev,comm)
+{
+  m_num_global_dofs = num_global_dofs;
+#ifndef NDEBUG
+  int max_nldofs = m_num_local_dofs;
+  m_comm.all_reduce(&max_nldofs,1,MPI_MAX);
+  EKAT_REQUIRE_MSG (max_nldofs<=m_num_global_dofs,
+      "Error! The number of global dof is smaller than the local number of dofs on some ranks.\n"
+      " - grid name: " + name + "\n"
+      " - num global dofs: " + std::to_string(m_num_global_dofs) + "\n"
+      " - max num local dofs: " + std::to_string(max_nldofs) + "\n");
+#endif
+}
+
+void AbstractGrid::add_alias (const std::string& alias)
+{
+  if (not ekat::contains(m_aliases,alias) and alias!=m_name) {
+    m_aliases.push_back(alias);
+  }
+}
+
+void AbstractGrid::check_tag_vkind_compatibility (const FieldTag vtag) const
+{
+  using namespace ShortFieldTagsNames;
+  if (m_vkind == VKind::Model) {
+    EKAT_REQUIRE_MSG (vtag==LEV or vtag==ILEV,
+        "Error! A grid with VKind=Model only accepts LEV/ILEV as vertical dim tag.\n"
+        "  - grid name: " + m_name + "\n");
+  } else {
+    EKAT_REQUIRE_MSG (vtag==LEVP,
+        "Error! A grid with VKind=Pressure only accepts LEVP as vertical dim tag.\n"
+        "  - grid name: " + m_name + "\n");
+  }
+}
+
+FieldLayout AbstractGrid::
+get_vertical_layout (const FieldTag vtag) const
+{
+  using namespace ShortFieldTagsNames;
+  check_tag_vkind_compatibility(vtag);
+  const auto d = m_num_vert_levs + (vtag==ILEV ? 1 : 0);
+  return FieldLayout({vtag},{d}).rename_dims(m_special_tag_names);
+}
+
+FieldLayout AbstractGrid::
+get_vertical_layout (const FieldTag vtag,
+                     const int vector_dim,
+                     const std::string& vec_dim_name) const
+{
+  using namespace ShortFieldTagsNames;
+  auto l = get_vertical_layout(vtag);
+  l.prepend_dim(CMP,vector_dim,vec_dim_name);
+  return l;
+}
+
+FieldLayout
+AbstractGrid::get_2d_vector_layout (const int vector_dim) const
+{
+  using namespace ShortFieldTagsNames;
+  return get_2d_vector_layout(vector_dim,e2str(CMP));
+}
+
+FieldLayout
+AbstractGrid::get_2d_tensor_layout (const std::vector<int>& cmp_dims) const
+{
+  using namespace ShortFieldTagsNames;
+  std::vector<std::string> names (cmp_dims.size(),e2str(CMP));
+  return get_2d_tensor_layout(cmp_dims,names);
+}
+
+FieldLayout
+AbstractGrid::get_3d_vector_layout (const FieldTag vtag, const int vector_dim) const
+{
+  using namespace ShortFieldTagsNames;
+  return get_3d_vector_layout(vtag,vector_dim,e2str(CMP));
+}
+
+FieldLayout
+AbstractGrid::get_3d_tensor_layout (const FieldTag vtag, const std::vector<int>& cmp_dims) const
+{
+  using namespace ShortFieldTagsNames;
+  std::vector<std::string> names (cmp_dims.size(),e2str(CMP));
+  return get_3d_tensor_layout(vtag,cmp_dims,names);
+}
+
+FieldLayout
+AbstractGrid::equivalent_layout (const FieldLayout& template_layout) const
+{
+  using namespace ShortFieldTagsNames;
+
+  FieldLayout ret_layout = FieldLayout::invalid();
+
+  // Extract the vertical tag from the template (LEV, ILEV, or LEVP).
+  // This tag is passed directly to the get_Xd_Y_layout methods, which will
+  // check compatibility with this grid's VKind and throw if incompatible.
+  FieldTag vlev_tag = FieldTag::Invalid;
+  if (template_layout.has_tag(LEV))       vlev_tag = LEV;
+  else if (template_layout.has_tag(ILEV)) vlev_tag = ILEV;
+  else if (template_layout.has_tag(LEVP)) vlev_tag = LEVP;
+
+  const auto names       = template_layout.names();
+  const auto vec_cmp     = template_layout.is_vector_layout() ?
+                           template_layout.get_vector_component_idx() : -1;
+  const auto vec_dim     = template_layout.is_vector_layout() ?
+                           template_layout.get_vector_dim() : -1;
+  const auto tensor_dims = template_layout.is_tensor_layout() ?
+                           template_layout.get_tensor_dims() : std::vector<int>{};
+  std::vector<std::string> tdims_names;
+  if (template_layout.is_tensor_layout()) {
+    for (auto idx : template_layout.get_tensor_components_ids()) {
+      tdims_names.push_back(names[idx]);
+    }
+  }
+
+  switch (template_layout.type()) {
+    case LayoutType::Scalar0D:
+    case LayoutType::Vector0D:
+    case LayoutType::Tensor0D:
+      // 0d layouts are the same on all grids
+      ret_layout = template_layout;
+      break;
+    case LayoutType::Scalar1D:
+      ret_layout = get_vertical_layout(vlev_tag);
+      break;
+    case LayoutType::Vector1D:
+      ret_layout = get_vertical_layout(vlev_tag, vec_dim, names[vec_cmp]);
+      break;
+    case LayoutType::Scalar2D:
+      ret_layout = get_2d_scalar_layout();
+      break;
+    case LayoutType::Vector2D:
+      ret_layout = get_2d_vector_layout(vec_dim, names[vec_cmp]);
+      break;
+    case LayoutType::Tensor2D:
+      ret_layout = get_2d_tensor_layout(tensor_dims, tdims_names);
+      break;
+    case LayoutType::Scalar3D:
+      ret_layout = get_3d_scalar_layout(vlev_tag);
+      break;
+    case LayoutType::Vector3D:
+      ret_layout = get_3d_vector_layout(vlev_tag, vec_dim, names[vec_cmp]);
+      break;
+    case LayoutType::Tensor3D:
+      ret_layout = get_3d_tensor_layout(vlev_tag, tensor_dims, tdims_names);
+      break;
+    default:
+      EKAT_ERROR_MSG("Error! Unknown FieldLayout type.\n");
+      break;
+  }
+
+  return ret_layout;
+}
+
+bool AbstractGrid::
+has_same_gids_as (const AbstractGrid& other) const
+{
+  // The global count is the same on all ranks, so all ranks return here, or none
+  if (get_num_global_dofs()!=other.get_num_global_dofs()) {
+    return false;
+  }
+
+  const auto gids1 = get_dofs_gids();
+  const auto gids2 = other.get_dofs_gids();
+  int same_here = gids1.is_aliasing(gids2);
+  if (not same_here and get_num_local_dofs()==other.get_num_local_dofs()) {
+    const auto h1 = gids1.get_view<const gid_type*,Host>();
+    const auto h2 = gids2.get_view<const gid_type*,Host>();
+    same_here = std::equal(h1.data(),h1.data()+m_num_local_dofs,h2.data());
+  }
+  int same;
+  m_comm.all_reduce(&same_here,&same,1,MPI_PROD);
+  return same==1;
+}
+
+bool AbstractGrid::is_unique () const {
+  auto compute_is_unique = [&]() {
+    // Get a copy of gids on host. CAREFUL: do not use the stored dofs,
+    // since we need to sort dofs in order to call unique, and we don't
+    // want to alter the order of gids in this grid.
+    auto dofs = m_dofs_gids.clone(CloneFlags::CopyData);
+    auto dofs_h = dofs.get_view<gid_type*,Host>();
+
+    std::sort(dofs_h.data(),dofs_h.data()+m_num_local_dofs);
+    auto unique_end = std::unique(dofs_h.data(),dofs_h.data()+m_num_local_dofs);
+
+    int locally_unique = unique_end==(dofs_h.data()+m_num_local_dofs);
+    int unique;
+    m_comm.all_reduce(&locally_unique,&unique,1,MPI_PROD);
+    if (unique==0) {
+      return false;
+    }
+
+    // Each rank has unique gids locally. Now it's time to verify if they are also globally unique.
+    // A directory of gids detects duplicates without having each rank look at the gids of all other ranks.
+    GidDirectory<gid_type> directory (m_comm,dofs_h);
+    return not directory.has_duplicates();
+  };
+
+
+  static std::mutex m;
+  std::lock_guard<std::mutex> lock(m); // Lock the mutex
+  if (not m_is_unique_computed) {
+    m_is_unique = compute_is_unique();
+    m_is_unique_computed = true;
+  }
+  return m_is_unique;
+}
+
+bool AbstractGrid::
+is_valid_layout (const FieldLayout& layout) const
+{
+  using namespace ShortFieldTagsNames;
+
+  // Extract the vertical tag (LEV, ILEV, or LEVP) from the layout.
+  FieldTag vlev_tag = FieldTag::Invalid;
+  if (layout.has_tag(LEV))       vlev_tag = LEV;
+  else if (layout.has_tag(ILEV)) vlev_tag = ILEV;
+  else if (layout.has_tag(LEVP)) vlev_tag = LEVP;
+
+  switch (layout.type()) {
+    case LayoutType::Scalar0D: [[fallthrough]];
+    case LayoutType::Vector0D:
+    case LayoutType::Tensor0D:
+      // 0d quantities are always ok
+      return true;
+    case LayoutType::Scalar1D:
+      return layout.congruent(get_vertical_layout(vlev_tag));
+    case LayoutType::Vector1D:
+      return layout.congruent(get_vertical_layout(vlev_tag,layout.get_vector_dim()));
+    case LayoutType::Scalar2D:
+      return layout.congruent(get_2d_scalar_layout());
+    case LayoutType::Vector2D:
+      return layout.congruent(get_2d_vector_layout(layout.get_vector_dim()));
+    case LayoutType::Tensor2D:
+      return layout.congruent(get_2d_tensor_layout(layout.get_tensor_dims()));
+    case LayoutType::Scalar3D:
+      return layout.congruent(get_3d_scalar_layout(vlev_tag));
+    case LayoutType::Vector3D:
+      return layout.congruent(get_3d_vector_layout(vlev_tag,layout.get_vector_dim()));
+    case LayoutType::Tensor3D:
+      return layout.congruent(get_3d_tensor_layout(vlev_tag,layout.get_tensor_dims()));
+    default:
+      // Anything else is probably not ok
+      return false;
+  }
+}
+
+auto AbstractGrid::
+get_global_min_dof_gid () const ->gid_type
+{
+  static std::mutex m;
+  std::lock_guard<std::mutex> lock(m); // Lock the mutex
+  // Lazy calculation
+  if (m_global_min_dof_gid==std::numeric_limits<gid_type>::max()) {
+    m_global_min_dof_gid = field_min(m_dofs_gids,&get_comm()).as<gid_type>();
+  }
+  return m_global_min_dof_gid;
+}
+
+auto AbstractGrid::
+get_global_max_dof_gid () const ->gid_type
+{
+  static std::mutex m;
+  std::lock_guard<std::mutex> lock(m); // Lock the mutex
+  // Lazy calculation
+  if (m_global_max_dof_gid==-std::numeric_limits<gid_type>::max()) {
+    m_global_max_dof_gid = field_max(m_dofs_gids,&get_comm()).as<gid_type>();
+  }
+  return m_global_max_dof_gid;
+}
+
+auto AbstractGrid::
+get_global_min_partitioned_dim_gid () const ->gid_type
+{
+  static std::mutex m;
+  std::lock_guard<std::mutex> lock(m); // Lock the mutex
+  // Lazy calculation
+  if (m_global_min_partitioned_dim_gid==std::numeric_limits<gid_type>::max()) {
+    m_global_min_partitioned_dim_gid = field_min(m_partitioned_dim_gids,&get_comm()).as<gid_type>();
+  }
+  return m_global_min_partitioned_dim_gid;
+}
+
+auto AbstractGrid::
+get_global_max_partitioned_dim_gid () const ->gid_type
+{
+  static std::mutex m;
+  std::lock_guard<std::mutex> lock(m); // Lock the mutex
+  // Lazy calculation
+  if (m_global_max_partitioned_dim_gid==-std::numeric_limits<gid_type>::max()) {
+    m_global_max_partitioned_dim_gid = field_max(m_partitioned_dim_gids,&get_comm()).as<gid_type>();
+  }
+  return m_global_max_partitioned_dim_gid;
+}
+
+Field
+AbstractGrid::get_dofs_gids () const {
+  return m_dofs_gids.get_const();
+}
+
+Field
+AbstractGrid::get_dofs_gids () {
+  return m_dofs_gids;
+}
+
+Field
+AbstractGrid::get_partitioned_dim_gids () {
+  return m_partitioned_dim_gids;
+}
+
+Field
+AbstractGrid::get_partitioned_dim_gids () const {
+  return m_partitioned_dim_gids.get_const();
+}
+
+Field
+AbstractGrid::get_lid_to_idx_map () const {
+  return m_lid_to_idx.get_const();
+}
+
+Field
+AbstractGrid::get_lid_to_idx_map () {
+  return m_lid_to_idx;
+}
+
+Field
+AbstractGrid::get_geometry_data (const std::string& name) const {
+  EKAT_REQUIRE_MSG (has_geometry_data(name),
+      "Error! Geometry data '" + name + "' not found.\n");
+
+  return m_geo_fields.at(name).get_const();
+}
+
+Field AbstractGrid::
+create_geometry_data(const std::string& name, const FieldLayout& layout,
+                     const ekat::units::Units& units, const DataType data_type,
+                     const int pack_size) const
+{
+  FieldIdentifier fid(name,layout,units,this->name(),data_type);
+
+  EKAT_REQUIRE_MSG (not has_geometry_data(name),
+      "Error! Cannot create geometry data, since it already exists.\n"
+      "  - grid name: " + this->name() + "\n"
+      "  - geo data name: " + name + "\n"
+      "  - geo data layout: " + m_geo_fields.at(name).get_header().get_identifier().get_layout().to_string() + "\n"
+      "  - input layout: " + fid.get_layout().to_string() + "\n");
+
+  // Create field and the read only copy as well
+  auto& f = m_geo_fields[name] = Field(fid);
+  f.get_header().get_alloc_properties().request_allocation(pack_size);
+  f.allocate_view();
+  return f;
+}
+
+void
+AbstractGrid::delete_geometry_data (const std::string& name)
+{
+  EKAT_REQUIRE_MSG (has_geometry_data(name),
+      "Error! Cannot delete geometry data, since it is does not exist.\n"
+      "  - grid name: " + this->name() + "\n"
+      "  - geo data name: " + name + "\n");
+
+  m_geo_fields.erase(name);
+}
+
+void
+AbstractGrid::set_geometry_data (const Field& f) const
+{
+  EKAT_REQUIRE_MSG (not has_geometry_data(f.name()),
+      "Error! Cannot set geometry data, since it already exists.\n"
+      "  - grid name: " + this->name() + "\n"
+      "  - geo data name: " + f.name() + "\n");
+
+  m_geo_fields[f.name()] = f;
+}
+
+std::list<std::string>
+AbstractGrid::get_geometry_data_names () const
+{
+  std::list<std::string> names;
+  for (const auto& it : m_geo_fields) {
+    names.push_back(it.first);
+  }
+  return names;
+}
+
+void AbstractGrid::reset_vertical_configuration (const int num_vertical_lev, const VKind vkind) {
+  m_num_vert_levs = num_vertical_lev;
+  m_vkind = vkind;
+
+  // The unique grid must have the same vertical configuration as this grid. However, it may be shared
+  // with other grids (e.g., the grid this one was cloned from), so we cannot change it in place:
+  // replace it with a shallow clone, and reset the vertical configuration of the latter.
+  if (m_unique_grid) {
+    m_unique_grid = m_unique_grid->clone(m_unique_grid->name(),true);
+    m_unique_grid->reset_vertical_configuration(num_vertical_lev,vkind);
+  }
+
+  using namespace ShortFieldTagsNames;
+
+  // Loop over geo data. If they have the LEV, ILEV, or LEVP tag, they are
+  // no longer valid, so we must erase them.
+  for (auto it=m_geo_fields.cbegin(); it!=m_geo_fields.cend(); ) {
+    const auto& fl = it->second.get_header().get_identifier().get_layout();
+    const auto has_vlev = fl.has_tag(LEV) or fl.has_tag(ILEV) or fl.has_tag(LEVP);
+    if (has_vlev) {
+      it = m_geo_fields.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+std::vector<AbstractGrid::gid_type>
+AbstractGrid::get_unique_gids () const
+{
+  // Gather local sizes across all ranks
+  std::vector<int> ngids (m_comm.size());
+  ngids[m_comm.rank()] = get_num_local_dofs();
+  m_comm.all_gather(ngids.data(),1);
+
+  std::vector<int> offsets (m_comm.size()+1,0);
+  for (int pid=1; pid<=m_comm.size(); ++pid) {
+    offsets[pid] = offsets[pid-1] + ngids[pid-1];
+  }
+  EKAT_REQUIRE_MSG (offsets[m_comm.size()]==m_num_global_dofs,
+      "Error! Something went wrong while computing offsets in AbstractGrid::get_unique_grid.\n");
+
+  // Gather all dofs
+  const auto mpi_gid_t = ekat::get_mpi_type<gid_type>();
+  std::vector<gid_type> all_gids (m_num_global_dofs);
+  auto dofs_gids_h = m_dofs_gids.get_view<const gid_type*,Host>();
+  MPI_Allgatherv (dofs_gids_h.data(),m_num_local_dofs,mpi_gid_t,
+                  all_gids.data(),ngids.data(),offsets.data(),
+                  mpi_gid_t,m_comm.mpi_comm());
+
+  // Figure out unique dofs
+  std::vector<gid_type> unique_dofs;
+  const auto all_gids_beg = all_gids.begin();
+  const auto all_gids_end = all_gids.begin() + offsets[m_comm.rank()];
+  const auto my_gids_beg = dofs_gids_h.data();
+  const auto my_gids_end = dofs_gids_h.data() + m_num_local_dofs;
+  for (auto it=my_gids_beg; it!=my_gids_end; ++it) {
+    if (std::find(all_gids_beg,all_gids_end,*it)==all_gids_end) {
+      unique_dofs.push_back(*it);
+    }
+  }
+
+  return unique_dofs;
+}
+
+std::shared_ptr<const AbstractGrid>
+AbstractGrid::get_unique_grid () const
+{
+  if (m_unique_grid) {
+    return m_unique_grid;
+  }
+  return shared_from_this();
+}
+
+std::shared_ptr<AbstractGrid>
+AbstractGrid::get_unique_grid ()
+{
+  if (m_unique_grid) {
+    return m_unique_grid;
+  }
+  return shared_from_this();
+}
+
+void AbstractGrid::
+set_unique_grid (const std::shared_ptr<AbstractGrid>& unique_grid,
+                 const Field& unique_grid_gids)
+{
+  EKAT_REQUIRE_MSG (unique_grid!=nullptr,
+      "Error! Cannot set a null unique grid.\n"
+      " - grid name: " + name() + "\n");
+  EKAT_REQUIRE_MSG (unique_grid.get()!=this,
+      "Error! A grid cannot be its own unique grid. Simply do not set it, if it has no replicated dofs.\n"
+      " - grid name: " + name() + "\n");
+  EKAT_REQUIRE_MSG (unique_grid->m_unique_grid==nullptr,
+      "Error! The unique grid of a grid must itself be unique.\n"
+      " - grid name       : " + name() + "\n"
+      " - unique grid name: " + unique_grid->name() + "\n");
+  EKAT_REQUIRE_MSG (unique_grid->get_num_vertical_levels()==get_num_vertical_levels(),
+      "Error! The unique grid of a grid must have the same number of vertical levels.\n"
+      " - grid name       : " + name() + "\n"
+      " - unique grid name: " + unique_grid->name() + "\n");
+  EKAT_REQUIRE_MSG (unique_grid->get_vkind()==get_vkind(),
+      "Error! The unique grid of a grid must have the same kind of vertical configuration.\n"
+      " - grid name       : " + name() + "\n"
+      " - unique grid name: " + unique_grid->name() + "\n");
+  EKAT_REQUIRE_MSG (unique_grid_gids.is_allocated(),
+      "Error! The field with the unique grid gids is not allocated.\n"
+      " - grid name: " + name() + "\n");
+  EKAT_REQUIRE_MSG (unique_grid_gids.data_type()==DataType::IntType,
+      "Error! The field with the unique grid gids must have integer data type.\n"
+      " - grid name: " + name() + "\n"
+      " - field data type: " + e2str(unique_grid_gids.data_type()) + "\n");
+  const auto& gids_layout = unique_grid_gids.get_header().get_identifier().get_layout();
+  EKAT_REQUIRE_MSG (gids_layout.rank()==1 and gids_layout.dim(0)==get_num_local_dofs(),
+      "Error! The field with the unique grid gids must have one entry for each local dof.\n"
+      " - grid name: " + name() + "\n"
+      " - num local dofs: " + std::to_string(get_num_local_dofs()) + "\n"
+      " - field layout: " + gids_layout.to_string() + "\n");
+
+  m_unique_grid = unique_grid;
+  m_unique_grid_gids = unique_grid_gids;
+}
+
+Field AbstractGrid::
+get_unique_grid_gids () const
+{
+  EKAT_REQUIRE_MSG (m_unique_grid!=nullptr,
+      "Error! This grid has no unique grid (it has no replicated dofs), hence no unique grid gids.\n"
+      " - grid name: " + name() + "\n");
+  return m_unique_grid_gids.get_const();
+}
+
+std::vector<int> AbstractGrid::
+get_owners (const gid_view_h& gids) const
+{
+  std::vector<int> pids, lids;
+  get_remote_pids_and_lids(gids,pids,lids);
+  return pids;
+}
+
+void AbstractGrid::
+get_remote_pids_and_lids (const gid_view_h& gids,
+                          std::vector<int>& pids,
+                          std::vector<int>& lids) const
+{
+  const auto& comm = get_comm();
+  const int num_gids_in = gids.size();
+
+  auto my_gids_h = m_dofs_gids.get_view<const gid_type*,Host>();
+  GidDirectory<gid_type> directory (comm,my_gids_h);
+  auto result = directory.lookup(gids);
+  pids = std::move(result.pids);
+  lids = std::move(result.lids);
+
+  int num_found = 0;
+  for (int i=0; i<num_gids_in; ++i) {
+    EKAT_REQUIRE_MSG (pids[i]!=-2,
+        "Error! Found a GID with multiple owners.\n"
+        "  - gid: " + std::to_string(gids[i]) + "\n");
+    if (pids[i]>=0) {
+      ++num_found;
+    }
+  }
+  EKAT_REQUIRE_MSG (num_found==num_gids_in,
+      "Error! Could not locate the owner of one of the input GIDs.\n"
+      "  - rank: " + std::to_string(comm.rank()) + "\n"
+      "  - num found: " + std::to_string(num_found) + "\n"
+      "  - num gids in: " + std::to_string(num_gids_in) + "\n");
+}
+
+void AbstractGrid::create_dof_fields (const int scalar2d_layout_rank)
+{
+  using namespace ShortFieldTagsNames;
+
+  // The dof gids field is a 1d field, while lid2idx has rank 2.
+  // For both, the 1st dim is the num of local dofs. The 2nd dime of
+  // lid2idx is the rank of a 2d scalar layout.
+  FieldLayout dof_layout({COL},{get_num_local_dofs()});
+  FieldLayout lid2idx_layout({COL,CMP},{get_num_local_dofs(),scalar2d_layout_rank});
+  m_dofs_gids = Field(FieldIdentifier("gids",dof_layout,ekat::units::none,m_name,DataType::IntType));
+  m_lid_to_idx = Field(FieldIdentifier("lid2idx",lid2idx_layout,ekat::units::none,m_name,DataType::IntType));
+
+  m_dofs_gids.allocate_view();
+  m_lid_to_idx.allocate_view();
+}
+
+auto AbstractGrid::get_gid2lid_map () const
+ -> const std::map<gid_type,int>&
+{
+  static std::mutex m;
+  std::lock_guard<std::mutex> lock(m); // Lock the mutex
+
+  int cur_sz = m_gid2lid.size();
+  if (cur_sz<get_num_local_dofs()) {
+    auto gids_h = get_dofs_gids().get_view<const gid_type*, Host>();
+    for (int i = 0; i < get_num_local_dofs(); ++i) {
+        m_gid2lid[gids_h[i]] = i; // Modify the mutable member
+    }
+  }
+  return m_gid2lid; // Return the map
+}
+
+void AbstractGrid::copy_data (const AbstractGrid& src, const bool shallow)
+{
+  if (shallow) {
+    m_dofs_gids = src.m_dofs_gids;
+    m_partitioned_dim_gids = src.m_partitioned_dim_gids;
+  } else {
+    m_dofs_gids = src.m_dofs_gids.clone(CloneFlags::CopyData);
+    m_partitioned_dim_gids = src.m_partitioned_dim_gids.clone(CloneFlags::CopyData);
+  }
+
+  if (shallow) {
+    m_lid_to_idx = src.m_lid_to_idx;
+  } else {
+    m_lid_to_idx = src.m_lid_to_idx.clone(CloneFlags::CopyData);
+  }
+
+  for (const auto& name : src.get_geometry_data_names()) {
+    if (shallow) {
+      m_geo_fields[name] = src.m_geo_fields.at(name);
+    } else {
+      m_geo_fields[name] = src.m_geo_fields.at(name).clone(CloneFlags::CopyData);
+    }
+  }
+
+  m_global_max_dof_gid = src.m_global_max_dof_gid;
+  m_global_min_dof_gid = src.m_global_min_dof_gid;
+  m_is_unique = src.m_is_unique;
+  m_is_unique_computed = src.m_is_unique_computed;
+
+  m_vkind = src.m_vkind;
+
+  // The unique grid is shared (it is not cloned). The gids are cloned only for deep copies
+  m_unique_grid = src.m_unique_grid;
+  if (src.m_unique_grid_gids.is_allocated()) {
+    m_unique_grid_gids = shallow ? src.m_unique_grid_gids
+                                 : src.m_unique_grid_gids.clone(CloneFlags::CopyData);
+  }
+}
+
+} // namespace scream

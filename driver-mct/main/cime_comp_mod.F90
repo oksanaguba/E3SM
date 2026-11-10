@@ -107,6 +107,7 @@ module cime_comp_mod
   use seq_timemgr_mod, only: seq_timemgr_alarm_wavrun
   use seq_timemgr_mod, only: seq_timemgr_alarm_esprun
   use seq_timemgr_mod, only: seq_timemgr_alarm_iacrun
+  use seq_timemgr_mod, only: seq_timemgr_alarm_iacrun_avg
   use seq_timemgr_mod, only: seq_timemgr_alarm_barrier
   use seq_timemgr_mod, only: seq_timemgr_alarm_pause
   use seq_timemgr_mod, only: seq_timemgr_pause_active
@@ -118,6 +119,7 @@ module cime_comp_mod
   use seq_infodata_mod, only: seq_infodata_init, seq_infodata_exchange
   use seq_infodata_mod, only: seq_infodata_type, seq_infodata_orb_variable_year
   use seq_infodata_mod, only: seq_infodata_print, seq_infodata_init2
+  use seq_infodata_mod, only: nlmaps_exclude_max_number, nlmaps_exclude_nchar
 
   ! domain related routines
   use seq_domain_mct, only : seq_domain_check
@@ -144,7 +146,8 @@ module cime_comp_mod
   ! diagnostic routines
   use seq_diag_mct, only : seq_diag_zero_mct , seq_diag_avect_mct, seq_diag_lnd_mct
   use seq_diag_mct, only : seq_diag_rof_mct  , seq_diag_ocn_mct  , seq_diag_atm_mct
-  use seq_diag_mct, only : seq_diag_ice_mct  , seq_diag_accum_mct, seq_diag_print_mct
+  use seq_diag_mct, only : seq_diag_ice_mct  , seq_diag_glc_mct 
+  use seq_diag_mct, only : seq_diag_accum_mct, seq_diag_print_mct
   use seq_diagBGC_mct, only : seq_diagBGC_zero_mct , seq_diagBGC_avect_mct, seq_diagBGC_lnd_mct
   use seq_diagBGC_mct, only : seq_diagBGC_rof_mct  , seq_diagBGC_ocn_mct  , seq_diagBGC_atm_mct
   use seq_diagBGC_mct, only : seq_diagBGC_ice_mct  , seq_diagBGC_accum_mct
@@ -159,6 +162,9 @@ module cime_comp_mod
   use seq_flds_mod, only : seq_flds_r2x_fluxes, seq_flds_x2r_fluxes
   use seq_flds_mod, only : seq_flds_set
   use seq_flds_mod, only : seq_flds_z2x_fluxes, seq_flds_x2z_fluxes
+
+  ! nonlinear maps
+  use seq_nlmap_mod, only : seq_nlmap_setopts, seq_nlmap_init_a2oi_cons, seq_nlmap_init_a2l_cons
 
   ! component type and accessor functions
   use component_type_mod, only: component_get_iamin_compid, component_get_suffix
@@ -250,11 +256,13 @@ module cime_comp_mod
   !- from prep routines (arrays of instances)
   type(mct_aVect) , pointer :: a2x_ox(:) => null()
   type(mct_aVect) , pointer :: o2x_ax(:) => null()
+  type(mct_aVect) , pointer :: w2x_ax(:) => null()
   type(mct_aVect) , pointer :: xao_ox(:) => null()
   type(mct_aVect) , pointer :: xao_ax(:) => null()
 
   !- from component type (single instance inside array of components)
   type(mct_aVect) , pointer :: o2x_ox => null()
+  type(mct_aVect) , pointer :: w2x_ox(:)  => null()
   type(mct_aVect) , pointer :: a2x_ax => null()
 
   character(len=CL) :: inst_suffix
@@ -322,6 +330,7 @@ module cime_comp_mod
   logical  :: wavrun_alarm           ! wav run alarm
   logical  :: esprun_alarm           ! esp run alarm
   logical  :: iacrun_alarm           ! iac run alarm
+  logical  :: iacrun_avg_alarm       ! iac averaging alarm
   logical  :: tprof_alarm            ! timing profile alarm
   logical  :: barrier_alarm          ! barrier alarm
   logical  :: t1hr_alarm             ! alarm every hour
@@ -409,6 +418,7 @@ module cime_comp_mod
 
   logical  :: atm_prognostic         ! .true.  => atm comp expects input
   logical  :: lnd_prognostic         ! .true.  => lnd comp expects input
+  logical  :: lndocn_prognostic      ! .ture.  => lnd comp expects ocean inputs
   logical  :: ice_prognostic         ! .true.  => ice comp expects input
   logical  :: iceberg_prognostic     ! .true.  => ice comp can handle iceberg input
   logical  :: ocn_prognostic         ! .true.  => ocn comp expects input
@@ -429,10 +439,14 @@ module cime_comp_mod
   logical  :: lnd_c2_rof             ! .true.  => lnd to rof coupling on
   logical  :: lnd_c2_glc             ! .true.  => lnd to glc coupling on
   logical  :: ocn_c2_atm             ! .true.  => ocn to atm coupling on
+  logical  :: wav_c2_atm             ! .true.  => wav to atm coupling on
   logical  :: ocn_c2_ice             ! .true.  => ocn to ice coupling on
+  logical  :: ocn_c2_glctf           ! .true.  => ocn to glc thermal forcing coupling on
+  integer  :: glc_nzoc               ! number of z-levels for ocn/glc TF coupling
   logical  :: ocn_c2_glcshelf        ! .true.  => ocn to glc ice shelf coupling on
   logical  :: ocn_c2_wav             ! .true.  => ocn to wav coupling on
   logical  :: ocn_c2_rof             ! .true.  => ocn to rof coupling on
+  logical  :: ocn_c2_lnd             ! .true.  => ocn to lnd coupling on
   logical  :: ice_c2_atm             ! .true.  => ice to atm coupling on
   logical  :: ice_c2_ocn             ! .true.  => ice to ocn coupling on
   logical  :: ice_c2_wav             ! .true.  => ice to wav coupling on
@@ -445,6 +459,7 @@ module cime_comp_mod
   logical  :: glcshelf_c2_ocn        ! .true.  => glc ice shelf to ocn coupling on
   logical  :: glcshelf_c2_ice        ! .true.  => glc ice shelf to ice coupling on
   logical  :: wav_c2_ocn             ! .true.  => wav to ocn coupling on
+  logical  :: wav_c2_ice             ! .true.  => wav to ice coupling on
 
   logical  :: iac_c2_lnd             ! .true.  => iac to lnd coupling on
   logical  :: iac_c2_atm             ! .true.  => iac to atm coupling on
@@ -492,7 +507,8 @@ module cime_comp_mod
   logical  :: samegrid_og            ! samegrid glc and ocean
   logical  :: samegrid_ig            ! samegrid glc and ice
   logical  :: samegrid_alo           ! samegrid atm, lnd, ocean
-  logical  :: samegrid_zl            ! samegrid iac and land
+  logical  :: samegrid_lz            ! samegrid iac and land
+  logical  :: samegrid_az            ! samegrid iac and atm
 
   logical       :: read_restart      ! local read restart flag
   character(CL) :: rest_file         ! restart file path + filename
@@ -521,6 +537,7 @@ module cime_comp_mod
   logical :: do_hist_a2x3hr          ! create aux files: a2x 3hr states
   logical :: do_hist_a2x1hri         ! create aux files: a2x 1hr instantaneous
   logical :: do_hist_a2x1hr          ! create aux files: a2x 1hr
+  logical :: do_hist_z2x             ! create aux files: z2x
   integer :: budget_inst             ! instantaneous budget flag
   integer :: budget_daily            ! daily budget flag
   integer :: budget_month            ! monthly budget flag
@@ -623,7 +640,7 @@ module cime_comp_mod
   logical  :: iamin_CPLALLWAVID     ! pe associated with CPLALLWAVID
   logical  :: iamin_CPLALLIACID     ! pe associated with CPLALLIACID
 
-  integer  :: atm_rootpe,lnd_rootpe,ice_rootpe,ocn_rootpe,&
+  integer  :: cpl_rootpe,atm_rootpe,lnd_rootpe,ice_rootpe,ocn_rootpe,&
               glc_rootpe,rof_rootpe,wav_rootpe,iac_rootpe
 
   !----------------------------------------------------------------------------
@@ -649,6 +666,37 @@ module cime_comp_mod
   integer, parameter :: comp_num_iac = 9
 
   !----------------------------------------------------------------------------
+  ! Data structures and parameters for rpointer-consistency management.
+  !----------------------------------------------------------------------------
+  ! The number of components, including the driver. This should be 1 more than
+  ! the maximum comp_num_x integer.
+  integer, parameter :: rpointer_ncomp = 10
+  ! Suffixes x for rpointer.x files.
+  character(3), parameter :: rpointer_suffixes(rpointer_ncomp) = &
+       ['atm', 'lnd', 'ice', 'ocn', 'glc', 'rof', 'wav', 'esp', 'iac', 'drv']
+  ! Wrapper to a clock pointer.
+  type, private :: EClockPointer_t
+     type (ESMF_Clock), pointer :: ptr
+  end type EClockPointer_t
+  ! Manager data structure.
+  type, private :: RpointerMgr_t
+     ! Number of components active.
+     integer :: npresent
+     ! Program state variable.
+     logical :: remove_prev_in_next_call
+     ! Component i is present.
+     logical :: cpresent(rpointer_ncomp)
+     ! Component i's restart alarm rang.
+     logical :: rang(rpointer_ncomp)
+     ! Component i's clock.
+     type (EClockPointer_t) :: clock(rpointer_ncomp)
+     ! Verbosity flag
+     logical :: verbose
+  end type RpointerMgr_t
+  ! Manager object.
+  type (RpointerMgr_t) :: rpointer_mgr
+
+  !----------------------------------------------------------------------------
   ! misc
   !----------------------------------------------------------------------------
 
@@ -659,7 +707,7 @@ module cime_comp_mod
   !----------------------------------------------------------------------------
   ! formats
   !----------------------------------------------------------------------------
-  character(*), parameter :: subname = '(seq_mct_drv)'
+  character(*), parameter :: subname = '(cpl7mct_driver)'
   character(*), parameter :: F00 = "('"//subname//" : ', 4A )"
   character(*), parameter :: F0L = "('"//subname//" : ', A, L6 )"
   character(*), parameter :: F01 = "('"//subname//" : ', A, 2i8, 3x, A )"
@@ -679,6 +727,12 @@ contains
   subroutine cime_pre_init1(esmf_log_option)
     use shr_pio_mod, only : shr_pio_init1, shr_pio_init2
     use seq_comm_mct, only: num_inst_driver
+#if defined(MPINIT_WORKAROUND) && (MPINIT_WORKAROUND == 1)
+    use iso_c_binding, only: c_int
+#endif
+#ifndef NO_MPIMOD
+    use mpi
+#endif
     !----------------------------------------------------------
     !| Initialize MCT and MPI communicators and IO
     !----------------------------------------------------------
@@ -698,10 +752,31 @@ contains
     integer(i8) :: beg_count          ! start time
     integer(i8) :: end_count          ! end time
     integer(i8) :: irtc_rate          ! factor to convert time to seconds
+
+    integer :: tmode ! Thread mode provided by the MPI library
+
+#if defined(MPINIT_WORKAROUND) && (MPINIT_WORKAROUND == 1)
+    ! HIP must be initialized before MPI_Init for GPU-aware Cray MPICH. Call the
+    ! HIP runtime directly so this works for any component.
+    interface
+       integer(c_int) function hipInit(flags) bind(C, name="hipInit")
+         import :: c_int
+         integer(c_int), value :: flags
+       end function hipInit
+    end interface
+#endif
     
     beg_count = shr_sys_irtc(irtc_rate)
     
+#if defined(MPINIT_WORKAROUND) && (MPINIT_WORKAROUND == 1)
+    ierr = hipInit(0_c_int)
+#endif
+#if defined(MPI_INIT_THREADED)
+    call mpi_init_thread(MPI_THREAD_MULTIPLE, tmode, ierr)
+#else
     call mpi_init(ierr)
+#endif
+
     call shr_mpi_chkerr(ierr,subname//' mpi_init')
 
     end_count = shr_sys_irtc(irtc_rate)
@@ -752,6 +827,7 @@ contains
     comp_iamin(it) = seq_comm_iamin(comp_id(it))
     comp_name(it)  = seq_comm_name(comp_id(it))
 
+    cpl_rootpe = seq_comm_gloroot(CPLID)
     atm_rootpe = seq_comm_gloroot(ALLATMID)
     lnd_rootpe = seq_comm_gloroot(ALLLNDID)
     ice_rootpe = seq_comm_gloroot(ALLICEID)
@@ -929,12 +1005,8 @@ contains
     !----------------------------------------------------------
 
     if (iamroot_CPLID) then
-#ifdef USE_ESMF_LIB
-       write(logunit,'(2A)') subname,' USE_ESMF_LIB is set'
-#else
-       write(logunit,'(2A)') subname,' USE_ESMF_LIB is NOT set, using esmf_wrf_timemgr'
-#endif
-       write(logunit,'(2A)') subname,' MCT_INTERFACE is set'
+       write(logunit,'(2A)') subname,' Using esmf_wrf_timemgr'
+       write(logunit,'(2A)') subname,' CPL7-MCT interface is set'
        if (num_inst_driver > 1) &
             write(logunit,'(2A,I0,A)') subname,' Driver is running with',num_inst_driver,'instances'
     endif
@@ -1022,6 +1094,9 @@ contains
     integer(i8) :: beg_count          ! start time
     integer(i8) :: end_count          ! end time
     integer(i8) :: irtc_rate          ! factor to convert time to seconds
+    integer :: nlmaps_verbosity
+    logical :: nlmaps_atm2srf_conserve
+    character(nlmaps_exclude_nchar) :: nlmaps_exclude_fields(nlmaps_exclude_max_number)
 
     !----------------------------------------------------------
     !| Timer initialization (has to be after mpi init)
@@ -1062,6 +1137,13 @@ contains
 
     !mt   call shr_mem_init(prt=.true.)
     call shr_mem_init(prt=iamroot_CPLID)
+
+    !----------------------------------------------------------
+    !| Prepare consistent rpointer.x files
+    !----------------------------------------------------------
+    ! This call must be made before the seq_infodata_init call below to make
+    ! rpointer.drv consistent.
+    call rpointer_prepare_restart()
 
     !----------------------------------------------------------
     !| Initialize infodata
@@ -1149,6 +1231,7 @@ contains
          histaux_l2x=do_hist_l2x                   , &
          histaux_l2x1yrg=do_hist_l2x1yrg           , &
          histaux_r2x=do_hist_r2x                   , &
+         histaux_z2x=do_hist_z2x                   , &
          run_barriers=run_barriers                 , &
          mct_usealltoall=mct_usealltoall           , &
          mct_usevector=mct_usevector               , &
@@ -1171,7 +1254,10 @@ contains
          reprosum_allow_infnan=reprosum_allow_infnan, &
          reprosum_diffmax=reprosum_diffmax         , &
          reprosum_recompute=reprosum_recompute     , &
-         max_cplstep_time=max_cplstep_time)
+         max_cplstep_time=max_cplstep_time         , &
+         nlmaps_verbosity=nlmaps_verbosity         , &
+         nlmaps_atm2srf_conserve=nlmaps_atm2srf_conserve, &
+         nlmaps_exclude_fields=nlmaps_exclude_fields)
 
     ! above - cpl_decomp is set to pass the cpl_decomp value to seq_mctext_decomp
     ! (via a use statement)
@@ -1184,14 +1270,16 @@ contains
          repro_sum_rel_diff_max_in = reprosum_diffmax, &
          repro_sum_recompute_in    = reprosum_recompute)
 
+    call seq_nlmap_setopts(nlmaps_verbosity_in = nlmaps_verbosity, &
+         nlmaps_exclude_fields_in = nlmaps_exclude_fields, &
+         nlmaps_atm2srf_conserve_in = nlmaps_atm2srf_conserve)
+
     ! Check cpl_seq_option
 
     if (trim(cpl_seq_option) /= 'CESM1_MOD' .and. &
         trim(cpl_seq_option) /= 'CESM1_MOD_TIGHT' .and. &
         trim(cpl_seq_option) /= 'RASM_OPTION1' .and. &
-        trim(cpl_seq_option) /= 'RASM_OPTION2' .and. &
-        trim(cpl_seq_option) /= 'NUOPC' .and. &
-        trim(cpl_seq_option) /= 'NUOPC_TIGHT' ) then
+        trim(cpl_seq_option) /= 'RASM_OPTION2') then
        call shr_sys_abort(subname//' invalid cpl_seq_option = '//trim(cpl_seq_option))
     endif
 
@@ -1353,7 +1441,8 @@ contains
             ice_present=ice_present,              &
             rof_present=rof_present,              &
             flood_present=flood_present,          &
-            rofice_present=rofice_present)
+            rofice_present=rofice_present,        &
+            iac_present=iac_present)
 
        call seq_infodata_putData(infodata,  &
             lnd_present=lnd_present,        &
@@ -1361,7 +1450,8 @@ contains
             ice_present=ice_present,        &
             rof_present=rof_present,        &
             flood_present=flood_present,    &
-            rofice_present=rofice_present)
+            rofice_present=rofice_present,  &
+            iac_present=iac_present)
     endif
     if(PIO_FILE_IS_OPEN(pioid)) then
        call pio_closefile(pioid)
@@ -1372,7 +1462,6 @@ contains
        call seq_infodata_GetData(infodata, bfbflag=bfbflag)
        write(logunit,'(2A,L4)') subname,'BFBFLAG is:',bfbflag       
     endif
-
     
     call t_stopf('CPL:cime_pre_init2')
 
@@ -1396,6 +1485,8 @@ contains
   !===============================================================================
 
   subroutine cime_init()
+
+    type(seq_map), pointer :: mapper_lcl
 
 103 format( 5A )
 104 format( A, i10.8, i8)
@@ -1422,6 +1513,8 @@ contains
     endif
 
     call t_startf('CPL:comp_init_pre_all')
+    call component_init_pre(iac, IACID, CPLIACID, CPLALLIACID, infodata, &
+       ntype='iac')
     call component_init_pre(atm, ATMID, CPLATMID, CPLALLATMID, infodata, ntype='atm')
     call component_init_pre(lnd, LNDID, CPLLNDID, CPLALLLNDID, infodata, ntype='lnd')
     call component_init_pre(rof, ROFID, CPLROFID, CPLALLROFID, infodata, ntype='rof')
@@ -1433,6 +1526,14 @@ contains
     call component_init_pre(iac, IACID, CPLIACID, CPLALLIACID, infodata, ntype='iac')
 
     call t_stopf('CPL:comp_init_pre_all')
+
+    ! we need to initialize iac first so atm and lnd know it's
+    ! there, via gcam_active -> iac_present
+    call t_startf('comp_init_cc_iac')
+    call t_adj_detailf(+2)
+    call component_init_cc(Eclock_z, iac, iac_init, infodata, NLFilename)
+    call t_adj_detailf(-2)
+    call t_stopf('comp_init_cc_iac')
 
     call t_startf('CPL:comp_init_cc_atm')
     call t_adj_detailf(+2)
@@ -1483,14 +1584,9 @@ contains
     call t_adj_detailf(-2)
     call t_stopf('CPL:comp_init_cc_esp')
 
-    call t_startf('CPL:comp_init_cc_iac')
-    call t_adj_detailf(+2)
-    call component_init_cc(Eclock_z, iac, iac_init, infodata, NLFilename)
-    call t_adj_detailf(-2)
-    call t_stopf('CPL:comp_init_cc_iac')
-
     call t_startf('CPL:comp_init_cx_all')
     call t_adj_detailf(+2)
+    call component_init_cx(iac, infodata)
     call component_init_cx(atm, infodata)
     call component_init_cx(lnd, infodata)
     call component_init_cx(rof, infodata)
@@ -1498,7 +1594,7 @@ contains
     call component_init_cx(ice, infodata)
     call component_init_cx(glc, infodata)
     call component_init_cx(wav, infodata)
-    call component_init_cx(iac, infodata)
+
     call t_adj_detailf(-2)
     call t_stopf('CPL:comp_init_cx_all')
 
@@ -1615,11 +1711,14 @@ contains
          flood_present=flood_present,           &
          atm_prognostic=atm_prognostic,         &
          lnd_prognostic=lnd_prognostic,         &
+         lndocn_prognostic=lndocn_prognostic,   &
          ice_prognostic=ice_prognostic,         &
          iceberg_prognostic=iceberg_prognostic, &
          ocn_prognostic=ocn_prognostic,         &
          ocnrof_prognostic=ocnrof_prognostic,   &
          ocn_c2_glcshelf=ocn_c2_glcshelf,       &
+         ocn_c2_glctf=ocn_c2_glctf,             &
+         glc_nzoc=glc_nzoc,                     &
          glc_prognostic=glc_prognostic,         &
          rof_prognostic=rof_prognostic,         &
          rofocn_prognostic=rofocn_prognostic,   &
@@ -1638,6 +1737,11 @@ contains
          iac_nx=iac_nx, iac_ny=iac_ny,          &
          atm_aero=atm_aero )
 
+    ! Initialize the rpointer manager. This is called after the restart routine
+    ! because we need to be further along in initialization to fully initialize
+    ! the manager. The restart routine doesn't need the initialized manager.
+    call rpointer_init_manager()
+
     ! derive samegrid flags
 
     samegrid_ao  = .true.
@@ -1650,6 +1754,8 @@ contains
     samegrid_lg  = .true.
     samegrid_og  = .true.
     samegrid_ig  = .true.
+    samegrid_lz  = .true.
+    samegrid_az  = .true.
     samegrid_alo = .true.
 
     ! set samegrid to true for single column
@@ -1664,6 +1770,8 @@ contains
        if (trim(lnd_gnam) /= trim(glc_gnam)) samegrid_lg = .false.
        if (trim(ocn_gnam) /= trim(glc_gnam)) samegrid_og = .false.
        if (trim(ice_gnam) /= trim(glc_gnam)) samegrid_ig = .false.
+       if (trim(iac_gnam) /= trim(lnd_gnam)) samegrid_lz = .false.
+       if (trim(iac_gnam) /= trim(atm_gnam)) samegrid_az = .false.
        samegrid_alo = (samegrid_al .and. samegrid_ao)
     endif
 
@@ -1681,6 +1789,7 @@ contains
     ocn_c2_ice = .false.
     ocn_c2_wav = .false.
     ocn_c2_rof = .false.
+    ocn_c2_lnd = .false.
     ice_c2_atm = .false.
     ice_c2_ocn = .false.
     ice_c2_wav = .false.
@@ -1693,6 +1802,8 @@ contains
     glcshelf_c2_ocn = .false.
     glcshelf_c2_ice = .false.
     wav_c2_ocn = .false.
+    wav_c2_atm = .false.
+    wav_c2_ice = .false.
     iac_c2_atm = .false.
     iac_c2_lnd = .false.
     lnd_c2_iac = .false.
@@ -1716,9 +1827,10 @@ contains
        if (atm_prognostic) ocn_c2_atm = .true.
        if (atm_present   ) ocn_c2_atm = .true. ! needed for aoflux calc if aoflux=atm
        if (ice_prognostic) ocn_c2_ice = .true.
+       if (glc_prognostic .and. (glc_nzoc > 0)) ocn_c2_glctf = .true.
        if (wav_prognostic) ocn_c2_wav = .true.
        if (rofocn_prognostic) ocn_c2_rof = .true.
-
+       if (lndocn_prognostic) ocn_c2_lnd = .true.
     endif
     if (ice_present) then
        if (atm_prognostic) ice_c2_atm = .true.
@@ -1742,7 +1854,9 @@ contains
        if (glcice_present .and. iceberg_prognostic) glc_c2_ice = .true.
     endif
     if (wav_present) then
+       if (atm_prognostic) wav_c2_atm = .true.
        if (ocn_prognostic) wav_c2_ocn = .true.
+       if (ice_prognostic) wav_c2_ice = .true.
     endif
     if (iac_present) then
        if (lnd_prognostic) iac_c2_lnd = .true.
@@ -1795,6 +1909,7 @@ contains
        write(logunit,F0L)'atm model prognostic  = ',atm_prognostic
        write(logunit,F0L)'lnd model prognostic  = ',lnd_prognostic
        write(logunit,F0L)'ocn model prognostic  = ',ocn_prognostic
+       write(logunit,F0L)'lnd ocn   prognostic  = ',lndocn_prognostic
        write(logunit,F0L)'ice model prognostic  = ',ice_prognostic
        write(logunit,F0L)'iceberg   prognostic  = ',iceberg_prognostic
        write(logunit,F0L)'glc model prognostic  = ',glc_prognostic
@@ -1813,11 +1928,14 @@ contains
        write(logunit,F0L)'lnd_c2_atm            = ',lnd_c2_atm
        write(logunit,F0L)'lnd_c2_rof            = ',lnd_c2_rof
        write(logunit,F0L)'lnd_c2_glc            = ',lnd_c2_glc
+       write(logunit,F0L)'lnd_c2_iac            = ',lnd_c2_iac
        write(logunit,F0L)'ocn_c2_atm            = ',ocn_c2_atm
-       write(logunit,F0L)'ocn_c2_ice            = ',ocn_c2_ice
        write(logunit,F0L)'ocn_c2_glcshelf       = ',ocn_c2_glcshelf
+       write(logunit,F0L)'ocn_c2_glctf          = ',ocn_c2_glctf
+       write(logunit,F0L)'ocn_c2_ice            = ',ocn_c2_ice
        write(logunit,F0L)'ocn_c2_wav            = ',ocn_c2_wav
        write(logunit,F0L)'ocn_c2_rof            = ',ocn_c2_rof
+       write(logunit,F0L)'ocn_c2_lnd            = ',ocn_c2_lnd
        write(logunit,F0L)'ice_c2_atm            = ',ice_c2_atm
        write(logunit,F0L)'ice_c2_ocn            = ',ice_c2_ocn
        write(logunit,F0L)'ice_c2_wav            = ',ice_c2_wav
@@ -1830,6 +1948,8 @@ contains
        write(logunit,F0L)'glcshelf_c2_ocn       = ',glcshelf_c2_ocn
        write(logunit,F0L)'glcshelf_c2_ice       = ',glcshelf_c2_ice
        write(logunit,F0L)'wav_c2_ocn            = ',wav_c2_ocn
+       write(logunit,F0L)'wav_c2_atm            = ',wav_c2_atm
+       write(logunit,F0L)'wav_c2_ice            = ',wav_c2_ice
        write(logunit,F0L)'iac_c2_lnd            = ',iac_c2_lnd
        write(logunit,F0L)'iac_c2_atm            = ',iac_c2_atm
 
@@ -1848,6 +1968,7 @@ contains
        write(logunit,F0L)'samegrid_ro           = ',samegrid_ro
        write(logunit,F0L)'samegrid_aw           = ',samegrid_aw
        write(logunit,F0L)'samegrid_ow           = ',samegrid_ow
+       write(logunit,F0L)'samegrid_az           = ',samegrid_az
        write(logunit,F0L)'skip init ocean run   = ',skip_ocean_run
        write(logunit,F00)'cpl sequence option   = ',trim(cpl_seq_option)
        write(logunit,F0L)'do_histavg            = ',do_histavg
@@ -1900,7 +2021,7 @@ contains
     endif
     if ((ocn_c2_glcshelf .and. .not. glcshelf_c2_ocn) .or. (glcshelf_c2_ocn .and. .not. ocn_c2_glcshelf)) then
        ! Current logic will not allow this to be true, but future changes could make it so, which may be nonsensical
-       call shr_sys_abort(subname//' ERROR: if glc_c2_ocn must also have ocn_c2_glc and vice versa. '//&
+       call shr_sys_abort(subname//' ERROR: if glcshelf_c2_ocn must also have ocn_c2_glcshelf and vice versa. '//&
             'Boundary layer fluxes calculated in coupler require input from both components.')
     endif
     if (rofice_present .and. .not.rof_present) then
@@ -1915,6 +2036,12 @@ contains
     if (rofocn_prognostic .and. .not.ocn_present) then
        if (iamroot_CPLID) then
           write(logunit,F00) 'WARNING: rofocn_prognostic is TRUE but ocn_present is FALSE'
+          call shr_sys_flush(logunit)
+       endif
+    endif
+    if (lndocn_prognostic .and. .not.ocn_present) then
+       if (iamroot_CPLID) then
+          write(logunit,F00) 'WARNING: lndocn_prognostic is TRUE but ocn_present is FALSE'
           call shr_sys_flush(logunit)
        endif
     endif
@@ -1959,17 +2086,17 @@ contains
        call t_adj_detailf(+2)
        if (drv_threading) call seq_comm_setnthreads(nthreads_CPLID)
 
-       call prep_atm_init(infodata, ocn_c2_atm, ice_c2_atm, lnd_c2_atm, iac_c2_lnd)
+       call prep_atm_init(infodata, ocn_c2_atm, ice_c2_atm, lnd_c2_atm, iac_c2_atm, wav_c2_atm)
 
-       call prep_lnd_init(infodata, atm_c2_lnd, rof_c2_lnd, glc_c2_lnd, iac_c2_lnd)
+       call prep_lnd_init(infodata, atm_c2_lnd, rof_c2_lnd, glc_c2_lnd, iac_c2_lnd, ocn_c2_lnd)
 
        call prep_ocn_init(infodata, atm_c2_ocn, atm_c2_ice, ice_c2_ocn, rof_c2_ocn, wav_c2_ocn, glc_c2_ocn, glcshelf_c2_ocn)
 
-       call prep_ice_init(infodata, ocn_c2_ice, glc_c2_ice, glcshelf_c2_ice, rof_c2_ice )
+       call prep_ice_init(infodata, ocn_c2_ice, glc_c2_ice, glcshelf_c2_ice, rof_c2_ice, wav_c2_ice)
 
        call prep_rof_init(infodata, lnd_c2_rof, atm_c2_rof, ocn_c2_rof)
 
-       call prep_glc_init(infodata, lnd_c2_glc, ocn_c2_glcshelf)
+       call prep_glc_init(infodata, lnd_c2_glc, ocn_c2_glctf, ocn_c2_glcshelf)
 
        call prep_wav_init(infodata, atm_c2_wav, ocn_c2_wav, ice_c2_wav)
 
@@ -1992,7 +2119,7 @@ contains
        if (drv_threading) call seq_comm_setnthreads(nthreads_CPLID)
 
        call component_init_aream(infodata, rof_c2_ocn, samegrid_ao, samegrid_al, &
-            samegrid_ro, samegrid_lg)
+            samegrid_ro, samegrid_lg, samegrid_az)
 
        if (drv_threading) call seq_comm_setnthreads(nthreads_GLOID)
 
@@ -2019,8 +2146,8 @@ contains
           endif
 
           call seq_domain_check( infodata,                                             &
-               atm(ens1), ice(ens1), lnd(ens1), ocn(ens1), rof(ens1), glc(ens1),       &
-               samegrid_al, samegrid_ao, samegrid_ro, samegrid_lg)
+               atm(ens1), ice(ens1), lnd(ens1), ocn(ens1), rof(ens1), glc(ens1), iac(ens1), &
+               samegrid_al, samegrid_ao, samegrid_ro, samegrid_lg, samegrid_az)
 
        endif
        if (drv_threading) call seq_comm_setnthreads(nthreads_GLOID)
@@ -2045,9 +2172,6 @@ contains
 #endif
     if (single_column) areafact_samegrid = .true.
 
-#ifdef COMPARE_TO_NUOPC
-    areafact_samegrid = .true.
-#endif
 
     call t_startf ('CPL:init_areacor')
     call t_adj_detailf(+2)
@@ -2233,6 +2357,21 @@ contains
     endif
 
     !----------------------------------------------------------
+    !| Initialize atm/srf exact mass conservation if requested
+    !----------------------------------------------------------
+
+    if (iamin_CPLID) then
+       if (atm_present .and. ocn_present .and. lnd_present .and. ice_present) then
+          ! Returns immediately if atm2srf_conserve is .false.
+          mapper_lcl => prep_lnd_get_mapper_Fa2l()
+          call seq_nlmap_init_a2l_cons(mapper_lcl, fractions_ax)
+          mapper_lcl => prep_ocn_get_mapper_Fa2o()
+          call seq_nlmap_init_a2oi_cons(mapper_lcl, fractions_ax)
+       end if
+    end if
+    
+
+    !----------------------------------------------------------
     !| ATM PREP for recalculation of initial solar
     !  Note that ocean albedos are ALWAYS CALCULATED on the ocean grid
     !  If aoflux_grid = 'ocn' , xao_ox is input for atm/ocn fluxes and xao_ax is output
@@ -2247,6 +2386,11 @@ contains
           if (lnd_present) then
              ! Get lnd output on atm grid
              call prep_atm_calc_l2x_ax(fractions_lx, timer='CPL:init_atminit')
+          endif
+
+          if (iac_present) then
+             ! Get iac output on atm grid
+             call prep_atm_calc_z2x_ax(fractions_zx, timer='CPL:init_atminit')
           endif
 
           if (ice_present) then
@@ -2400,6 +2544,12 @@ contains
        if (glc_c2_lnd) then
           call prep_lnd_calc_g2x_lx(timer='CPL:init_gllndnd')
        endif
+       if (iac_c2_lnd) then
+          call prep_lnd_calc_z2x_lx(timer='CPL:init_iac2lnd')
+       endif
+       if (lnd_c2_iac) then
+          call prep_iac_calc_l2x_zx(timer='CPL:init_lnd2iac')
+       endif
     endif
 
     !----------------------------------------------------------
@@ -2470,7 +2620,7 @@ contains
     logical               :: prep_glc_accum_avg_called ! Whether prep_glc_accum_avg has been called this timestep
     integer               :: i, nodeId
     character(len=15)     :: c_ymdtod
-    character(len=18)     :: c_mprof_file
+    character(len=28)     :: c_mprof_file
 
 101 format( A, i10.8, i8, 12A, A, F8.2, A, F8.2 )
 102 format( A, i10.8, i8, A, 8L3 )
@@ -2488,7 +2638,8 @@ contains
     hashint = 0
     drv_resume=.FALSE.
 
-    call seq_infodata_putData(infodata,atm_phase=1,lnd_phase=1,ocn_phase=1,ice_phase=1)
+    call seq_infodata_putData(infodata,atm_phase=1,lnd_phase=1,ocn_phase=1, &
+       ice_phase=1, iac_phase=1)
     call seq_timemgr_EClockGetData( EClock_d, stepno=begstep)
     call seq_timemgr_EClockGetData( EClock_d, dtime=dtime)
     call seq_timemgr_EClockGetData( EClock_d, calendar=calendar)
@@ -2539,10 +2690,10 @@ contains
        mrssOnTask(:)  = 0
        call mpi_gather (msize, 1, mpi_real8, &
                         msizeOnTask, 1, mpi_real8, &
-                        0, mpicom_GLOID, ierr)
+                        cpl_rootpe, mpicom_GLOID, ierr)
        call mpi_gather (mrss, 1, mpi_real8, &
                         mrssOnTask, 1, mpi_real8, &
-                        0, mpicom_GLOID, ierr)
+                        cpl_rootpe, mpicom_GLOID, ierr)
 
        if (info_mprof > 2) then ! aggregate task-level to node-level mem-usage
           allocate( msizeOnNode(0:driver_nnodes-1), mrssOnNode(0:driver_nnodes-1), stat=ierr)
@@ -2559,8 +2710,13 @@ contains
        ! write to standalone file
        if ( iamroot_CPLID) then
           mlog = shr_file_getUnit()
-          ! log-name: memory.{0,1,2,3,4}.$nsecs.log
-          write(c_mprof_file,'(a7,i1,a1,i0,a4)') 'memory.',info_mprof,'.',info_mprof_dt,'.log'
+          ! log-name: memory.{0,1,2,3,4}.$nsecs.log (single instance)
+          !       or: memory_$ninst_driver.{0,1,2,3,4}.$nsecs.log (multiple instances)
+          if (num_inst_driver > 1) then
+             write(c_mprof_file,'(a7,i4.4,a1,i1,a1,i0,a4)') 'memory_',driver_id,'.',info_mprof,'.',info_mprof_dt,'.log'
+          else
+             write(c_mprof_file,'(a7,i1,a1,i0,a4)') 'memory.',info_mprof,'.',info_mprof_dt,'.log'
+          endif
           inquire(file=trim(c_mprof_file),exist=exists)
           if (exists) then
              open(mlog, file=trim(c_mprof_file), status='old', position='append')
@@ -2703,8 +2859,19 @@ contains
        barrier_alarm = seq_timemgr_alarmIsOn(EClock_d,seq_timemgr_alarm_barrier)
        pause_alarm   = seq_timemgr_alarmIsOn(EClock_d,seq_timemgr_alarm_pause)
 
+       ! Not sure if this will cause a problem if iac isn't present,
+       ! but whatever
+       iacrun_avg_alarm = seq_timemgr_alarmIsOn(EClock_d,seq_timemgr_alarm_iacrun_avg)
+
+
        ! Does the driver need to pause?
        drv_pause = pause_alarm .and. seq_timemgr_pause_component_active(drv_index)
+
+       ! Monitor each component's restart alarm. Determine when to prepare
+       ! backup copies of the rpointer files and when it's OK to remove
+       ! these. .false. on input means never to force removal of the backup
+       ! files until the monitor's state machine says they can be removed.
+       call rpointer_manage(.false.)
 
        if (glc_prognostic .or. do_hist_l2x1yrg) then
           ! Is it time to average fields to pass to glc?
@@ -2806,6 +2973,30 @@ contains
        endif
 
        !----------------------------------------------------------
+       !| RUN IAC MODEL
+       !----------------------------------------------------------
+       if (iac_present .and. iacrun_alarm) then
+
+          !write(logunit,*) '(cime_run) calling iac_run',ymd, tod
+
+          call component_run(Eclock_z, iac, iac_run, infodata, &
+               seq_flds_x2c_fluxes=seq_flds_x2z_fluxes, &
+               seq_flds_c2x_fluxes=seq_flds_z2x_fluxes, &
+               comp_prognostic=iac_prognostic, comp_num=comp_num_iac, &
+               timer_barrier= 'CPL:IAC_RUN_BARRIER', &
+                  timer_comp_run='CPL:IAC_RUN', &
+                  run_barriers=run_barriers, ymd=ymd, &
+                  tod=tod,comp_layout=iac_layout)
+       endif
+
+       !----------------------------------------------------------
+       !| IAC RECV-POST
+       !----------------------------------------------------------
+       if (iac_present .and. iacrun_alarm) then
+          call cime_run_iac_recv_post()
+       endif
+
+       !----------------------------------------------------------
        !| MAP ATM to OCN
        !  Set a2x_ox as a module variable in prep_ocn_mod
        !  This will be used later in the ice prep and in the
@@ -2839,7 +3030,6 @@ contains
        if (ocn_present .and. ocnrun_alarm) then
           if (trim(cpl_seq_option) == 'CESM1_MOD'       .or. &
               trim(cpl_seq_option) == 'CESM1_MOD_TIGHT' .or. &
-              trim(cpl_seq_option) == 'NUOPC_TIGHT'     .or. &
               trim(cpl_seq_option) == 'RASM_OPTION1') then
              call cime_run_ocn_setup_send()
           end if
@@ -2871,18 +3061,6 @@ contains
        !----------------------------------------------------------
        if (rof_present .and. rofrun_alarm) then
           call cime_run_rof_setup_send()
-       endif
-
-       !----------------------------------------------------------
-       !| RUN IAC MODEL
-       !----------------------------------------------------------
-       if (iac_present .and. iacrun_alarm) then
-          call component_run(Eclock_z, iac, iac_run, infodata, &
-               seq_flds_x2c_fluxes=seq_flds_x2z_fluxes, &
-               seq_flds_c2x_fluxes=seq_flds_z2x_fluxes, &
-               comp_prognostic=iac_prognostic, comp_num=comp_num_iac, &
-               timer_barrier= 'CPL:IAC_RUN_BARRIER', timer_comp_run='CPL:IAC_RUN', &
-               run_barriers=run_barriers, ymd=ymd, tod=tod,comp_layout=iac_layout)
        endif
 
        !----------------------------------------------------------
@@ -2934,10 +3112,10 @@ contains
        endif
 
        !----------------------------------------------------------
-       !| RUN OCN MODEL (cesm1_mod_tight, nuopc_tight)
+       !| RUN OCN MODEL (cesm1_mod_tight)
        !----------------------------------------------------------
        if (ocn_present .and. ocnrun_alarm) then
-          if (trim(cpl_seq_option) == 'CESM1_MOD_TIGHT' .or. trim(cpl_seq_option) == 'NUOPC_TIGHT') then
+          if (trim(cpl_seq_option) == 'CESM1_MOD_TIGHT') then
              call component_run(Eclock_o, ocn, ocn_run, infodata, &
                   seq_flds_x2c_fluxes=seq_flds_x2o_fluxes, &
                   seq_flds_c2x_fluxes=seq_flds_o2x_fluxes, &
@@ -2948,17 +3126,10 @@ contains
        end if
 
        !----------------------------------------------------------
-       !| IAC RECV-POST
-       !----------------------------------------------------------
-       if (iac_present .and. iacrun_alarm) then
-          call cime_run_iac_recv_post()
-       endif
-
-       !----------------------------------------------------------
-       !| OCN RECV-POST (cesm1_mod_tight, nuopc_tight)
+       !| OCN RECV-POST (cesm1_mod_tight)
        !----------------------------------------------------------
        if (ocn_present .and. ocnnext_alarm) then
-          if (trim(cpl_seq_option) == 'CESM1_MOD_TIGHT' .or. trim(cpl_seq_option) == 'NUOPC_TIGHT') then
+          if (trim(cpl_seq_option) == 'CESM1_MOD_TIGHT') then
              call cime_run_ocn_recv_post()
           endif
        end if
@@ -2970,9 +3141,7 @@ contains
        ! accumulates ocn input and computes ocean albedos
        if (ocn_present) then
           if (trim(cpl_seq_option) == 'CESM1_MOD'       .or. &
-              trim(cpl_seq_option) == 'CESM1_MOD_TIGHT' .or. &
-              trim(cpl_seq_option) == 'NUOPC'           .or. &
-              trim(cpl_seq_option) == 'NUOPC_TIGHT' ) then
+              trim(cpl_seq_option) == 'CESM1_MOD_TIGHT') then
              call cime_run_atmocn_setup(hashint)
           end if
        endif
@@ -2987,8 +3156,12 @@ contains
        !----------------------------------------------------------
        !| GLC SETUP-SEND
        !----------------------------------------------------------
-       if (glc_present .and. glcrun_alarm) then
-          call cime_run_glc_setup_send(lnd2glc_averaged_now, prep_glc_accum_avg_called)
+       if (glc_present) then
+          if (glcrun_alarm) then
+             call cime_run_glc_setup_send(lnd2glc_averaged_now, prep_glc_accum_avg_called)
+          else
+             if (iamin_CPLID) call prep_glc_zero_fields()
+          endif
        endif
 
        ! ------------------------------------------------------------------------
@@ -3035,6 +3208,7 @@ contains
 
           endif
        endif
+
        !----------------------------------------------------------
        !| Budget with old fractions
        !----------------------------------------------------------
@@ -3082,13 +3256,12 @@ contains
        endif
 
        !----------------------------------------------------------
-       !| RUN OCN MODEL (NOT cesm1_mod_tight or nuopc_tight)
+       !| RUN OCN MODEL (NOT cesm1_mod_tight)
        !----------------------------------------------------------
        if (ocn_present .and. ocnrun_alarm) then
           if (trim(cpl_seq_option) == 'CESM1_MOD'    .or. &
               trim(cpl_seq_option) == 'RASM_OPTION1' .or. &
-              trim(cpl_seq_option) == 'RASM_OPTION2' .or. &
-              trim(cpl_seq_option) == 'NUOPC') then
+              trim(cpl_seq_option) == 'RASM_OPTION2') then
              call component_run(Eclock_o, ocn, ocn_run, infodata, &
                   seq_flds_x2c_fluxes=seq_flds_x2o_fluxes, &
                   seq_flds_c2x_fluxes=seq_flds_o2x_fluxes, &
@@ -3151,13 +3324,12 @@ contains
        endif
 
        !----------------------------------------------------------
-       !| OCN RECV-POST (NOT cesm1_mod_tight or nuopc_tight)
+       !| OCN RECV-POST (NOT cesm1_mod_tight)
        !----------------------------------------------------------
        if (ocn_present .and. ocnnext_alarm) then
           if (trim(cpl_seq_option) == 'CESM1_MOD'    .or. &
               trim(cpl_seq_option) == 'RASM_OPTION1' .or. &
-              trim(cpl_seq_option) == 'RASM_OPTION2' .or. &
-              trim(cpl_seq_option) == 'NUOPC') then
+              trim(cpl_seq_option) == 'RASM_OPTION2') then
              call cime_run_ocn_recv_post()
           end if
        end if
@@ -3388,10 +3560,10 @@ contains
           if (info_mprof > 0) then ! memory profiling is enabled
              call mpi_gather (msize, 1, mpi_real8, &
                               msizeOnTask, 1, mpi_real8, &
-                              0, mpicom_GLOID, ierr)
+                              cpl_rootpe, mpicom_GLOID, ierr)
              call mpi_gather (mrss, 1, mpi_real8, &
                               mrssOnTask, 1, mpi_real8, &
-                              0, mpicom_GLOID, ierr)
+                              cpl_rootpe, mpicom_GLOID, ierr)
 
              if (info_mprof > 2) then ! aggregate task-level to node-level mem-usage
                 msizeOnNode(:) = 0
@@ -3524,7 +3696,7 @@ contains
     call seq_timemgr_EClockGetData( EClock_d, stepno=endstep)
     call shr_mem_getusage(msize,mrss)
 
-    call component_final(EClock_w, iac, iac_final)
+    call component_final(EClock_z, iac, iac_final)
     call component_final(EClock_w, wav, wav_final)
     call component_final(EClock_g, glc, glc_final)
     call component_final(EClock_o, ocn, ocn_final)
@@ -3532,6 +3704,12 @@ contains
     call component_final(EClock_r, rof, rof_final)
     call component_final(EClock_l, lnd, lnd_final)
     call component_final(EClock_a, atm, atm_final)
+
+    ! Finalize the rpointer manager. The manager can't always tell the earliest
+    ! time at which it can safely remove the backup rpointer files; pass
+    ! .true. here to force their removal if they still exist, because we now are
+    ! certain they can be removed.
+    call rpointer_manage(.true.)
 
     !------------------------------------------------------------------------
     ! End the run cleanly
@@ -3549,7 +3727,7 @@ contains
        call seq_timemgr_EClockGetData( EClock_d, curr_ymd=ymd, curr_tod=tod, dtime=dtime)
        simDays = (endStep-begStep)*dtime/(24._r8*3600._r8)
        write(logunit,'(//)')
-       write(logunit,FormatA) subname, 'SUCCESSFUL TERMINATION OF CPL7-'//trim(cime_model)
+       write(logunit,FormatA) subname, 'SUCCESSFUL TERMINATION OF CPL7-MCT in '//trim(cime_model)
        write(logunit,FormatD) subname, '  at YMD,TOD = ',ymd,tod
        write(logunit,FormatR) subname, '# simulated days (this run) = ', simDays
        write(logunit,FormatR) subname, 'compute time (hrs)          = ', (Time_end-Time_begin)/3600._r8
@@ -3635,10 +3813,10 @@ contains
     ctime(6:6) = ':'
     ctime(7:8) = time(5:6)
     write(logunit,F00) '------------------------------------------------------------'
-    write(logunit,F00) '  Common Infrastructure for Modeling the Earth (CIME) CPL7  '
+    write(logunit,F00) '                     CPL7-MCT                               '
     write(logunit,F00) '------------------------------------------------------------'
-    write(logunit,F00) '     (Online documentation is available on the CIME         '
-    write(logunit,F00) '          github: http://esmci.github.io/cime/)             '
+    write(logunit,F00) '            (Online documentation is available              '
+    write(logunit,F00) '                https://docs.e3sm.org)                      '
     write(logunit,F00) '     License information is available as a link from above  '
     write(logunit,F00) '------------------------------------------------------------'
     write(logunit,F00) '                     MODEL ',trim(cime_model)
@@ -3749,11 +3927,13 @@ contains
        do exi = 1,num_inst_xao
           eai = mod((exi-1),num_inst_atm) + 1
           eoi = mod((exi-1),num_inst_ocn) + 1
+          ewi = mod((exi-1),num_inst_wav) + 1
           efi = mod((exi-1),num_inst_frc) + 1
           a2x_ax => component_get_c2x_cx(atm(eai))
           o2x_ax => prep_atm_get_o2x_ax()    ! array over all instances
+          w2x_ax => prep_atm_get_w2x_ax()    ! array over all instances
           xao_ax => prep_aoflux_get_xao_ax() ! array over all instances
-          call seq_flux_atmocn_mct(infodata, tod, dtime, a2x_ax, o2x_ax(eoi), xao_ax(exi))
+          call seq_flux_atmocn_mct(infodata, tod, dtime, a2x_ax, o2x_ax(eoi), xao_ax(exi), w2x_ax(ewi))
        enddo
        call t_drvstopf  ('CPL:atmocna_fluxa',hashint=hashint(6))
 
@@ -3769,10 +3949,12 @@ contains
           eai = mod((exi-1),num_inst_atm) + 1
           eoi = mod((exi-1),num_inst_ocn) + 1
           efi = mod((exi-1),num_inst_frc) + 1
+          ewi = mod((exi-1),num_inst_wav) + 1
           a2x_ox => prep_ocn_get_a2x_ox()
+          w2x_ox => prep_ocn_get_w2x_ox()
           o2x_ox => component_get_c2x_cx(ocn(eoi))
           xao_ox => prep_aoflux_get_xao_ox()
-          call seq_flux_atmocn_mct(infodata, tod, dtime, a2x_ox(eai), o2x_ox, xao_ox(exi))
+          call seq_flux_atmocn_mct(infodata, tod, dtime, a2x_ox(eai), o2x_ox, xao_ox(exi), w2x_ox(ewi))
        enddo
        call t_drvstopf  ('CPL:atmocnp_fluxo',hashint=hashint(6))
     endif  ! aoflux_grid
@@ -3897,7 +4079,7 @@ contains
     !----------------------------------------------------
     ! "startup" wait
     !----------------------------------------------------
-    if (iamin_CPLALLOCNID) then
+    if (iamin_CPLALLOCNID .and. cpl2ocn_first) then
        ! want to know the time the ocean pes waited for the cpl pes
        ! at the first ocnrun_alarm, min ocean wait is wait time
        ! do not use t_barrierf here since it can be "off", use mpi_barrier
@@ -3971,6 +4153,8 @@ contains
 
        if (ocn_c2_rof) call prep_rof_accum_ocn(timer='CPL:ocnpost_acco2r')
 
+       if (ocn_c2_lnd) call prep_lnd_accum_ocn(timer='CPL:ocnpost_acco2l')
+
        call cime_run_ocnglc_coupling()
 
        if (drv_threading) call seq_comm_setnthreads(nthreads_GLOID)
@@ -3992,8 +4176,17 @@ contains
        call t_drvstartf ('CPL:IACPREP', cplrun=.true., barrier=mpicom_CPLID)
        if (drv_threading) call seq_comm_setnthreads(nthreads_CPLID)
 
-       ! Average our accumulators
-       call prep_iac_accum_avg(timer='CPL:iacprep_l2xavg')
+       ! Average our accumulators - now handled right before running the iac,
+       !    at tod=1800 at beginning of each year
+       ! these are annual average values
+       ! needs to be done here to have proper restarts
+       if (iac_present .and. iacrun_avg_alarm) then
+
+          !write(logunit,*) '(cime_run_iac_setup_send) accum_avg',&
+          !                 ymd, tod
+
+          call prep_iac_accum_avg(timer='CPL:iacprep_l2xavg')
+       endif
 
        ! Setup lnd inputs on iac grid.  Right now I think they will be the same
        ! thing, but I'm trying to code for the general case
@@ -4001,8 +4194,7 @@ contains
           call prep_iac_calc_l2x_zx(timer='CPL:iacprep_lnd2iac')
        endif
 
-
-       call prep_iac_mrg(infodata, fractions_zx, timer_mrg='CPL:iacprep_mrgx2z')
+       call prep_iac_mrg(infodata, timer_mrg='CPL:iacprep_mrgx2z')
 
        call component_diag(infodata, iac, flow='x2c', comment= 'send iac', &
             info_debug=info_debug, timer_diag='CPL:iacprep_diagav')
@@ -4033,7 +4225,7 @@ contains
     !----------------------------------------------------------
 
     if (iamin_CPLALLIACID) then
-       call component_exch(rof, flow='c2x', &
+       call component_exch(iac, flow='c2x', &
             infodata=infodata, infodata_string='iac2cpl_run', &
             mpicom_barrier=mpicom_CPLALLIACID, run_barriers=run_barriers, &
             timer_barrier='CPL:Z2C_BARRIER', timer_comp_exch='CPL:Z2C', &
@@ -4052,13 +4244,9 @@ contains
        call component_diag(infodata, iac, flow='c2x', comment= 'recv iac', &
             info_debug=info_debug, timer_diag='CPL:iacpost_diagav')
 
-       ! TRS I think this is wrong - review these prep functions.  I think it's more likely
-       if (iac_c2_lnd) then
-          call prep_lnd_calc_z2x_lx(timer='CPL:iacpost_iac2lnd')
-       endif
-
-       if (iac_c2_atm) then
-          call prep_atm_calc_z2x_ax(fractions_zx, timer='CPL:iacpost_iac2atm')
+       ! Need to reset our max vector to zero for the following year
+       if (lnd_present) then 
+          call prep_iac_zero_max()
        endif
 
        call t_drvstopf  ('CPL:IACPOST', cplrun=.true.)
@@ -4076,18 +4264,10 @@ contains
        call t_drvstartf ('CPL:ATMOCNP',cplrun=.true.,barrier=mpicom_CPLID,hashint=hashint(7))
        if (drv_threading) call seq_comm_setnthreads(nthreads_CPLID)
 
-       if (trim(cpl_seq_option(1:5)) == 'NUOPC') then
-          if (atm_c2_ocn) call prep_ocn_calc_a2x_ox(timer='CPL:atmocnp_atm2ocn')
-       end if
-
        if (ocn_prognostic) then
           ! Map to ocn
           if (ice_c2_ocn) call prep_ocn_calc_i2x_ox(timer='CPL:atmocnp_ice2ocn')
           if (wav_c2_ocn) call prep_ocn_calc_w2x_ox(timer='CPL:atmocnp_wav2ocn')
-          if (trim(cpl_seq_option(1:5)) == 'NUOPC') then
-             if (rof_c2_ocn) call prep_ocn_calc_r2x_ox(timer='CPL:atmocnp_rof2ocn')
-             if (glc_c2_ocn) call prep_ocn_calc_g2x_ox(timer='CPL:atmocnp_glc2ocn')
-          end if
        end if
 
        ! atm/ocn flux on either atm or ocean grid
@@ -4095,24 +4275,12 @@ contains
 
        ! ocn prep-merge (cesm1_mod or cesm1_mod_tight)
        if (ocn_prognostic) then
-#if COMPARE_TO_NUOPC
-          !This is need to compare to nuopc
-          if (.not. skip_ocean_run) then
-             ! ocn prep-merge
-             xao_ox => prep_aoflux_get_xao_ox()
-             call prep_ocn_mrg(infodata, fractions_ox, xao_ox=xao_ox, timer_mrg='CPL:atmocnp_mrgx2o')
-
-             ! Accumulate ocn inputs - form partial sum of tavg ocn inputs (virtual "send" to ocn)
-             call prep_ocn_accum(timer='CPL:atmocnp_accum')
-          end if
-#else
           ! ocn prep-merge
           xao_ox => prep_aoflux_get_xao_ox()
           call prep_ocn_mrg(infodata, fractions_ox, xao_ox=xao_ox, timer_mrg='CPL:atmocnp_mrgx2o')
 
           ! Accumulate ocn inputs - form partial sum of tavg ocn inputs (virtual "send" to ocn)
           call prep_ocn_accum(timer='CPL:atmocnp_accum')
-#endif
        end if
 
        !----------------------------------------------------------
@@ -4145,11 +4313,15 @@ contains
 
     if (glc_present) then
 
+       ! create o2x_gx for either ocn-glc coupling or ocn-glc shelf coupling
+       if (ocn_c2_glctf .or. (ocn_c2_glcshelf .and. glcshelf_c2_ocn)) then
+          call prep_glc_calc_o2x_gx(ocn_c2_glctf, ocn_c2_glcshelf, timer='CPL:glcprep_ocn2glc') !remap ocean fields to o2x_g at ocean couping interval
+       endif
+
+       ! if ice-shelf coupling is on, now proceed to handle those calculations here in the coupler
        if (ocn_c2_glcshelf .and. glcshelf_c2_ocn) then
           ! the boundary flux calculations done in the coupler require inputs from both GLC and OCN,
           ! so they will only be valid if both OCN->GLC and GLC->OCN
-
-          call prep_glc_calc_o2x_gx(timer='CPL:glcprep_ocn2glc') !remap ocean fields to o2x_g at ocean couping interval
 
           call prep_glc_calculate_subshelf_boundary_fluxes ! this is actual boundary layer flux calculation
                                         !this outputs
@@ -4192,13 +4364,15 @@ contains
        if (drv_threading) call seq_comm_setnthreads(nthreads_CPLID)
 
        if (atm_c2_lnd) call prep_lnd_calc_a2x_lx(timer='CPL:lndprep_atm2lnd')
-       if (trim(cpl_seq_option(1:5)) == 'NUOPC') then
-          if (glc_c2_lnd) call prep_lnd_calc_g2x_lx(timer='CPL:glcpost_glc2lnd')
-       end if
 
        ! IAC export onto lnd grid
        if (iac_c2_lnd) then
           call prep_lnd_calc_z2x_lx(timer='CPL:lndprep_iac2lnd')
+       endif
+
+       if (ocn_c2_lnd) then 
+          call prep_lnd_accum_avg(timer='CPL:lndprep_o2xavg')
+          call prep_lnd_calc_o2x_lx(timer='CPL:lndprep_ocn2lnd')
        endif
 
        if (lnd_prognostic) then
@@ -4255,6 +4429,9 @@ contains
        if (lnd_c2_glc .or. do_hist_l2x1yrg) call prep_glc_accum_lnd(timer='CPL:lndpost_accl2g' )
        if (lnd_c2_iac) call prep_iac_accum(timer='CPL:lndpost_accl2z')
 
+       ! the iacrun_avg alarm is now called at tod=1800 of the first day of each
+       ! year, y cime_run_iac_setup_send
+
        if (drv_threading) call seq_comm_setnthreads(nthreads_GLOID)
        call t_drvstopf  ('CPL:LNDPOST',cplrun=.true.)
     endif
@@ -4277,7 +4454,7 @@ contains
        if (drv_threading) call seq_comm_setnthreads(nthreads_CPLID)
 
        ! NOTE - only create appropriate input to glc if the avg_alarm is on
-       if (lnd_c2_glc .or. ocn_c2_glcshelf) then
+       if (lnd_c2_glc .or. ocn_c2_glctf .or. ocn_c2_glcshelf) then
           if (glcrun_avg_alarm) then
              call prep_glc_accum_avg(timer='CPL:glcprep_avg', &
                   lnd2glc_averaged_now=lnd2glc_averaged_now)
@@ -4289,6 +4466,13 @@ contains
 
                 call prep_glc_mrg_lnd(infodata, fractions_gx, timer_mrg='CPL:glcprep_mrgx2g')
              endif
+
+             if (ocn_c2_glctf) then
+                ! note: o2x_gx is handled in prep_glc_calc_o2x_gx, which is called
+                ! from cime_run_ocnglc_coupling in this module
+                call prep_glc_mrg_ocn(infodata, fractions_gx, timer_mrg='CPL:glcprep_mrgocnx2g')
+             endif
+
 
              call component_diag(infodata, glc, flow='x2c', comment='send glc', &
                   info_debug=info_debug, timer_diag='CPL:glcprep_diagav')
@@ -4370,11 +4554,9 @@ contains
        call component_diag(infodata, glc, flow='c2x', comment= 'recv glc', &
             info_debug=info_debug, timer_diag='CPL:glcpost_diagav')
 
-       if (trim(cpl_seq_option(1:5)) /= 'NUOPC') then
-          if (glc_c2_lnd) call prep_lnd_calc_g2x_lx(timer='CPL:glcpost_glc2lnd')
-          if (glc_c2_ocn) call prep_ocn_calc_g2x_ox(timer='CPL:glcpost_glc2ocn')
-          if (glc_c2_ice) call prep_ice_calc_g2x_ix(timer='CPL:glcpost_glc2ice')
-       end if
+       if (glc_c2_lnd) call prep_lnd_calc_g2x_lx(timer='CPL:glcpost_glc2lnd')
+       if (glc_c2_ocn) call prep_ocn_calc_g2x_ox(timer='CPL:glcpost_glc2ocn')
+       if (glc_c2_ice) call prep_ice_calc_g2x_ix(timer='CPL:glcpost_glc2ice')
 
        if (drv_threading) call seq_comm_setnthreads(nthreads_GLOID)
        call t_drvstopf  ('CPL:GLCPOST',cplrun=.true.)
@@ -4451,11 +4633,9 @@ contains
        call component_diag(infodata, rof, flow='c2x', comment= 'recv rof', &
             info_debug=info_debug, timer_diag='CPL:rofpost_diagav')
 
-       if (trim(cpl_seq_option(1:5)) /= 'NUOPC') then
-          if (rof_c2_lnd) call prep_lnd_calc_r2x_lx(timer='CPL:rofpost_rof2lnd')
-          if (rof_c2_ice) call prep_ice_calc_r2x_ix(timer='CPL:rofpost_rof2ice')
-          if (rof_c2_ocn) call prep_ocn_calc_r2x_ox(timer='CPL:rofpost_rof2ocn')
-       end if
+       if (rof_c2_lnd) call prep_lnd_calc_r2x_lx(timer='CPL:rofpost_rof2lnd')
+       if (rof_c2_ice) call prep_ice_calc_r2x_ix(timer='CPL:rofpost_rof2ice')
+       if (rof_c2_ocn) call prep_ocn_calc_r2x_ox(timer='CPL:rofpost_rof2ocn')
 
        call t_drvstopf  ('CPL:ROFRUNPOST', cplrun=.true.)
 
@@ -4481,10 +4661,6 @@ contains
        if (drv_threading) call seq_comm_setnthreads(nthreads_CPLID)
 
        if (ocn_c2_ice) call prep_ice_calc_o2x_ix(timer='CPL:iceprep_ocn2ice')
-       if (trim(cpl_seq_option(1:5)) == 'NUOPC') then
-          if (rof_c2_ice) call prep_ice_calc_r2x_ix(timer='CPL:rofpost_rof2ice')
-          if (glc_c2_ice) call prep_ice_calc_g2x_ix(timer='CPL:glcpost_glc2ice')
-       end if
 
        if (atm_c2_ice) then
           ! This is special to avoid remapping atm to ocn
@@ -4492,6 +4668,8 @@ contains
           a2x_ox => prep_ocn_get_a2x_ox() ! array
           call prep_ice_calc_a2x_ix(a2x_ox, timer='CPL:iceprep_atm2ice')
        endif
+
+       if (wav_c2_ice) call prep_ice_calc_w2x_ix(timer='CPL:iceprep_wav2ice')
 
        call prep_ice_mrg(infodata, timer_mrg='CPL:iceprep_mrgx2i')
 
@@ -4678,12 +4856,15 @@ contains
        if (ice_present) then
           call seq_diag_ice_mct(ice(ens1), fractions_ix(ens1), infodata, do_x2i=.true.)
        endif
+       if (glc_present) then
+          call seq_diag_glc_mct(glc(ens1), fractions_gx(ens1), infodata, do_x2g=.true.)
+       endif
        if (do_bgc_budgets) then
           if (rof_present) then
              call seq_diagBGC_rof_mct(rof(ens1), fractions_rx(ens1), infodata)
           endif
        endif
-       call t_drvstopf  ('CPL:BUDGET1',cplrun=lcplrun,budget=.true.)
+       call t_drvstopf  ('CPL:BUDGET1',cplrun=.true.,budget=.true.)
     end if
   end subroutine cime_run_calc_budgets1
 
@@ -4717,6 +4898,9 @@ contains
        if (ice_present) then
           call seq_diag_ice_mct(ice(ens1), fractions_ix(ens1), infodata, do_i2x=.true.)
        endif
+       if (glc_present) then
+          call seq_diag_glc_mct(glc(ens1), fractions_gx(ens1), infodata, do_g2x=.true.)
+       endif
        if (do_bgc_budgets) then
           if (atm_present) then
              call seq_diagBGC_atm_mct(atm(ens1), fractions_ax(ens1), infodata, do_a2x=.true., do_x2a=.true.)
@@ -4732,7 +4916,7 @@ contains
                   do_o2x=.true., do_x2o=.true., do_xao=.true.)
           endif
        endif
-       call t_drvstopf  ('CPL:BUDGET2',cplrun=lcplrun,budget=.true.)
+       call t_drvstopf  ('CPL:BUDGET2',cplrun=.true.,budget=.true.)
 
        call t_drvstartf ('CPL:BUDGET3',cplrun=lcplrun,budget=.true.,barrier=mpicom_CPLID)
        call seq_diag_accum_mct()
@@ -5016,6 +5200,18 @@ contains
           call t_stopf('CPL:seq_hist_writeaux-l2x')
 
        endif
+       if (do_hist_z2x) then
+
+          call t_startf('CPL:seq_hist_writeaux-z2x')
+          do ezi = 1,num_inst_iac
+             inst_suffix =  component_get_suffix(iac(ezi))
+             call seq_hist_writeaux(infodata, EClock_d, iac(ezi), flow='c2x', &
+                  aname='z2x',dname='domz',inst_suffix=trim(inst_suffix),  &
+                  nx=iac_nx, ny=iac_ny, nt=ncpl)
+          enddo
+          call t_stopf('CPL:seq_hist_writeaux-z2x')
+
+       endif
 
        call t_stopf('CPL:cime_run_write_history')
        call t_drvstopf  ('CPL:HISTORY',cplrun=.true.)
@@ -5114,4 +5310,414 @@ contains
 
   end subroutine cime_write_performance_checkpoint
 
+!----------------------------------------------------------------------------------
+!
+! The following subroutines improve robustness of restart writing and reading.
+!
+! It's possible for a crash that occurs during restart writing to lead to
+! inconsistent or incomplete rpointer files. While we can't salvage the restart
+! files in general, we can at least provide a consistent set of rpointer files
+! -- namely, the previous ones -- for the next restart.
+!
+! These routines provide this capability by copying all rpointer.X files to
+! rpointer.X.prev before components write restart files, then removing
+! rpointer.X.prev files when all components are done.
+!
+! If a crash occurs midway through, on restart, the consistent rpointer.X.prev
+! files will be used.
+!
+!----------------------------------------------------------------------------------
+
+  subroutine rpointer_prepare_restart()
+    ! Prepare to restart. If .prev file are present, something went wrong in the
+    ! previous run's final restart write. Use the .prev files instead of the
+    ! invalid regular ones. If there are no prev files, then this subroutine
+    ! doesn't do anything.
+    !
+    ! This routine is called independently of the ones after it; in particular,
+    ! it does not require the manager to be initialized.
+
+    integer :: i, n, idxlist(rpointer_ncomp), sleep_len, rcode, unit
+    logical :: file_exists, ok, same, complete
+
+    ! Each rank checks if .prev files exist.
+    n = 0
+    do i = 1, rpointer_ncomp
+       inquire(file='rpointer.'//rpointer_suffixes(i)//'.prev', &
+            exist=file_exists)
+       if (file_exists) then
+          n = n + 1
+          idxlist(n) = i
+       end if
+    end do
+
+    if (n == 0) return
+
+    ! .prev files exist.
+
+    ! Check that there is not an rpointer.x file with no corresponding
+    ! rpointer.x.prev file. If there is, then we assume the .prev files are
+    ! incomplete and error out. Note the presence of at least one
+    ! rpointer.x.prev file means something went wrong in the previous run, so
+    ! it's best to let the user sort things out.
+    if (iamroot_CPLID) then
+       complete = .true.
+       do i = 1, rpointer_ncomp
+          inquire(file='rpointer.'//rpointer_suffixes(i), &
+               exist=file_exists)
+          if (file_exists) then
+             inquire(file='rpointer.'//rpointer_suffixes(i)//'.prev', &
+                  exist=file_exists)
+             if (.not. file_exists) then
+                complete = .false.
+                write(logunit,'(3a)') 'rpointer> ERROR: ', rpointer_suffixes(i), &
+                     ' has an rpointer.x file with no corresponding rpointer.x.prev file'
+             end if
+          end if
+       end do
+       if (.not. complete) then
+          call shr_sys_abort('rpointer_prepare_restart: &
+               &rpointer.x.prev files exist but rpointer.y &
+               &has no corresponding rpointer.y.prev file.')
+       end if
+    end if
+
+    ! The root rank copies the .prev files to regular files.
+    if (iamroot_CPLID) then
+       do i = 1, n
+          rcode = copy_and_trim_rpointer_file( &
+               'rpointer.'//rpointer_suffixes(idxlist(i))//'.prev', &
+               'rpointer.'//rpointer_suffixes(idxlist(i)))
+          if (rcode /= 0) write(logunit,*) 'rpointer> copy x.prev->x', rcode
+       end do
+    end if
+
+    ! Read-after-write consistency generally does not hold, so each rank
+    ! waits until it does, as follows: Check if rpointer.x is the same as
+    ! rpointer.x.prev. If not, then sleep and loop to try again. The sleep
+    ! period doubles each try until 15 seconds have elapsed, at which point,
+    ! if consistency still doesn't hold, give up.
+    sleep_len = 1
+    do while (.true.)
+       ok = .true.
+       do i = 1, n
+          same = are_files_same( &
+               'rpointer.'//rpointer_suffixes(idxlist(i))//'.prev', &
+               'rpointer.'//rpointer_suffixes(idxlist(i)))
+          if (.not. same) then
+             ok = .false.
+             exit
+          end if
+       end do
+       if (ok) exit
+       call sleep(sleep_len)
+       sleep_len = 2*sleep_len
+       ! Wait for up to 8 + 4 + 2 + 1 = 15 seconds.
+       if (sleep_len > 8) exit
+    end do
+    if (.not. ok) then
+       call shr_sys_abort('rpointer_prepare_restart: &
+            &Could not copy rpointer.x.prev to rpointer.x')
+    end if
+    ! This rank is consistent. Wait for everyone else.
+    call mpi_barrier(mpicom_GLOID, rcode)
+
+    ! After the barrier exits, the root rank can delete the .prev files.
+    if (iamroot_CPLID) then
+       unit = shr_file_getUnit()
+       do i = 1, n
+          open(file='rpointer.'//rpointer_suffixes(i)//'.prev', &
+               unit=unit, iostat=rcode)
+          if (rcode == 0) close(unit=unit, status='delete', iostat=rcode)
+       end do
+       call shr_file_freeUnit(unit)
+    end if
+
+  contains
+
+    function are_files_same(afname, bfname) result(same)
+      ! Do files afname and bfname contain the same contents?
+
+      character(*), intent(in) :: afname, bfname
+
+      integer :: aunit, bunit, astat, bstat, i, line
+      character(1024) :: abuf, bbuf
+      logical :: same
+
+      same = .true.
+
+      aunit = shr_file_getUnit()
+      bunit = shr_file_getUnit()
+
+      open(aunit, file=trim(afname), action='READ', iostat=astat)
+      open(bunit, file=trim(bfname), action='READ', iostat=bstat)
+
+      if ((astat == 0) .neqv. (bstat == 0)) same = .false.
+
+      if (same .and. astat /= 0) same = .false.
+
+      if (same) then
+         astat = 0
+         bstat = 0
+         abuf(:) = ' '
+         bbuf(:) = ' '
+         line = 1
+         do while (same .and. astat == 0 .and. bstat == 0)
+            read(aunit, '(a1024)', iostat=astat) abuf
+            read(bunit, '(a1024)', iostat=bstat) bbuf
+            if ((astat == 0) .neqv. (bstat == 0)) then
+               same = .false.
+               exit
+            end if
+            if (astat /= 0) exit
+            do i = 1, 1024
+               if (abuf(i:i) /= bbuf(i:i)) then
+                  same = .false.
+                  exit
+               end if
+            end do
+            line = line + 1
+         end do
+      end if
+
+      close(aunit)
+      close(bunit)
+      call shr_file_freeUnit(aunit)
+      call shr_file_freeUnit(bunit)
+
+    end function are_files_same
+
+  end subroutine rpointer_prepare_restart
+
+  subroutine rpointer_init_manager()
+    ! Initialize a manager that is accessed through calls to rpointer_manage.
+
+    integer :: i, n
+
+    rpointer_mgr%verbose = .false.
+    rpointer_mgr%rang(:) = .false.
+
+    do i = 1, rpointer_ncomp
+       rpointer_mgr%clock(i)%ptr => null()
+    end do
+
+    rpointer_mgr%cpresent(:) = .false.
+    n = 0
+
+    if (atm_present) then
+       n = n + 1
+       rpointer_mgr%cpresent(comp_num_atm) = .true.
+       rpointer_mgr%clock(comp_num_atm)%ptr => EClock_a
+    end if
+    if (lnd_present) then
+       n = n + 1
+       rpointer_mgr%cpresent(comp_num_lnd) = .true.
+       rpointer_mgr%clock(comp_num_lnd)%ptr => EClock_l
+    end if
+    if (ice_present) then
+       n = n + 1
+       rpointer_mgr%cpresent(comp_num_ice) = .true.
+       rpointer_mgr%clock(comp_num_ice)%ptr => EClock_i
+    end if
+    if (ocn_present) then
+       n = n + 1
+       rpointer_mgr%cpresent(comp_num_ocn) = .true.
+       rpointer_mgr%clock(comp_num_ocn)%ptr => EClock_o
+    end if
+    if (glc_present) then
+       n = n + 1
+       rpointer_mgr%cpresent(comp_num_glc) = .true.
+       rpointer_mgr%clock(comp_num_glc)%ptr => EClock_g
+    end if
+    if (rof_present) then
+       n = n + 1
+       rpointer_mgr%cpresent(comp_num_rof) = .true.
+       rpointer_mgr%clock(comp_num_rof)%ptr => EClock_r
+    end if
+    if (wav_present) then
+       n = n + 1
+       rpointer_mgr%cpresent(comp_num_wav) = .true.
+       rpointer_mgr%clock(comp_num_wav)%ptr => EClock_w
+    end if
+    if (esp_present) then
+       n = n + 1
+       rpointer_mgr%cpresent(comp_num_esp) = .true.
+       rpointer_mgr%clock(comp_num_esp)%ptr => EClock_e
+    end if
+    if (iac_present) then
+       n = n + 1
+       rpointer_mgr%cpresent(comp_num_iac) = .true.
+       rpointer_mgr%clock(comp_num_iac)%ptr => EClock_z
+    end if
+    n = n + 1
+    rpointer_mgr%cpresent(rpointer_ncomp) = .true.
+    rpointer_mgr%clock(rpointer_ncomp)%ptr => EClock_d
+
+    rpointer_mgr%npresent = n
+    rpointer_mgr%remove_prev_in_next_call = .false.
+
+  end subroutine rpointer_init_manager
+
+  subroutine rpointer_manage(force_remove)
+    ! Call this routine at certain places in the driver loop. This subroutine
+    ! monitors the restart alarms of all the active components and carries out
+    ! the steps required for rpointer file consistency based on state.
+
+    logical, intent(in) :: force_remove ! force removal of .prev files in this call
+    
+    integer :: i, n, rcode, unit
+    logical :: previous_rings, file_exists
+    character(32) :: buf
+
+    if (.not. iamroot_CPLID) return
+
+    if (rpointer_mgr%remove_prev_in_next_call .or. force_remove) then
+       ! Now we've been told the restart writes really are all valid. Remove the
+       ! .prev files.
+       unit = shr_file_getUnit()
+       do i = 1, size(rpointer_suffixes,1)
+          if (rpointer_mgr%cpresent(i)) then
+             buf = 'rpointer.'//rpointer_suffixes(i)//'.prev'
+             inquire(file=trim(buf), exist=file_exists)
+             if (file_exists) then
+                open(file=trim(buf), unit=unit, iostat=rcode)
+                if (rcode == 0) close(unit, status='delete', iostat=rcode)
+             end if
+          end if
+       end do
+       call shr_file_freeUnit(unit)
+       rpointer_mgr%rang(:) = .false.
+       rpointer_mgr%remove_prev_in_next_call = .false.
+       if (rpointer_mgr%verbose) write(logunit,*) 'rpointer> rm .prev files'
+       return
+    end if
+
+    previous_rings = .false.
+    do i = 1, rpointer_ncomp
+       if (rpointer_mgr%rang(i)) previous_rings = .true.
+    end do
+
+    n = 0
+    do i = 1, rpointer_ncomp
+       if (.not. rpointer_mgr%cpresent(i)) cycle
+       if (.not. rpointer_mgr%rang(i)) then
+          if (seq_timemgr_alarmIsOn(rpointer_mgr%clock(i)%ptr, &
+               seq_timemgr_alarm_restart)) then
+             rpointer_mgr%rang(i) = .true.
+          end if
+       end if
+       if (rpointer_mgr%rang(i)) n = n + 1
+    end do
+
+    if (n > 0 .and. rpointer_mgr%verbose) then
+       write (logunit,*) 'rpointer> state'
+       do i = 1, rpointer_ncomp
+          if (rpointer_mgr%cpresent(i)) then
+             write (logunit, '(a,i2,i2,i2,a4,l2)') &
+                  'rpointer>',i,n,rpointer_mgr%npresent,rpointer_suffixes(i), &
+                  rpointer_mgr%rang(i)
+          end if
+       end do
+    end if
+
+    if (previous_rings .and. n == rpointer_mgr%npresent) then
+       ! All restart timers have rung. Get ready to remove the .prev files. We
+       ! don't want to do it in this rpointer_manage call, however. Because of
+       ! things like partial steps in the atmosphere model (initiated from
+       ! cime_final rather than cime_run), we can't yet be sure all
+       ! restart-related writes at the level of history tapes are complete. Set
+       ! our state to tell us that in the next call, we can remove the files.
+       rpointer_mgr%remove_prev_in_next_call = .true.
+       if (rpointer_mgr%verbose) &
+            write(logunit,*) 'rpointer> set remove_prev_in_next_call=true'
+       return
+    else if (.not. previous_rings) then
+       if (n == 0) then
+          ! Nothing happened.
+          return
+       else
+          ! A new round of restart writes is starting. Copy previous, valid
+          ! rpointer files to .prev in case one or more of the restart writes that
+          ! are about to occur fail.
+          do i = 1, size(rpointer_suffixes,1)
+             if (rpointer_mgr%cpresent(i)) then
+                buf = 'rpointer.'//rpointer_suffixes(i)
+                inquire(file=trim(buf), exist=file_exists)
+                if (file_exists) then
+                   rcode = copy_and_trim_rpointer_file(trim(buf), &
+                        'rpointer.'//rpointer_suffixes(i)//'.prev')
+                   if (rcode /= 0 .and. rpointer_mgr%verbose) &
+                        write(logunit,*) 'rpointer> copy x->x.prev',rcode
+                   if (rpointer_mgr%verbose) then
+                      if (rcode == 0) then
+                         write(logunit,*) 'rpointer> copied: ', rpointer_suffixes(i)
+                      else
+                         write(logunit,*) 'rpointer> failed to copy: ', rpointer_suffixes(i)
+                      end if
+                   end if
+                end if
+             end if
+          end do
+          return
+       end if
+    end if
+
+    ! If we reach this point, there were previous rings and n < npresent,
+    ! meaning > 2 iterations of the driver run loop will occur before all
+    ! restart alarms have rung, now that at least one has rung. Don't do
+    ! anything more yet.
+
+  end subroutine rpointer_manage
+
+  function copy_and_trim_rpointer_file(src, dst) result(out)
+    ! Copy rpointer file src to dst, with the caveat that the lines are
+    ! trimmed. We found that shr_file_put would result in mysterious errors
+    ! preventing copying, whereas this manual approach has yet to exhibit this
+    ! problem.
+
+    character(*), intent(in) :: src, dst
+
+    character(1024) :: buf
+    character(16) :: status
+    integer :: soi, doi, stat, out
+    logical :: file_exists
+
+    soi = shr_file_getUnit()
+    out = 0
+    open(soi, file=trim(src), status='old', action='read', iostat=stat)
+    if (stat /= 0) then
+       out = -3
+       call shr_file_freeUnit(soi)
+       return
+    end if
+    inquire(file=trim(dst), exist=file_exists)
+    ! Probably not needed; always using 'replace' I think should work.
+    if (file_exists) then
+       status = 'replace'
+    else
+       status = 'new'
+    end if
+    doi = shr_file_getUnit()
+    open(doi, file=trim(dst), status=trim(status), action='write', iostat=stat)
+    if (stat /= 0) then
+       close(soi)
+       out = -2
+       call shr_file_freeUnit(soi)
+       call shr_file_freeUnit(doi)
+       return
+    end if
+    do while (.true.)
+       read(soi, '(a1024)', iostat=stat) buf
+       if (stat /= 0) exit
+       write(doi, '(a)', iostat=stat) trim(buf)
+       if (stat /= 0) out = -1
+    end do
+    close(soi)
+    close(doi)
+    call shr_file_freeUnit(soi)
+    call shr_file_freeUnit(doi)
+
+  end function copy_and_trim_rpointer_file
+
 end module cime_comp_mod
+

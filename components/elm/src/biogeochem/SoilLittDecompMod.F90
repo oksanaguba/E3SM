@@ -10,7 +10,6 @@ module SoilLittDecompMod
   use shr_const_mod          , only : SHR_CONST_TKFRZ
   use decompMod              , only : bounds_type
   use perf_mod               , only : t_startf, t_stopf
-  use perfMod_GPU
   use elm_varctl             , only : iulog, use_lch4, use_century_decomp
   use elm_varcon             , only : dzsoi_decomp
   use elm_varpar             , only : nlevdecomp, ndecomp_cascade_transitions, ndecomp_pools
@@ -103,7 +102,7 @@ contains
     ! CNAllocaiton is divided into 3 subroutines:
     ! (1) Allocation1_PlantNPDemand  is called in EcosystemDynNoLeaching1
     ! (2) Allocation2_ResolveNPLimit is called in SoilLittDecompAlloc (this subroutine)
-    ! (3) Allocation3_PlantCNPAlloc  is called in SoilLittDecompAlloc2
+    ! (3) PlantCNPAlloc  is called in SoilLittDecompAlloc2
     !-----------------------------------------------------------------------------
 
     ! !USES:
@@ -142,7 +141,6 @@ contains
     real(r8):: phr_vr(bounds%begc:bounds%endc,1:nlevdecomp)                                            !potential HR (gC/m3/s)
     real(r8):: hrsum(bounds%begc:bounds%endc,1:nlevdecomp)                                             !sum of HR (gC/m2/s)
 
-    character(len=256) :: event
     !-----------------------------------------------------------------------
 
     associate(                                                                                           &
@@ -308,7 +306,9 @@ contains
                              / cp_decomp_pools_new(c,j,cascade_receiver_pool(k)) )
 
                      else   ! 100% respiration
-                        pmpf_decomp_cascade(c,j,k) = - p_decomp_cpool_loss(c,j,k) / cp_decomp_pools(c,j,cascade_donor_pool(k))
+                        if(decomp_ppools_vr(c,j,cascade_donor_pool(k)) > 0._r8) then
+                          pmpf_decomp_cascade(c,j,k) = - p_decomp_cpool_loss(c,j,k) / cp_decomp_pools(c,j,cascade_donor_pool(k))
+                       end if
                      endif
 
                   else   ! CWD -> litter
@@ -386,14 +386,13 @@ contains
       ! to resolve the competition between plants and soil heterotrophs
       ! for available soil mineral N resource.
       ! in addition, calculate fpi_vr, fpi_p_vr, & fgp
-      event = 'CNAllocation - phase-2'
-      call t_start_lnd(event)
+      call t_startf('CNAllocation - phase-2')
       call Allocation2_ResolveNPLimit(bounds,                       &
                num_soilc, filter_soilc, num_soilp, filter_soilp,    &
                cnstate_vars,                                        &
                soilstate_vars, dtime,                               &
                alm_fates)
-      call t_stop_lnd(event)
+      call t_stopf('CNAllocation - phase-2')
 
 
       ! column loop to calculate actual immobilization and decomp rates, following
@@ -414,7 +413,12 @@ contains
          do j = 1,nlevdecomp
             do fc = 1,num_soilc
                c = filter_soilc(fc)
-
+               decomp_cascade_hr_vr(c,j,k) = 0._r8
+               decomp_cascade_ctransfer_vr(c,j,k) = 0._r8
+               decomp_cascade_ptransfer_vr(c,j,k) = 0._r8
+               decomp_cascade_ntransfer_vr(c,j,k) = 0._r8 
+               decomp_cascade_sminn_flux_vr(c,j,k) = 0._r8
+               decomp_cascade_sminp_flux_vr(c,j,k) = 0._r8
                if (decomp_cpools_vr(c,j,cascade_donor_pool(k)) > 0._r8) then
                   if ( pmnf_decomp_cascade(c,j,k) > 0._r8 .and. pmpf_decomp_cascade(c,j,k) > 0._r8 ) then    ! N and P co-limitation
                      p_decomp_cpool_loss(c,j,k) = p_decomp_cpool_loss(c,j,k) * min( fpi_vr(c,j),fpi_p_vr(c,j) )
@@ -553,18 +557,6 @@ contains
          end do
       end if
 
-      ! vertically integrate net and gross mineralization fluxes for diagnostic output
-      ! moved to SoilLittDecompAlloc2
-!      do j = 1,nlevdecomp
-!         do fc = 1,num_soilc
-!            c = filter_soilc(fc)
-!            net_nmin(c) = net_nmin(c) + net_nmin_vr(c,j) * dzsoi_decomp(j)
-!            gross_nmin(c) = gross_nmin(c) + gross_nmin_vr(c,j) * dzsoi_decomp(j)
-!            net_pmin(c) = net_pmin(c) + net_pmin_vr(c,j) * dzsoi_decomp(j)
-!            gross_pmin(c) = gross_pmin(c) + gross_pmin_vr(c,j) * dzsoi_decomp(j)
-!         end do
-!      end do
-
     end associate
 
   end subroutine SoilLittDecompAlloc
@@ -583,8 +575,7 @@ contains
     !-----------------------------------------------------------------------------
 
     ! !USES:
-      !$acc routine seq
-    use AllocationMod , only: Allocation3_PlantCNPAlloc ! Phase-3 of CNAllocation
+    use AllocationMod , only: PlantCNPAlloc_RD, PlantCNPAlloc_ECAMIC ! Phase-3 of CNAllocation
     use atm2lndType     , only: atm2lnd_type
 
     !
@@ -613,7 +604,6 @@ contains
     ! For methane code
     real(r8):: hrsum(bounds%begc:bounds%endc,1:nlevdecomp)                                             !sum of HR (gC/m2/s)
 
-    character(len=256) :: event
     !-----------------------------------------------------------------------
 
     associate(                                                                                      &
@@ -766,18 +756,24 @@ contains
       !------------------------------------------------------------------
       ! phase-3 Allocation for plants
       if(.not.use_fates)then
-        event = 'CNAllocation - phase-3'
-        call t_start_lnd(event)
-        call Allocation3_PlantCNPAlloc (bounds                      , &
+        call t_startf('CNAllocation - phase-3')
+        if(nu_com .eq. 'RD') then
+           call PlantCNPAlloc_RD(bounds                      , &
                   num_soilc, filter_soilc, num_soilp, filter_soilp    , &
                   canopystate_vars                                    , &
                   cnstate_vars, crop_vars, dt)
-        call t_stop_lnd(event)
+         else
+           call PlantCNPAlloc_ECAMIC(bounds                      , &
+                     num_soilc, filter_soilc, num_soilp, filter_soilp    , &
+                     canopystate_vars                                    , &
+                     cnstate_vars, crop_vars, dt)
+         endif 
+        call t_stopf('CNAllocation - phase-3')
       end if
       !------------------------------------------------------------------
 
     if(use_pflotran.and.pf_cmode) then
-    ! in Allocation3_PlantCNPAlloc():
+    ! in PlantCNPAlloc():
     ! smin_nh4_to_plant_vr(c,j), smin_no3_to_plant_vr(c,j), sminn_to_plant_vr(c,j) may be adjusted
     ! therefore, we need to update smin_no3_vr(c,j) & smin_nh4_vr(c,j)
       do fc = 1,num_soilc
@@ -821,7 +817,6 @@ contains
   !  if not properly set.
   !
   !USES:
-    !$acc routine seq
     use elm_varctl   , only: carbon_only, carbonnitrogen_only
     use elm_varpar   , only: nlevdecomp, ndecomp_cascade_transitions
    !
@@ -863,13 +858,11 @@ contains
       call veg_ps%SetValues(num_patch=num_soilp,  filter_patch=filter_soilp,  value_patch=0._r8)
       call col_ps%SetValues(num_column=num_soilc, filter_column=filter_soilc, value_column=0._r8)
 
-      call veg_pf%setvalues( num_patch=num_soilp,  filter_patch=filter_soilp,  value_patch=0._r8)
-      call col_pf%setvalues( num_column=num_soilc, filter_column=filter_soilc, value_column=0._r8)
+      call veg_pf%SetValues( num_patch=num_soilp,  filter_patch=filter_soilp,  value_patch=0._r8)
+      call col_pf%SetValues( num_column=num_soilc, filter_column=filter_soilc, value_column=0._r8)
    end if
 
   end associate
   end subroutine CNvariables_nan4pf
-
-  !-------------------------------------------------------------------------------------------------
 
 end module SoilLittDecompMod

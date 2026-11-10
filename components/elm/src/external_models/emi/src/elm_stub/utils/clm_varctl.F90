@@ -18,6 +18,7 @@ module clm_varctl
   public :: cnallocate_carbonphosphorus_only_set
   public :: cnallocate_carbonphosphorus_only
   public :: get_carbontag ! get the tag for carbon simulations  
+  public :: clm_varctl_set_iac_flag
   !
   private
   save
@@ -142,6 +143,9 @@ module clm_varctl
   ! BGC logic and datasets
   !----------------------------------------------------------
 
+  ! true => iac/gcam component is present and prognostic
+  logical, public, protected :: iac_present = .false.
+
   ! values of 'prognostic','diagnostic','constant'
   character(len=16), public :: co2_type = 'constant'    
 
@@ -199,11 +203,6 @@ module clm_varctl
                                                                        ! 2 => C+N+P (not enabled yet)
                                                                        ! no others enabled
 
-
-  !----------------------------------------------------------
-  !  BeTR switches
-  !----------------------------------------------------------
-  logical, public :: use_betr = .false.          ! true=> use BeTR
 
   !----------------------------------------------------------
   ! lai streams switch for Sat. Phenology
@@ -310,20 +309,6 @@ module clm_varctl
   logical, public :: use_var_soil_thick  = .false.
 
   !----------------------------------------------------------
-  ! VSFM switches
-  !----------------------------------------------------------
-  logical          , public :: use_vsfm                    = .false.
-  logical          , public :: vsfm_use_dynamic_linesearch = .false.
-  logical          , public :: vsfm_include_seepage_bc     = .false.
-  character(len=32), public :: vsfm_satfunc_type           = 'smooth_brooks_corey_bz3'
-  character(len=32), public :: vsfm_lateral_model_type     = 'none'
-
-  !----------------------------------------------------------
-  ! PETSc-based thermal model switches
-  !----------------------------------------------------------
-  logical, public :: use_petsc_thermal_model = .false.
-
-  !----------------------------------------------------------
   ! Stub external model
   !----------------------------------------------------------
   logical, public :: use_em_stub = .false.
@@ -353,9 +338,8 @@ module clm_varctl
   logical, public :: NFIX_PTASE_plant = .false.
 
   !-----------------------------------------------------------------------
-  ! Lateral grid connectivity
+  ! Domain decomposition
   !-----------------------------------------------------------------------
-  logical, public            :: lateral_connectivity  = .false.
   character(len=256), public :: domain_decomp_type    = 'round_robin'
 
   !-----------------------------------------------------------------------
@@ -465,6 +449,12 @@ contains
   logical function CNAllocate_CarbonPhosphorus_only()
     cnallocate_carbonphosphorus_only = carbonphosphorus_only
   end function CNAllocate_CarbonPhosphorus_only
+
+  ! set module iac flag
+  subroutine clm_varctl_set_flag(iac_flag_in)
+     logical, intent(in) :: iac_flag_in
+     iac_present = iac_flag_in
+  end subroutine clm_varctl_set_iac_flag
 
   function get_carbontag(carbon_type)result(ctag)
     implicit none

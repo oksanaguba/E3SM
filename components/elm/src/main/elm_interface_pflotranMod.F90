@@ -276,7 +276,7 @@ contains
   !--------------------------------------------------------------------------------------------
 
     subroutine elm_pf_run(elm_interface_data, bounds, filters, ifilter)
-    use clm_time_manager, only : get_nstep
+    use elm_time_manager, only : get_nstep
 
     implicit none
 
@@ -380,7 +380,7 @@ contains
     use spmdMod         , only : mpicom, masterproc, iam, npes
     use domainMod       , only : ldomain, lon1d, lat1d
 
-    use clm_time_manager, only : get_nstep
+    use elm_time_manager, only : get_nstep
     use elm_varcon      , only : dzsoi, zisoi
     use elm_varpar      , only : nlevsoi, nlevgrnd, nlevdecomp_full, ndecomp_pools
     use elm_varctl      , only : pf_hmode, pf_tmode, pf_cmode, pf_frzmode,  &
@@ -484,7 +484,7 @@ contains
             !write (iulog,*) 'WARNING: SOIL/CROP column with wtgcell <= 0 or inactive... within the domain'
             !write (iulog,*) 'ELM-- PFLOTRAN does not include such a SOIL/CROP column, AND will skip it'
 
-         elseif ( .not.(ltype(l)==istsoil .or. ltype(l)==istcrop) ) then
+         elseif ( .not.(col_pp%is_soil(c) .or. col_pp%is_crop(c)) ) then
             !write (iulog,*) 'WARNING: non-SOIL/CROP column found in filter%num_soilc: nc, l, ltype', nc, l, ltype(l)
             !write (iulog,*) 'ELM-- PFLOTRAN does not include such a SOIL/CROP column, AND will skip it'
 
@@ -548,7 +548,7 @@ contains
       g = cgridcell(c)
 
       gcount = g - bounds%begg + 1
-      if ((.not.(ltype(l)==istsoil)) .and. (.not.(ltype(l)==istcrop)) ) then
+      if ((.not.(col_pp%is_soil(c))) .and. (.not.(col_pp%is_crop(c))) ) then
          !write (iulog,*) 'WARNING: Land Unit type of Non-SOIL/CROP... within the domain'
          !write (iulog,*) 'ELM-- PFLOTRAN does not support this land unit at present, AND will skip it'
 
@@ -598,7 +598,7 @@ contains
       g = cgridcell(c)
       gcount = g-bounds%begg+1
 
-      if( (ltype(l)==istsoil .or. ltype(l)==istcrop) .and. &
+      if( (col_pp%is_soil(c) .or. col_pp%is_crop(c)) .and. &
           (cactive(c) .and. cwtgcell(c)>0._r8) ) then
          mapped_gid(gcount) = grc_pp%gindex(g)      ! this is the globally grid-index, i.e. 'an' in its original calculation
 
@@ -1075,7 +1075,7 @@ contains
   !
   ! !USES:
     use spmdMod           , only : mpicom, masterproc, iam, npes
-    use clm_time_manager  , only : get_step_size, get_nstep, nsstep, nestep,         &
+    use elm_time_manager  , only : get_step_size, get_nstep, nsstep, nestep,         &
                                    is_first_step, is_first_restart_step, calc_nestep
     use elm_varctl        , only : pf_tmode, pf_hmode, pf_cmode,                     &
                                    pf_frzmode, pf_elmnstep0, initth_pf2elm
@@ -1856,7 +1856,7 @@ contains
       g = cgridcell(c)
       l = clandunit(c)
 
-      if ( (ltype(l)==istsoil .or. ltype(l)==istcrop) .and. &
+      if ( (col_pp%is_soil(c) .or. col_pp%is_crop(c)) .and. &
            (cactive(c) .and. cwtgcell(c)>0._r8) ) then        ! skip inactive or zero-weighted column (may be not needed, but in case)
 
 #ifdef COLUMN_MODE
@@ -1971,7 +1971,7 @@ contains
   !  if either NOT available inside PFLOTRAN
   !
   ! !USES:
-    use clm_time_manager    , only : get_nstep, is_first_step, is_first_restart_step
+    use elm_time_manager    , only : get_nstep, is_first_step, is_first_restart_step
     use shr_const_mod       , only : SHR_CONST_G
     use ColumnType          , only : col_pp
     use elm_varctl          , only : iulog
@@ -2289,7 +2289,7 @@ contains
     use ColumnType      , only : col_pp
     use elm_varcon      , only : tfrz, denh2o
     use elm_varpar      , only : nlevsoi, nlevgrnd
-    use clm_time_manager, only : get_step_size, get_nstep
+    use elm_time_manager, only : get_step_size, get_nstep
     use shr_infnan_mod  , only : shr_infnan_isnan
     use shr_const_mod   , only : SHR_CONST_G
 
@@ -2671,7 +2671,7 @@ contains
   !
   ! !USES:
     use ColumnType      , only : col_pp
-    use clm_time_manager, only : get_step_size, get_nstep
+    use elm_time_manager, only : get_step_size, get_nstep
     use elm_varcon      , only : tfrz
     use elm_varpar      , only : nlevgrnd
     use shr_infnan_mod  , only : shr_infnan_isnan
@@ -3033,7 +3033,7 @@ contains
   !
   ! !USES:
     use ColumnType          , only : col_pp
-    use clm_time_manager    , only : get_step_size, get_nstep,  is_first_step, is_first_restart_step
+    use elm_time_manager    , only : get_step_size, get_nstep,  is_first_step, is_first_restart_step
     use elm_varpar          , only : ndecomp_pools, nlevdecomp_full
     use elm_varctl          , only : iulog, pf_hmode
 
@@ -3520,7 +3520,7 @@ contains
     use elm_varpar          , only : nlevgrnd
     use elm_varcon          , only : tfrz, denh2o
     use landunit_varcon     , only : istsoil, istcrop
-    use clm_time_manager    , only : get_step_size, get_nstep
+    use elm_time_manager    , only : get_step_size, get_nstep
 
     !
     type(bounds_type), intent(in) :: bounds         ! bounds of current process
@@ -3648,7 +3648,7 @@ contains
     use CNDecompCascadeConType  , only : decomp_cascade_con
     use elm_varpar              , only : ndecomp_pools, nlevdecomp_full
     use elm_varctl              , only : pf_hmode
-    use clm_time_manager        , only : get_step_size,get_nstep
+    use elm_time_manager        , only : get_step_size,get_nstep
 
     use elm_varcon              , only : dzsoi_decomp
 
@@ -3953,7 +3953,7 @@ contains
   subroutine update_bgc_gaslosses_pf2elm(elm_interface_data, bounds, filters, ifilter)
 
      use ColumnType         , only : col_pp
-     use clm_time_manager   , only : get_step_size, get_nstep
+     use elm_time_manager   , only : get_step_size, get_nstep
      use elm_varpar         , only : nlevdecomp_full
      use elm_varcon         , only : tfrz
 
@@ -4312,7 +4312,7 @@ contains
   subroutine update_bgc_bcflux_pf2elm(elm_interface_data, bounds, filters, ifilter)
 
      use ColumnType         , only : col_pp
-     use clm_time_manager   , only : get_step_size
+     use elm_time_manager   , only : get_step_size
      use elm_varpar         , only : nlevdecomp_full
 
      !
@@ -4562,7 +4562,7 @@ contains
     ! On the radiation time step, perform carbon mass conservation check for column and pft
     !
     ! !USES:
-    use clm_time_manager, only : get_step_size, get_nstep
+    use elm_time_manager, only : get_step_size, get_nstep
     use elm_varctl      , only : iulog, use_fates
     use elm_varpar      , only : ndecomp_pools, nlevdecomp, nlevdecomp_full
     use elm_varcon      , only : dzsoi_decomp
@@ -4647,7 +4647,7 @@ contains
     ! On the radiation time step, perform carbon mass conservation check for column and pft
     !
     ! !USES:
-    use clm_time_manager, only : get_step_size,get_nstep
+    use elm_time_manager, only : get_step_size,get_nstep
     use elm_varctl      , only : iulog, use_fates
     use elm_varpar      , only : ndecomp_pools, nlevdecomp, nlevdecomp_full
     use elm_varcon      , only : dzsoi_decomp

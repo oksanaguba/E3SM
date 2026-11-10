@@ -115,12 +115,16 @@ module ocn_core_interface
       logical, pointer :: thicknessFilterActive
       logical, pointer :: splitTimeIntegratorActive
       logical, pointer :: semiImplicitTimePKGActive
+      logical, pointer :: splitAB2TimeIntegratorActive
       logical, pointer :: windStressBulkPKGActive
       logical, pointer :: variableBottomDragPKGActive
       logical, pointer :: tracerBudgetActive
       logical, pointer :: landIcePressurePKGActive
+      logical, pointer :: dataLandIceFluxesPKGActive
       logical, pointer :: landIceFluxesPKGActive
       logical, pointer :: landIceCouplingPKGActive
+      logical, pointer :: landIceThermalForcing3DPKGActive
+      logical, pointer :: dataSubglacialRunoffFluxPKGActive
       logical, pointer :: thicknessBulkPKGActive
       logical, pointer :: frazilIceActive
       logical, pointer :: tidalForcingActive
@@ -130,12 +134,16 @@ module ocn_core_interface
       logical, pointer :: inSituEOSActive
       logical, pointer :: variableShortwaveActive
       logical, pointer :: gmActive
+      logical, pointer :: gmGeometricActive
       logical, pointer :: submesoActive
       logical, pointer :: timeVaryingAtmosphericForcingPKGActive
       logical, pointer :: timeVaryingLandIceForcingPKGActive
       logical, pointer :: gotmPKGActive
       logical, pointer :: verticalRemapPKGActive
       logical, pointer :: activeWavePKGActive
+      logical, pointer :: subgridWetDryPKGActive
+      logical, pointer :: scaledDISMFPKGActive
+      logical, pointer :: scaledSFWFPKGActive
 
       type (mpas_pool_iterator_type) :: pkgItr
       logical, pointer :: packageActive
@@ -170,6 +178,11 @@ module ocn_core_interface
       logical, pointer :: config_use_time_varying_land_ice_forcing
       logical, pointer :: config_use_gotm
       logical, pointer :: config_use_active_wave
+      logical, pointer :: config_use_subgrid_wetting_drying
+      logical, pointer :: config_scale_dismf_by_removed_ice_runoff
+
+      ! flag to turn on freshwater balance adjustment
+      logical, pointer :: config_use_precip_scaling
 
       character (len=StrKIND), pointer :: config_time_integrator
       character (len=StrKIND), pointer :: config_ocean_run_mode
@@ -182,6 +195,9 @@ module ocn_core_interface
       logical, pointer :: config_use_bulk_thickness_flux
       logical, pointer :: config_compute_active_tracer_budgets
       character (len=StrKIND), pointer :: config_land_ice_flux_mode
+      character (len=StrKIND), pointer :: config_glc_thermal_forcing_coupling_mode
+      character (len=StrKIND), pointer :: config_subglacial_runoff_mode
+      character (len=StrKIND), pointer :: config_GM_closure
 
        type (mpas_pool_iterator_type) :: groupItr
        character (len=StrKIND) :: tracerGroupName, configName, packageName
@@ -215,7 +231,8 @@ module ocn_core_interface
       if ( forwardModeActive ) then
          if (    config_time_integrator == trim('split_explicit') &
             .or. config_time_integrator == trim('unsplit_explicit') &
-            .or. config_time_integrator == trim('split_implicit') ) then
+            .or. config_time_integrator == trim('split_implicit') &
+            .or. config_time_integrator == trim('split_explicit_ab2') ) then
             splitTimeIntegratorActive = .true.
          end if
       endif
@@ -223,6 +240,13 @@ module ocn_core_interface
       if ( forwardModeActive ) then
          if (config_time_integrator == trim('split_implicit') ) then
             semiImplicitTimePKGActive = .true.
+         end if
+      endif
+
+      call mpas_pool_get_package(packagePool, 'splitAB2TimeIntegratorActive', splitAB2TimeIntegratorActive)
+      if ( forwardModeActive ) then
+         if (config_time_integrator == trim('split_explicit_ab2') ) then
+            splitAB2TimeIntegratorActive = .true.
          end if
       endif
 
@@ -288,11 +312,16 @@ module ocn_core_interface
       ! test for land ice coupling, landIceCouplingPKG
       !
       call mpas_pool_get_package(packagePool, 'landIcePressurePKGActive', landIcePressurePKGActive)
+      call mpas_pool_get_package(packagePool, 'dataLandIceFluxesPKGActive', &
+                                 dataLandIceFluxesPKGActive)
       call mpas_pool_get_package(packagePool, 'landIceFluxesPKGActive', landIceFluxesPKGActive)
       call mpas_pool_get_package(packagePool, 'landIceCouplingPKGActive', landIceCouplingPKGActive)
       call mpas_pool_get_config(configPool, 'config_land_ice_flux_mode', config_land_ice_flux_mode)
       if ( trim(config_land_ice_flux_mode) == 'pressure_only' ) then
          landIcePressurePKGActive = .true.
+      else if ( trim(config_land_ice_flux_mode) == 'data' ) then
+         landIcePressurePKGActive = .true.
+         dataLandIceFluxesPKGActive = .true.
       else if ( trim(config_land_ice_flux_mode) == 'standalone' ) then
          landIcePressurePKGActive = .true.
          landIceFluxesPKGActive = .true.
@@ -300,6 +329,25 @@ module ocn_core_interface
          landIcePressurePKGActive = .true.
          landIceFluxesPKGActive = .true.
          landIceCouplingPKGActive = .true.
+      end if
+
+
+      !
+      ! test for 3d land ice thermal forcing, landIceThermalForcing3DPKG
+      !
+      call mpas_pool_get_package(packagePool, 'landIceThermalForcing3DPKGActive', landIceThermalForcing3DPKGActive)
+      call mpas_pool_get_config(configPool, 'config_glc_thermal_forcing_coupling_mode', config_glc_thermal_forcing_coupling_mode)
+      if ( trim(config_glc_thermal_forcing_coupling_mode) == '3d' ) then
+         landIceThermalForcing3DPKGActive = .true.
+      end if
+
+      !
+      ! test for use of subglacial runoff flux, dataSubglacialRunoffFluxPKGActive
+      !
+      call mpas_pool_get_package(packagePool, 'dataSubglacialRunoffFluxPKGActive', dataSubglacialRunoffFluxPKGActive)
+      call mpas_pool_get_config(configPool, 'config_subglacial_runoff_mode', config_subglacial_runoff_mode)
+      if ( trim(config_subglacial_runoff_mode) == 'data' ) then
+         dataSubglacialRunoffFluxPKGActive = .true.
       end if
 
       !
@@ -360,6 +408,15 @@ module ocn_core_interface
       end if
 
       !
+      ! test for use of GEOMETRIC GM parameterization
+      !
+      call mpas_pool_get_package(packagePool, 'gmGeometricActive', gmGeometricActive)
+      call mpas_pool_get_config(configPool, 'config_GM_closure', config_GM_closure)
+      if (config_use_GM.and.config_GM_closure==trim("geometric")) then
+         gmGeometricActive = .true.
+      end if
+
+      !
       ! test for use of gm
       !
       call mpas_pool_get_package(packagePool, 'submesoActive', submesoActive)
@@ -402,7 +459,7 @@ module ocn_core_interface
          verticalRemapPKGActive = .true.
       end if
 
-      ! test for active waves 
+      ! test for active waves
       !
       call mpas_pool_get_package(packagePool, 'activeWavePKGActive', activeWavePKGActive)
       call mpas_pool_get_config(configPool, &
@@ -411,6 +468,35 @@ module ocn_core_interface
       if (config_use_active_wave) then
          activeWavePKGActive = .true.
       endif
+
+      !
+      ! test for use of subgrid wetting and drying
+      !
+      call mpas_pool_get_package(packagePool, 'subgridWetDryPKGActive', subgridWetDryPKGActive)
+      call mpas_pool_get_config(configPool, 'config_use_subgrid_wetting_drying', config_use_subgrid_wetting_drying)
+      if (config_use_subgrid_wetting_drying) then
+         subgridWetDryPKGActive = .true.
+      end if
+
+      !
+      ! test for scaling data ice-shelf melt fluxes by the running mean of removed ice runoff
+      !
+      call mpas_pool_get_package(packagePool, 'scaledDISMFPKGActive', scaledDISMFPKGActive)
+      call mpas_pool_get_config(configPool, &
+                                'config_scale_dismf_by_removed_ice_runoff', &
+                                config_scale_dismf_by_removed_ice_runoff)
+      if (config_scale_dismf_by_removed_ice_runoff) then
+         scaledDISMFPKGActive = .true.
+      end if
+
+      !
+      ! test for scaling precipitation fluxes to ensure a balance of fresh water
+      !
+      call mpas_pool_get_package(packagePool, 'scaledSFWFPKGActive', scaledSFWFPKGActive)
+      call mpas_pool_get_config(configPool, 'config_use_precip_scaling', config_use_precip_scaling)
+      if (config_use_precip_scaling) then
+         scaledSFWFPKGActive = .true.
+      end if
 
       !
       ! call into analysis member driver to set analysis member packages

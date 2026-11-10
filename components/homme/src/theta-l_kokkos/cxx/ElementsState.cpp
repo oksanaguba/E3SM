@@ -23,79 +23,16 @@
 namespace Homme {
 
 void RefStates::init(const int num_elems) {
-  dp_ref = decltype(dp_ref)("dp_ref",num_elems);
-  phi_i_ref = decltype(phi_i_ref)("phi_i_ref",num_elems);
-  theta_ref = decltype(theta_ref)("theta_ref",num_elems);
+  dp_ref       = decltype(dp_ref)      ("dp_ref",      num_elems);
+  phi_i_ref    = decltype(phi_i_ref)   ("phi_i_ref",   num_elems);
+  theta_ref    = decltype(theta_ref)   ("theta_ref",   num_elems);
+  nu_scale_top = decltype(nu_scale_top)("nu_scale_top");
+  nu_scale_top_ilev_pack_lim = 0;
 
   m_num_elems = num_elems;
 
   m_policy = get_default_team_policy<ExecSpace>(num_elems);
   m_tu     = TeamUtils<ExecSpace>(m_policy);
-}
-
-void RefStates::compute(const bool hydrostatic,
-                        const HybridVCoord& hvcoord,
-                        const ExecViewUnmanaged<Real *[NP][NP]>& phis) {
-  EquationOfState eos;
-  eos.init(hydrostatic,hvcoord);
-
-  ElementOps elem_ops;
-  elem_ops.init(hvcoord);
-
-  assert(dp_ref.extent_int(0)==m_num_elems);
-
-  // Local copies, to avoid cuda issues with *this
-  auto l_dp_ref = dp_ref;
-  auto l_phi_i_ref = phi_i_ref;
-  auto l_theta_ref = theta_ref;
-
-  constexpr Real Rgas = PhysicalConstants::Rgas;
-  constexpr Real Tref = PhysicalConstants::Tref;
-
-  const int num_slots = m_tu.get_num_ws_slots();
-  const auto tu = m_tu;
-
-  ExecViewManaged<Scalar*[NP][NP][NUM_LEV]> buf_p("",num_slots);
-  ExecViewManaged<Scalar*[NP][NP][NUM_LEV_P]> buf_p_i("",num_slots);
-  Kokkos::parallel_for(m_policy,KOKKOS_LAMBDA(const TeamMember& team){
-    KernelVariables kv(team, tu);
-    Kokkos::parallel_for(Kokkos::TeamThreadRange(team,NP*NP),
-                         [&](const int idx){
-      const int igp = idx / NP;
-      const int jgp = idx % NP;
-
-      auto dpRef    = Homme::subview(l_dp_ref,kv.ie,igp,jgp);
-      auto phiRef   = Homme::subview(l_phi_i_ref,kv.ie,igp,jgp);
-      auto thetaRef = Homme::subview(l_theta_ref,kv.ie,igp,jgp);
-      auto p        = Homme::subview(buf_p,kv.team_idx,igp,jgp);
-      auto p_i      = Homme::subview(buf_p_i,kv.team_idx,igp,jgp);
-
-      // Step 0: compute ps_ref
-      const Real ps_ref = hvcoord.ps0 * exp(-phis(kv.ie,igp,jgp)/(Rgas*Tref));
-
-      // Step 1: compute dp_ref = delta_hyai(k)*ps0 + delta_hybi(k)*ps_ref
-      hvcoord.compute_dp_ref(kv,ps_ref,dpRef);
-
-      // Step 2: compute p_ref = p(p_i(dp))
-      p_i(0)[0] = hvcoord.hybrid_ai0*hvcoord.ps0;
-      ColumnOps::column_scan_mid_to_int<true>(kv,dpRef,p_i);
-      ColumnOps::compute_midpoint_values(kv,p_i,p);
-
-      // Step 3: compute theta_ref = theta(exner(p_ref))
-      elem_ops.compute_theta_ref(kv,p,thetaRef);
-
-      // Step 3: compute phi_i_ref = phi(theta_ref,dp_ref,p_ref)
-      // TODO: you could exploit exner computed in compute_theta_ref, to replace (p/p0)^(k-1) with exner*p0/p.
-      auto theta_dp = [&thetaRef,&dpRef](const int ilev)->Scalar {
-        return thetaRef(ilev)*dpRef(ilev);
-      };
-      eos.compute_phi_i(kv,phis(kv.ie,igp,jgp),
-                           theta_dp,p,phiRef);
-    });
-  });
-  Kokkos::fence();
-  Kokkos::deep_copy(theta_ref,0.0);
-  Kokkos::deep_copy(dp_ref,0.0);
 }
 
 void ElementsState::init(const int num_elems) {
@@ -139,7 +76,7 @@ void ElementsState::randomize(const int seed,
   // Note: to avoid errors in the equation of state, we need phi to be increasing.
   //       Rather than using a constraint (which may call the function many times,
   //       we simply ask that there are no duplicates, then we sort it later.
-  auto sort_and_chek = [](const ExecViewManaged<Real[NUM_PHYSICAL_LEV]>::HostMirror v)->bool {
+  auto sort_and_chek = [](const ExecViewManaged<Real[NUM_PHYSICAL_LEV]>::host_mirror_type v)->bool {
     Real* start = reinterpret_cast<Real*>(v.data());
     Real* end   = reinterpret_cast<Real*>(v.data()) + NUM_PHYSICAL_LEV;
     std::sort(start,end);
@@ -197,7 +134,7 @@ void ElementsState::randomize(const int seed,
   // Note: to avoid errors in the equation of state, we need phi to be increasing.
   //       Rather than using a constraint (which may call the function many times,
   //       we simply ask that there are no duplicates, then we sort it later.
-  auto sort_and_chek = [](const ExecViewManaged<Scalar[NUM_LEV_P]>::HostMirror v)->bool {
+  auto sort_and_chek = [](const ExecViewManaged<Scalar[NUM_LEV_P]>::host_mirror_type v)->bool {
     Real* start = reinterpret_cast<Real*>(v.data());
     Real* end   = reinterpret_cast<Real*>(v.data()) + NUM_LEV_P*VECTOR_SIZE;
     std::sort(start,end);
@@ -300,7 +237,81 @@ void ElementsState::randomize(const int seed,
     hvcoord.compute_ps_ref_from_dp(kv,Homme::subview(dp,ie,tl),
                                       Homme::subview(ps,ie,tl));
   });
-  ExecSpace::impl_static_fence();
+  Kokkos::fence();
+}
+
+
+void ElementsState::randomize(const int seed,
+                              const HybridVCoord& hvcoord) {
+  // Check elements were inited
+  assert (m_num_elems>0);
+
+  // Check data makes sense
+  assert (hvcoord.ps0>0);
+  assert (hvcoord.hybrid_ai0>=0);
+
+  // Arbitrary minimum value to generate
+  constexpr const Real min_value = 0.015625;
+
+  std::mt19937_64 engine(seed);
+  std::uniform_real_distribution<Real> random_dist(min_value, 1.0 / min_value);
+  std::uniform_real_distribution<Real> pdf_vtheta_dp(100.0, 1000.0);
+
+  genRandArray(m_v,         engine, random_dist);
+  genRandArray(m_w_i,       engine, random_dist);
+  genRandArray(m_vtheta_dp, engine, pdf_vtheta_dp);
+  // Note: to avoid errors in the equation of state, we need phi to be increasing.
+  //       Rather than using a constraint (which may call the function many times,
+  //       we simply ask that there are no duplicates, then we sort it later.
+  auto sort_and_chek = [](const ExecViewManaged<Scalar[NUM_LEV_P]>::host_mirror_type v)->bool {
+    Real* start = reinterpret_cast<Real*>(v.data());
+    Real* end   = reinterpret_cast<Real*>(v.data()) + NUM_LEV_P*VECTOR_SIZE;
+    std::sort(start,end);
+    std::reverse(start,end);
+    auto it = std::unique(start,end);
+    return it==end;
+  };
+  for (int ie=0; ie<m_num_elems; ++ie) {
+    for (int itl=0; itl<NUM_TIME_LEVELS; ++itl) {
+      for (int igp=0; igp<NP; ++igp) {
+        for (int jgp=0; jgp<NP; ++ jgp) {
+          genRandArray(Homme::subview(m_phinh_i,ie,itl,igp,jgp),engine,random_dist,sort_and_chek);
+        }
+      }
+    }
+  }
+
+  std::uniform_real_distribution<Real> pressure_pdf(800, 1200);
+  genRandArray(m_ps_v, engine, pressure_pdf);
+
+  auto dp = m_dp3d;
+  auto ps = m_ps_v;
+  auto ps0 = hvcoord.ps0;
+  auto hyai = hvcoord.hybrid_ai_packed;
+  auto hybi = hvcoord.hybrid_bi_packed;
+  auto hyai_delta = hvcoord.hybrid_ai_delta;
+  auto hybi_delta = hvcoord.hybrid_bi_delta;
+  const auto tu = m_tu;
+  Kokkos::parallel_for(m_policy, KOKKOS_LAMBDA(const TeamMember& team) {
+    KernelVariables kv(team, tu);
+    const int ie = kv.ie / NUM_TIME_LEVELS;
+    const int tl = kv.ie % NUM_TIME_LEVELS;
+
+    Kokkos::parallel_for(Kokkos::TeamThreadRange(kv.team,NP*NP),
+                         [&](const int idx) {
+      const int igp  = idx / NP;
+      const int jgp  = idx % NP;
+      ColumnOps::compute_midpoint_delta(kv,hyai,hyai_delta);
+      ColumnOps::compute_midpoint_delta(kv,hybi,hybi_delta);
+      team.team_barrier();
+      Kokkos::parallel_for(Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
+                           [&](const int ilev) {
+        dp(ie,tl,igp,jgp,ilev) = ps0*hyai_delta(ilev)
+                               + ps(ie,tl,igp,jgp)*hybi_delta(ilev);
+      });
+    });
+  });
+  Kokkos::fence();
 }
 
 void ElementsState::pull_from_f90_pointers (CF90Ptr& state_v,         CF90Ptr& state_w_i,
@@ -342,10 +353,28 @@ void ElementsState::push_to_f90_pointers (F90Ptr& state_v, F90Ptr& state_w_i, F9
   sync_to_host(m_dp3d,      state_dp3d_f90);
 }
 
+void ElementsState::push_to_f90_pointers (F90Ptr& state_v, F90Ptr& state_w_i, F90Ptr& state_vtheta_dp,
+                                          F90Ptr& state_phinh_i, F90Ptr& state_dp3d,
+                                          const int tl) const {
+  HostViewUnmanaged<Real *[NUM_TIME_LEVELS][NUM_PHYSICAL_LEV ][2][NP][NP]> state_v_f90         (state_v,m_num_elems);
+  HostViewUnmanaged<Real *[NUM_TIME_LEVELS][NUM_INTERFACE_LEV]   [NP][NP]> state_w_i_f90       (state_w_i,m_num_elems);
+  HostViewUnmanaged<Real *[NUM_TIME_LEVELS][NUM_PHYSICAL_LEV ]   [NP][NP]> state_vtheta_dp_f90 (state_vtheta_dp,m_num_elems);
+  HostViewUnmanaged<Real *[NUM_TIME_LEVELS][NUM_INTERFACE_LEV]   [NP][NP]> state_phinh_i_f90   (state_phinh_i,m_num_elems);
+  HostViewUnmanaged<Real *[NUM_TIME_LEVELS][NUM_PHYSICAL_LEV ]   [NP][NP]> state_dp3d_f90      (state_dp3d,m_num_elems);
+
+  // Source and destination time level coincide for the dynamics state: the
+  // caller passes the (0-based) level that Fortran will read.
+  sync_to_host(m_v,         state_v_f90,         tl, tl);
+  sync_to_host(m_w_i,       state_w_i_f90,       tl, tl);
+  sync_to_host(m_vtheta_dp, state_vtheta_dp_f90, tl, tl);
+  sync_to_host(m_phinh_i,   state_phinh_i_f90,   tl, tl);
+  sync_to_host(m_dp3d,      state_dp3d_f90,      tl, tl);
+}
+
 static bool all_good_elems (const ElementsState& s, const int tlvl) {
   using Kokkos::ALL;
   using Kokkos::parallel_for;
-  
+
   const int nelem = s.num_elems();
   const int nplev = NUM_PHYSICAL_LEV;
 
@@ -378,14 +407,14 @@ static bool all_good_elems (const ElementsState& s, const int tlvl) {
   };
   int nerr;
   parallel_reduce(get_default_team_policy<ExecSpace>(nelem), check, nerr);
-  
+
   return nerr == 0;
 }
 
 void check_print_abort_on_bad_elems (const std::string& label, const int tlvl,
                                      const int error_code) {
   const auto& s = Context::singleton().get<ElementsState>();
-  
+
   // On device and, thus, efficient.
   if (all_good_elems(s, tlvl)) return;
 
@@ -456,6 +485,17 @@ void check_print_abort_on_bad_elems (const std::string& label, const int tlvl,
   Errors::runtime_abort(std::string("Bad dphi, dp3d, or vtheta_dp; label: '") +
                         label + "'; see " + filename,
                         error_code < 0 ? Errors::err_bad_column_value : error_code);
+}
+
+HashType ElementsState::hash (const int tl) const {
+  HashType accum = 0;
+  Homme::hash(tl, m_v,         NUM_PHYSICAL_LEV, accum);
+  Homme::hash(tl, m_w_i,       NUM_PHYSICAL_LEV, accum);
+  Homme::hash(tl, m_vtheta_dp, NUM_PHYSICAL_LEV, accum);
+  Homme::hash(tl, m_phinh_i,   NUM_PHYSICAL_LEV, accum);
+  Homme::hash(tl, m_dp3d,      NUM_PHYSICAL_LEV, accum);
+  Homme::hash(tl, m_ps_v,                        accum);
+  return accum;
 }
 
 } // namespace Homme

@@ -37,22 +37,23 @@ void init_simulation_params_c (const int& remap_alg, const int& limiter_option, 
                                const int& time_step_type, const int& qsize, const int& state_frequency,
                                const Real& nu, const Real& nu_p, const Real& nu_q, const Real& nu_s, const Real& nu_div, const Real& nu_top,
                                const int& hypervis_order, const int& hypervis_subcycle, const double& hypervis_scaling,
-                               const int& ftype, const bool& prescribed_wind, const bool& moisture, const bool& disable_diagnostics,
+                               const int& ftype, const bool& prescribed_wind, const bool& use_moisture, const bool& disable_diagnostics,
                                const bool& use_cpstar, const int& transport_alg,
                                const int& dt_remap_factor, const int& dt_tracer_factor,
-                               const double& rearth)
+                               const double& scale_factor, const double& laplacian_rigid_factor)
 {
   // Check that the simulation options are supported. This helps us in the future, since we
   // are currently 'assuming' some option have/not have certain values. As we support for more
   // options in the C++ build, we will remove some checks
-  Errors::check_option("init_simulation_params_c","vert_remap_q_alg",remap_alg,{1,3});
+  Errors::check_option("init_simulation_params_c","vert_remap_q_alg",remap_alg,{1,3,10});
   Errors::check_option("init_simulation_params_c","prescribed_wind",prescribed_wind,{false});
   Errors::check_option("init_simulation_params_c","hypervis_order",hypervis_order,{2});
   Errors::check_option("init_simulation_params_c","transport_alg",transport_alg,{0});
   Errors::check_option("init_simulation_params_c","time_step_type",time_step_type,{5});
   Errors::check_option("init_simulation_params_c","qsize",qsize,0,Errors::ComparisonOp::GE);
   Errors::check_option("init_simulation_params_c","qsize",qsize,QSIZE_D,Errors::ComparisonOp::LE);
-  Errors::check_option("init_simulation_params_c","limiter_option",limiter_option,{8,9});
+  if (qsize > 0)
+    Errors::check_option("init_simulation_params_c","limiter_option",limiter_option,{8,9});
   Errors::check_option("init_simulation_params_c","ftype",ftype, {-1, 0, 2});
   Errors::check_option("init_simulation_params_c","nu_p",nu_p,0.0,Errors::ComparisonOp::GT);
   Errors::check_option("init_simulation_params_c","nu",nu,0.0,Errors::ComparisonOp::GT);
@@ -63,7 +64,10 @@ void init_simulation_params_c (const int& remap_alg, const int& limiter_option, 
 
   if (remap_alg==1) {
     params.remap_alg = RemapAlg::PPM_MIRRORED;
+  } else if (remap_alg == 10) {
+    params.remap_alg = RemapAlg::PPM_LIMITED_EXTRAP;
   }
+
   if (time_step_type==5) {
     params.time_step_type = TimeStepType::ttype5;
   }
@@ -86,10 +90,12 @@ void init_simulation_params_c (const int& remap_alg, const int& limiter_option, 
   params.hypervis_subcycle             = hypervis_subcycle;
   params.hypervis_scaling              = hypervis_scaling;
   params.disable_diagnostics           = disable_diagnostics;
-  params.moisture                      = (moisture ? MoistDry::MOIST : MoistDry::DRY);
+  params.use_moisture                  = use_moisture;
   params.use_cpstar                    = use_cpstar;
   params.transport_alg                 = transport_alg;
-  params.rearth                        = rearth;
+  // SphereOperators parameters; preqx supports only the sphere.
+  params.scale_factor                  = scale_factor;
+  params.laplacian_rigid_factor        = laplacian_rigid_factor;
 
   //set nu_ratios values
   if (params.nu != params.nu_div) {
@@ -233,8 +239,9 @@ void init_elements_c (const int& num_elems)
   Elements& e = c.create<Elements> ();
   const SimulationParams& params = c.get<SimulationParams>();
 
-  const bool consthv = (params.hypervis_scaling==0.0);
-  e.init (num_elems, consthv, /* alloc_gradphis = */ false, params.rearth);
+  e.init (num_elems, /* alloc_gradphis = */ false,
+          params.scale_factor, params.laplacian_rigid_factor,
+          /* alloc_sphere_coords = */ false);
 
   // Init also the tracers structure
   Tracers& t = c.create<Tracers> ();
@@ -301,13 +308,17 @@ void init_functors_c ()
 void init_elements_2d_c (const int& ie, CF90Ptr& D, CF90Ptr& Dinv, CF90Ptr& fcor,
                          CF90Ptr& spheremp, CF90Ptr& rspheremp,
                          CF90Ptr& metdet, CF90Ptr& metinv, CF90Ptr& phis,
-                         CF90Ptr &tensorvisc, CF90Ptr &vec_sph2cart)
+                         CF90Ptr &tensorvisc, CF90Ptr &vec_sph2cart,
+                         CF90Ptr &tensorvisc2)
 {
   Elements& e = Context::singleton().get<Elements> ();
-  const SimulationParams& params = Context::singleton().get<SimulationParams>();
 
-  const bool consthv = (params.hypervis_scaling==0.0);
-  e.m_geometry.set_elem_data(ie,D,Dinv,fcor,spheremp,rspheremp,metdet,metinv,tensorvisc,vec_sph2cart,consthv);
+  // preqx_kokkos never uses tensorVisc_2 (the sponge-layer tensor
+  // coefficient, only used by theta-l_kokkos), but it is passed through
+  // here (and copied into m_tensorvisc2) so that ElementsGeometry's
+  // initialization is uniform across dycores.
+  e.m_geometry.set_elem_data(ie,D,Dinv,fcor,spheremp,rspheremp,metdet,metinv,tensorvisc,
+                             vec_sph2cart,nullptr,nullptr,tensorvisc2);
   e.m_geometry.set_phis(ie,phis);
 }
 
@@ -341,10 +352,12 @@ void init_boundary_exchanges_c ()
   bmm[MPI_EXCHANGE]->set_connectivity(connectivity);
   bmm[MPI_EXCHANGE_MIN_MAX]->set_connectivity(connectivity);
 
-  // Euler BEs
-  auto& esf = Context::singleton().get<EulerStepFunctor>();
-  esf.reset(params);
-  esf.init_boundary_exchanges();
+  if (params.qsize > 0) {
+    // Euler BEs
+    auto& esf = Context::singleton().get<EulerStepFunctor>();
+    esf.reset(params);
+    esf.init_boundary_exchanges();
+  }
 
   // RK stages BE's
   auto& cf = Context::singleton().get<CaarFunctor>();

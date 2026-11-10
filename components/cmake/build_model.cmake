@@ -1,8 +1,15 @@
-function(build_model COMP_CLASS COMP_NAME)
+# This function must be a macro so that it does not get its own scope.
+# This way, changes to CMAKE_* vars affect the directory which is what
+# we want.
+macro(build_model COMP_CLASS COMP_NAME)
+
+  # We want real variables, not macro expansions
+  set(COMP_CLASS ${COMP_CLASS})
+  set(COMP_NAME ${COMP_NAME})
 
   # We support component-specific configuration of flags, etc, so this setup
   # need to be done here.
-  include(${CMAKE_SOURCE_DIR}/cmake/common_setup.cmake)
+  include(${SRCROOT}/components/cmake/common_setup.cmake)
 
   set(MODELCONF_DIR "${BUILDCONF}/${COMP_NAME}conf")
 
@@ -31,11 +38,6 @@ function(build_model COMP_CLASS COMP_NAME)
       list(APPEND INCLDIR "${EXEROOT}/cmake-bld/cmake/${ITEM}")
     endforeach()
   endif()
-
-  # Source files don't live in components/cmake/$COMP_CLASS. This path won't work for
-  # generated files.
-  set(SOURCE_PATH "../..")
-  set(CIMESRC_PATH "../cime/src")
 
   #-------------------------------------------------------------------------------
   # Build & include dependency files
@@ -68,14 +70,25 @@ function(build_model COMP_CLASS COMP_NAME)
     # If YAKL is needed, then set YAKL CMake vars
     if (USE_YAKL)
       # YAKL_ARCH can be CUDA, HIP, SYCL, OPENMP45, or empty
-      # USE_CUDA is set through Macros.cmake / config_compilers.xml
+      # USE_CUDA or USE_HIP are set through Macros.cmake
       if (USE_CUDA)
         set(YAKL_ARCH "CUDA")
-        # CUDA_FLAGS is set through Macros.cmake / config_compilers.xml
+        # CUDA_FLAGS is set through Macros.cmake
+        # For instance: cime_config/machines/cmake_macros/gnugpu_summit.cmake
         set(YAKL_CUDA_FLAGS "${CPPDEFS} ${CUDA_FLAGS}")
+      elseif (USE_HIP)
+        set(YAKL_ARCH "HIP")
+        # HIP_FLAGS are set through Macros.cmake
+        # For instance: cime_config/machines/cmake_macros/crayclanggpu_frontier.cmake
+        set(YAKL_HIP_FLAGS "${CPPDEFS} ${HIP_FLAGS}")
+      elseif (USE_SYCL)
+        set(YAKL_ARCH "SYCL")
+        # SYCL_FLAGS is set through Macros.cmake
+        # For instance: cime_config/machines/cmake_macros/oneapi-ifxgpu_sunspot.cmake
+        set(YAKL_SYCL_FLAGS "${CPPDEFS} ${SYCL_FLAGS}")
       else()
         # For CPU C++ compilers duplicate flags are fine, the last ones win typically
-        set(YAKL_CXX_FLAGS "${CPPDEFS} ${CXXFLAGS}")
+        set(YAKL_CXX_FLAGS "${CPPDEFS} ${CMAKE_CXX_FLAGS}")
         set(YAKL_ARCH "")
       endif()
       message(STATUS "Building YAKL")
@@ -105,9 +118,28 @@ function(build_model COMP_CLASS COMP_NAME)
                              cmake/atm/../../eam/src/physics/crm/crm_ecpp_output_module.F90 )
     endif()
 
+    if (USE_PAM)
+      message(STATUS "Building PAM")
+      # PAM_HOME is where the samxx source code lives
+      set(PAM_HOME ${CMAKE_CURRENT_SOURCE_DIR}/../../eam/src/physics/crm/pam)
+      # PAM_BIN is where the samxx library will live
+      set(PAM_BIN  ${CMAKE_CURRENT_BINARY_DIR}/pam)
+      # Build the static samxx library
+      add_subdirectory(${PAM_HOME} ${PAM_BIN})
+      # Add samxx F90 files to the main E3SM build
+      set(SOURCES ${SOURCES} cmake/atm/../../eam/src/physics/crm/pam/params.F90
+                             cmake/atm/../../eam/src/physics/crm/crm_ecpp_output_module.F90
+                             cmake/atm/../../eam/src/physics/crm/pam/pam_driver.F90)
+      # Pam interface need to include modules from pam
+      include_directories(${PAM_BIN}/external/pam_core)
+    endif()
+
     # Add rrtmgp++ source code if asked for
     if (USE_RRTMGPXX)
       message(STATUS "Building RRTMGPXX")
+      # For now, hardcode YAKL mode in rrtmgp
+      set(RRTMGP_ENABLE_YAKL On)
+      add_definitions("-DRRTMGP_ENABLE_YAKL")
       # Build the static rrtmgpxx library
       set(RRTMGPXX_BIN ${CMAKE_CURRENT_BINARY_DIR}/rrtmgp)
       add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../eam/src/physics/rrtmgp/external/cpp ${RRTMGPXX_BIN})
@@ -133,46 +165,31 @@ function(build_model COMP_CLASS COMP_NAME)
   endif()
 
   #-------------------------------------------------------------------------------
-  # create list of component libraries - hard-wired for current e3sm components
+  # iac needs specific compile flags and libraries
+  # try adding them here
   #-------------------------------------------------------------------------------
 
-  if (NOT USE_SHARED_CLM)
-    set(LNDOBJDIR "${EXEROOT}/lnd/obj")
-    set(LNDLIBDIR "${LIBROOT}")
-    if (COMP_LND STREQUAL "elm")
-      set(LNDLIB "libelm.a")
-    else()
-      set(LNDLIB "liblnd.a")
-    endif()
-    list(APPEND INCLDIR "${LNDOBJDIR}")
-  else()
-    set(LNDLIB "libclm.a")
-    set(LNDOBJDIR "${SHAREDLIBROOT}/${SHAREDPATH}/${COMP_INTERFACE}/${ESMFDIR}/clm/obj")
-    set(LNDLIBDIR "${EXEROOT}/${SHAREDPATH}/${COMP_INTERFACE}/${ESMFDIR}/lib")
-    list(APPEND INCLDIR "${INSTALL_SHAREDPATH}/${COMP_INTERFACE}/${ESMFDIR}/include")
-    if (COMP_NAME STREQUAL "clm")
-      set(INCLUDE_DIR "${INSTALL_SHAREDPATH}/${COMP_INTERFACE}/${ESMFDIR}/include")
-    endif()
+  if (COMP_NAME STREQUAL "gcam")
+    set(CXXFLAGS "${CXXFLAGS} -DGCAM_PARALLEL_ENABLED=0")
+  endif()
+  
+  #-------------------------------------------------------------------------------
+  # WW3 needs some special handling of files based on the switches provided
+  #-------------------------------------------------------------------------------
+  if (COMP_NAME STREQUAL "ww3")
+    include(${PROJECT_SOURCE_DIR}/ww3/src/ww3_utils.cmake)
+    # cull the sources lists based on switches
+    cull_sources_from_switches("${SOURCES}" "${GEN_F90_SOURCES}")
+    # reset the local variables based on the culled lists
+    set(SOURCES ${SOURCES_CULLED})
+
+    list(LENGTH SOURCES ORIGINAL_LENGTH)
+    #message(FATAL_ERROR "ORIGINAL_LENGTH=${ORIGINAL_LENGTH}")
   endif()
 
-  if (NOT ULIBDEP)
-    if (LIBROOT)
-      list(APPEND INCLDIR "${LNDOBJDIR}")
-    endif()
-  endif()
-
-  if (COMP_GLC STREQUAL "cism")
-    set(ULIBDEP "${ULIBDEP} ${CISM_LIBDIR}/libglimmercismfortran.a")
-    if (CISM_USE_TRILINOS)
-      set(ULIBDEP "${ULIBDEP} ${CISM_LIBDIR}/libglimmercismcpp.a")
-    endif()
-  endif()
-  if (OCN_SUBMODEL STREQUAL "moby")
-    set(ULIBDEP "${ULIBDEP} ${LIBROOT}/libmoby.a")
-  endif()
-
-  set(CSMSHARELIB "${INSTALL_SHAREDPATH}/${COMP_INTERFACE}/${ESMFDIR}/${NINST_VALUE}/lib/libcsm_share.a")
-  set(ULIBDEP "${ULIBDEP} ${CSMSHARELIB}")
+  #-------------------------------------------------------------------------------
+  # create list of component libraries - hard-wired for current e3sm components
+  #-------------------------------------------------------------------------------
 
   # do the necessary genf90s
   foreach (SRC_FILE IN LISTS GEN_F90_SOURCES)
@@ -186,38 +203,37 @@ function(build_model COMP_CLASS COMP_NAME)
     list(APPEND SOURCES ${CMAKE_CURRENT_BINARY_DIR}/${BASENAME})
   endforeach ()
 
-  # Set compiler flags for source files
+  # Set special fixed/free compiler flags for non-cosp fortran files. This logic
+  # can maybe be replaced/reworked once we have Fortran_FORMAT property
+  # working
   foreach (SOURCE_FILE IN LISTS SOURCES)
     get_filename_component(SOURCE_EXT ${SOURCE_FILE} EXT)
 
-    # Set flags based on file extension. File extensions may change if the globs used by
-    # gather_sources changes.
-    if (SOURCE_EXT STREQUAL ".c")
-      e3sm_add_flags("${SOURCE_FILE}" "${CFLAGS}")
-    elseif (SOURCE_EXT STREQUAL ".cpp")
-      e3sm_add_flags("${SOURCE_FILE}" "${CXXFLAGS}")
-    else()
-      # This is a fortran source
-      e3sm_add_flags("${SOURCE_FILE}" "${FFLAGS}")
-
-      # Cosp manages its own flags
-      if (NOT SOURCE_FILE IN_LIST COSP_SOURCES)
-        # Flags are slightly different for different fortran extensions
-        if (SOURCE_EXT STREQUAL ".F" OR SOURCE_EXT STREQUAL ".f")
-          e3sm_add_flags("${SOURCE_FILE}" "${FIXEDFLAGS}")
-        elseif (SOURCE_EXT STREQUAL ".f90")
-          e3sm_add_flags("${SOURCE_FILE}" "${FREEFLAGS}")
-        elseif (SOURCE_EXT STREQUAL ".F90")
-          e3sm_add_flags("${SOURCE_FILE}" "${FREEFLAGS} ${CONTIGUOUS_FLAG}")
-        endif()
+    # Cosp manages its own flags
+    if (NOT SOURCE_FILE IN_LIST COSP_SOURCES)
+      # Flags are slightly different for different fortran extensions
+      if (SOURCE_EXT STREQUAL ".F" OR SOURCE_EXT STREQUAL ".f")
+        e3sm_set_source_property(${SOURCE_FILE} Fortran_FORMAT FIXED FALSE)
+      elseif (SOURCE_EXT STREQUAL ".f90")
+        e3sm_set_source_property(${SOURCE_FILE} Fortran_FORMAT FREE FALSE)
+      elseif (SOURCE_EXT STREQUAL ".F90")
+        e3sm_set_source_property(${SOURCE_FILE} Fortran_FORMAT FREE FALSE)
+        e3sm_add_flags(${SOURCE_FILE} "${CONTIGUOUS_FLAG}")
       endif()
     endif()
   endforeach()
 
   # Load machine/compiler specific settings
-  set(COMPILER_SPECIFIC_DEPENDS ${CASEROOT}/Depends.${COMPILER}.cmake)
-  set(MACHINE_SPECIFIC_DEPENDS ${CASEROOT}/Depends.${MACH}.cmake)
-  set(PLATFORM_SPECIFIC_DEPENDS ${CASEROOT}/Depends.${MACH}.${COMPILER}.cmake)
+  if (COMP_NAME STREQUAL "csm_share")
+    # csm_share uses special Depends files, not customizable per case
+    set(DEPENDS_LOC "${SRCROOT}/share")
+  else()
+    set(DEPENDS_LOC "${CASEROOT}")
+  endif()
+
+  set(COMPILER_SPECIFIC_DEPENDS ${DEPENDS_LOC}/Depends.${COMPILER}.cmake)
+  set(MACHINE_SPECIFIC_DEPENDS ${DEPENDS_LOC}/Depends.${MACH}.cmake)
+  set(PLATFORM_SPECIFIC_DEPENDS ${DEPENDS_LOC}/Depends.${MACH}.${COMPILER}.cmake)
   set(TRY_TO_LOAD ${COMPILER_SPECIFIC_DEPENDS} ${MACHINE_SPECIFIC_DEPENDS} ${PLATFORM_SPECIFIC_DEPENDS})
   foreach(ITEM IN LISTS TRY_TO_LOAD)
     if (EXISTS ${ITEM})
@@ -227,23 +243,18 @@ function(build_model COMP_CLASS COMP_NAME)
 
   # Disable optimizations on some files that would take too long to compile, expect these to all be fortran files
   foreach (SOURCE_FILE IN LISTS NOOPT_FILES)
-    e3sm_deoptimize_file("${SOURCE_FILE}" "${FFLAGS_NOOPT}")
+    e3sm_deoptimize_file("${SOURCE_FILE}")
   endforeach()
 
   #-------------------------------------------------------------------------------
   # build rules:
   #-------------------------------------------------------------------------------
 
-  if (MPILIB STREQUAL "mpi-serial")
-    set(MPISERIAL "${INSTALL_SHAREDPATH}/lib/libmpi-serial.a")
-    set(MLIBS "${MLIBS} ${MPISERIAL}")
-  endif()
-
   foreach(ITEM IN LISTS SOURCES)
     if (ITEM MATCHES "${CMAKE_BINARY_DIR}/.*") # is generated
       list(APPEND REAL_SOURCES ${ITEM})
     else()
-      list(APPEND REAL_SOURCES "${SOURCE_PATH}/${ITEM}")
+      list(APPEND REAL_SOURCES "${PROJECT_SOURCE_DIR}/${ITEM}")
     endif()
   endforeach()
 
@@ -251,35 +262,120 @@ function(build_model COMP_CLASS COMP_NAME)
     set(TARGET_NAME "${CIME_MODEL}.exe")
     add_executable(${TARGET_NAME})
     target_sources(${TARGET_NAME} PRIVATE ${REAL_SOURCES})
-    set(ALL_LIBS "${ULIBDEP} ${MCTLIBS} ${PIOLIB} ${GPTLLIB} ${SLIBS} ${MLIBS}")
-    separate_arguments(ALL_LIBS_LIST UNIX_COMMAND "${ALL_LIBS}")
+
     foreach(ITEM IN LISTS COMP_CLASSES)
       if (NOT ITEM STREQUAL "cpl")
         target_link_libraries(${TARGET_NAME} ${ITEM})
       endif()
     endforeach()
-    foreach(ITEM IN LISTS ALL_LIBS_LIST)
-      target_link_libraries(${TARGET_NAME} ${ITEM})
-    endforeach()
-    set_target_properties(${TARGET_NAME} PROPERTIES LINKER_LANGUAGE ${LD})
+
+    if (TARGET hdf5 AND MPILIB STREQUAL "openmpi" AND MACH MATCHES "^(pm|muller|alvarez)-")
+      target_link_libraries(${TARGET_NAME} hdf5)
+    endif()
+
+    # driver-mct/main sources (e.g. cime_comp_mod.F90) use netcdf directly, but
+    # the component libraries only link netcdf PRIVATEly (via csm_share), so
+    # its usage requirements (e.g. include dirs for netcdf.mod) do not
+    # propagate up to this exe target. Pull in just the include dirs here.
+    #
+    # Deliberately NOT using target_link_libraries(${TARGET_NAME} netcdf):
+    # CMake treats "netcdf" as a single graph node, so linking it directly to
+    # this executable pins its (and PnetCDF's) position to wherever it's
+    # first encountered, ahead of the component libraries below that also
+    # transitively link it via csm_share -> spio. But piof/pioc (also pulled
+    # in via csm_share -> spio) reference PnetCDF symbols, so libpnetcdf.a
+    # must come after them on the link line, or the linker drops its symbols
+    # before piof/pioc need them. Only requesting the include dirs avoids
+    # adding that extra, mis-ordering link edge, while the link libraries
+    # still reach this target correctly ordered via csm_share -> spio.
+    find_package(NETCDF REQUIRED)
+    get_target_property(NETCDF_INTERFACE_INCLUDE_DIRS netcdf INTERFACE_INCLUDE_DIRECTORIES)
+    target_include_directories(${TARGET_NAME} PRIVATE ${NETCDF_INTERFACE_INCLUDE_DIRS})
+
+    if (USE_MOAB)
+      target_link_libraries(${TARGET_NAME} ${MOAB_LIBRARIES})
+      target_include_directories(${TARGET_NAME} PRIVATE ${MOAB_INCLUDE_DIRS})
+    endif()
+
+    # Make sure we link blas/lapack
+    if (NOT DEFINED ENV{SKIP_BLAS})
+      target_link_libraries(${TARGET_NAME} LAPACK::LAPACK)
+    endif()
+
+    if (E3SM_LINK_WITH_FORTRAN)
+      set_target_properties(${TARGET_NAME} PROPERTIES LINKER_LANGUAGE Fortran)
+
+      # A bit hacky, some platforms need help with the fortran linker
+      if (COMPILER STREQUAL "intel")
+        string(APPEND CMAKE_EXE_LINKER_FLAGS " -cxxlib")
+      endif()
+
+    else()
+      set_target_properties(${TARGET_NAME} PROPERTIES LINKER_LANGUAGE CXX)
+
+      if (COMPILER STREQUAL "intelgpu")
+        string(APPEND CMAKE_EXE_LINKER_FLAGS " -Wl,-\-defsym,main=MAIN_\_ -lifcore -fsycl -Xsycl-target-backend \"-device pvc\" ")
+      endif()
+
+    endif()
+
   else()
     set(TARGET_NAME ${COMP_CLASS})
     add_library(${TARGET_NAME})
     target_sources(${TARGET_NAME} PRIVATE ${REAL_SOURCES})
-    if (COMP_NAME STREQUAL "eam")
-      if (USE_YAKL)
-        target_link_libraries(${TARGET_NAME} PRIVATE yakl)
+    if (COMP_NAME STREQUAL "csm_share")
+      find_package(NETCDF REQUIRED)
+      target_link_libraries(${TARGET_NAME} PRIVATE netcdf)
+      if (USE_MOAB)
+        target_link_libraries(${TARGET_NAME} PRIVATE ${MOAB_LIBRARIES})
+        target_include_directories(${TARGET_NAME} PRIVATE ${MOAB_INCLUDE_DIRS})
       endif()
-      if (USE_SAMXX)
-        target_link_libraries(${TARGET_NAME} PRIVATE samxx)
-      endif()
-      if (USE_RRTMGPXX)
+    else()
+      target_link_libraries(${TARGET_NAME} PRIVATE csm_share)
+      if (COMP_NAME STREQUAL "eam")
+        if (USE_YAKL)
+          target_link_libraries(${TARGET_NAME} PRIVATE yakl yakl_fortran_interface)
+        endif()
+        if (USE_SAMXX)
+          target_link_libraries(${TARGET_NAME} PRIVATE samxx)
+        endif()
+        if (USE_PAM)
+          target_link_libraries(${TARGET_NAME} PRIVATE pam_driver)
+        endif()
+        if (USE_RRTMGPXX)
           target_link_libraries(${TARGET_NAME} PRIVATE rrtmgp rrtmgp_interface)
+        endif()
       endif()
+      if (COMP_NAME STREQUAL "elm")
+        if (USE_PETSC)
+          target_link_libraries(${TARGET_NAME} PRIVATE "${PETSC_LIBRARIES}")
+          target_include_directories(${TARGET_NAME} PRIVATE "${PETSC_INCLUDES}")
+        endif()
+        if (USE_MOAB)
+          target_link_libraries(${TARGET_NAME} PRIVATE ${MOAB_LIBRARIES})
+          target_include_directories(${TARGET_NAME} PRIVATE ${MOAB_INCLUDE_DIRS})
+        endif()
+      endif()
+      if (COMP_NAME STREQUAL "ww3")
+
+        set(WW3_SRC_DIR "${PROJECT_SOURCE_DIR}/ww3/src/WW3/model/src")
+
+        #-------------------------
+        # Determine compile definitions for wav
+        #-------------------------
+        foreach(switch ${switches})
+          target_compile_definitions("${TARGET_NAME}" PUBLIC W3_${switch})
+        endforeach()
+
+        set_property(SOURCE "${WW3_SRC_DIR}/w3initmd.F90" APPEND PROPERTY COMPILE_DEFINITIONS "__WW3_SWITCHES__=\'\'")
+
+        #add_executable(ww3_ounf "${WW3_SRC_DIR}/ww3_ounf.F90")
+        #target_link_libraries(ww3_ounf "${TARGET_NAME}")
+      endif()
+      if (USE_KOKKOS)
+        target_link_libraries (${TARGET_NAME} PRIVATE Kokkos::kokkos)
+      endif ()
     endif()
-    if (USE_KOKKOS)
-      target_link_libraries (${TARGET_NAME} PRIVATE Kokkos::kokkos)
-    endif ()
   endif()
 
   # Subtle: In order for fortran dependency scanning to work, our CPPFPP/DEFS must be registered
@@ -292,4 +388,4 @@ function(build_model COMP_CLASS COMP_NAME)
   # Set flags for target
   target_include_directories(${TARGET_NAME} PRIVATE ${INCLDIR})
 
-endfunction(build_model)
+endmacro(build_model)

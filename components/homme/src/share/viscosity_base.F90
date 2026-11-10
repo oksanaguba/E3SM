@@ -17,7 +17,8 @@ use dimensions_mod, only : np, nlev,qsize,nelemd
 use hybrid_mod, only : hybrid_t, hybrid_create
 use parallel_mod, only : parallel_t, abortmp
 use element_mod, only : element_t
-use derivative_mod, only : derivative_t, laplace_sphere_wk, vlaplace_sphere_wk, vorticity_sphere, derivinit, divergence_sphere
+use derivative_mod, only : derivative_t, laplace_sphere_wk, vlaplace_sphere_wk, vorticity_sphere, derivinit,&
+     divergence_sphere
 use edgetype_mod, only : EdgeBuffer_t, EdgeDescriptor_t
 use edge_mod, only : edgevpack, edgevunpack, edgevunpackmin, &
     edgevunpackmax, initEdgeBuffer, FreeEdgeBuffer, edgeSunpackmax, edgeSunpackmin,edgeSpack, &
@@ -64,11 +65,7 @@ public :: compute_zeta_C0_contra    ! for older versions of sweq which carry
 public :: compute_div_C0_contra     ! velocity around in contra-coordinates
 public :: compute_eta_C0_contra
 
-type (EdgeBuffer_t)          :: edge1
-
 contains
-
-
 
 #ifdef _PRIM
 
@@ -87,15 +84,8 @@ type (EdgeBuffer_t)  , intent(inout) :: edgeq
 type (derivative_t)  , intent(in) :: deriv
 
 ! local
-integer :: k,kptr,i,j,ie,ic,q
+integer :: k,ie,q
 real (kind=real_kind), dimension(np,np) :: lap_p
-logical var_coef1
-
-   !if tensor hyperviscosity with tensor V is used, then biharmonic operator is (\grad\cdot V\grad) (\grad \cdot \grad) 
-   !so tensor is only used on second call to laplace_sphere_wk
-   var_coef1 = .true.
-   if(hypervis_scaling > 0)    var_coef1 = .false.
-
 
 
    do ie=nets,nete
@@ -106,7 +96,7 @@ logical var_coef1
          do k=1,nlev    !  Potential loop inversion (AAM)
             lap_p(:,:)=qtens(:,:,k,q,ie)
 ! Original use of qtens on left and right hand sides caused OpenMP errors (AAM)
-           qtens(:,:,k,q,ie)=laplace_sphere_wk(lap_p,deriv,elem(ie),var_coef=var_coef1)
+           qtens(:,:,k,q,ie)=laplace_sphere_wk(lap_p,deriv,elem(ie),var_coef=.false.)
          enddo
          call edgeVpack_nlyr(edgeq, elem(ie)%desc, qtens(:,:,:,q,ie),nlev,nlev*(q-1),qsize*nlev)
       enddo
@@ -126,7 +116,7 @@ logical var_coef1
         call edgeVunpack_nlyr(edgeq,elem(ie)%desc,qtens(:,:,:,q,ie),nlev,nlev*(q-1),qsize*nlev)
         do k=1,nlev    !  Potential loop inversion (AAM)
            lap_p(:,:)=elem(ie)%rspheremp(:,:)*qtens(:,:,k,q,ie)
-           qtens(:,:,k,q,ie)=laplace_sphere_wk(lap_p,deriv,elem(ie),var_coef=.true.)
+           qtens(:,:,k,q,ie)=laplace_sphere_wk(lap_p,deriv,elem(ie),var_coef=(hypervis_scaling>0))
         enddo
       enddo
    enddo
@@ -194,7 +184,7 @@ integer :: nets,nete,klev
 real (kind=real_kind), dimension(np,np,klev,nets:nete) :: zeta
 
 ! local
-integer :: k,i,j,ie,ic
+integer :: k,ie
 
 do ie=nets,nete
    do k=1,klev
@@ -352,8 +342,6 @@ integer :: nt
 
 ! local
 type (hybrid_t)              :: hybrid
-integer :: k,i,j,ie,ic
-type (derivative_t)          :: deriv
 
 ! single thread
 hybrid = hybrid_create(par,0,1)
@@ -380,8 +368,6 @@ integer :: nt
 
 ! local
 type (hybrid_t)              :: hybrid
-integer :: k,i,j,ie,ic
-type (derivative_t)          :: deriv
 
 ! single thread
 hybrid = hybrid_create(par,0,1)
@@ -408,7 +394,7 @@ integer :: nt,nets,nete
 real (kind=real_kind), dimension(np,np,nlev,nets:nete) :: zeta
 
 ! local
-integer :: k,i,j,ie,ic
+integer :: k,ie
 type (derivative_t)          :: deriv
 
 call derivinit(deriv)
@@ -444,7 +430,7 @@ integer :: nt,nets,nete
 real (kind=real_kind), dimension(np,np,nlev,nets:nete) :: zeta
 
 ! local
-integer :: k,i,j,ie,ic
+integer :: k,ie
 type (derivative_t)          :: deriv
 
 call derivinit(deriv)
@@ -518,7 +504,7 @@ subroutine neighbor_minmax_start(hybrid,edgeMinMax,nets,nete,min_neigh,max_neigh
    real (kind=real_kind) :: max_neigh(nlev,qsize,nets:nete)
 
    ! local 
-   integer :: ie,q, k,kptr
+   integer :: ie,kptr
 
 
    do ie=nets,nete
@@ -581,7 +567,9 @@ subroutine smooth_phis(phis,elem,hybrid,deriv,nets,nete,minf,numcycle,p2filt,xgl
   real (kind=real_kind), dimension(np,np,nets:nete) :: pstens
   real (kind=real_kind), dimension(nets:nete) :: pmin,pmax
   real (kind=real_kind) :: phis4(np)
-  integer :: nt,ie,ic,i,j
+  integer :: ie,ic,i,j
+  integer :: minmax_halo =-1   ! -1 = disabled.  
+                               ! 0  = recompute each time
 
   if (p2filt>=1 .and. np/=4) then
      call abortmp('ERROR: topo smoothing p2 filter option only supported with np==4')
@@ -593,34 +581,42 @@ subroutine smooth_phis(phis,elem,hybrid,deriv,nets,nete,minf,numcycle,p2filt,xgl
 
   ! compute local element neighbor min/max
   do ie=nets,nete
-     pstens(:,:,ie)=minval(phis(:,:,ie))
-     call edgeVpack(edgebuf,pstens(:,:,ie),1,0,ie)
+     pmin(ie)=minval(phis(:,:,ie))
+     pmax(ie)=maxval(phis(:,:,ie))
   enddo
 
-  call t_startf('smooth_phis_bexchV1')
+  do ic=1,minmax_halo    ! take the min/max over three element halo
+  do ie=nets,nete
+     pstens(:,:,ie)=pmin(ie)
+     call edgeVpack(edgebuf,pstens(:,:,ie),1,0,ie)
+  enddo
   call bndry_exchangeV(hybrid,edgebuf)
-  call t_stopf('smooth_phis_bexchV1')
-
   do ie=nets,nete
      call edgeVunpackMin(edgebuf, pstens(:,:,ie), 1, 0, ie)
      pmin(ie)=minval(pstens(:,:,ie))
   enddo
+
   do ie=nets,nete
-     pstens(:,:,ie)=maxval(phis(:,:,ie))
+     pstens(:,:,ie)=pmax(ie)
      call edgeVpack(edgebuf,pstens(:,:,ie),1,0,ie)
   enddo
-
-  call t_startf('smooth_phis_bexchV2')
   call bndry_exchangeV(hybrid,edgebuf)
-  call t_stopf('smooth_phis_bexchV2')
-
   do ie=nets,nete
      call edgeVunpackMax(edgebuf, pstens(:,:,ie), 1, 0, ie)
      pmax(ie)=maxval(pstens(:,:,ie))
   enddo
+  enddo
+
 
   do ic=1,numcycle
 
+     ! recompute halo each step?
+     !if (minmax_halo==0) then
+     !   do ie=nets,nete
+     !      pmin(ie)=minval(phis(:,:,ie))
+     !      pmax(ie)=maxval(phis(:,:,ie))
+     !   enddo
+     !endif
      if (p2filt>=1) then
         ! apply p2 filter before laplace
         do ie=nets,nete
@@ -639,7 +635,7 @@ subroutine smooth_phis(phis,elem,hybrid,deriv,nets,nete,minf,numcycle,p2filt,xgl
 
 
      do ie=nets,nete
-        pstens(:,:,ie)=laplace_sphere_wk(phis(:,:,ie),deriv,elem(ie),var_coef=.true.)
+        pstens(:,:,ie)=laplace_sphere_wk(phis(:,:,ie),deriv,elem(ie),var_coef=(hypervis_scaling>0))
      enddo
 
      do ie=nets,nete
@@ -652,16 +648,16 @@ subroutine smooth_phis(phis,elem,hybrid,deriv,nets,nete,minf,numcycle,p2filt,xgl
            smooth_phis_nudt*pstens(:,:,ie)/elem(ie)%spheremp(:,:)
 
 
-#if 0
+        if (minmax_halo>=0) then
         ! remove new extrema.  could use conservative reconstruction from advection
         ! but no reason to conserve mean PHI.
         do i=1,np
         do j=1,np
-           if (phis(i,j,ie)>mx) phis(i,j,ie)=pmax(ie)
-           if (phis(i,j,ie)<mn) phis(i,j,ie)=pmin(ie)
+           if (phis(i,j,ie)>pmax(ie)) phis(i,j,ie)=pmax(ie)
+           if (phis(i,j,ie)<pmin(ie)) phis(i,j,ie)=pmin(ie)
         enddo
         enddo
-#endif
+        endif
 
         ! user specified minimum
         do i=1,np
@@ -675,9 +671,7 @@ subroutine smooth_phis(phis,elem,hybrid,deriv,nets,nete,minf,numcycle,p2filt,xgl
 
      enddo
 
-     call t_startf('smooth_phis_bexchV4')
      call bndry_exchangeV(hybrid,edgebuf)
-     call t_stopf('smooth_phis_bexchV4')
 
      do ie=nets,nete
         call edgeVunpack(edgebuf, phis(:,:,ie), 1, 0, ie)

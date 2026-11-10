@@ -1,0 +1,14 @@
+	<nml_record name="buttermilk_bay" mode="init" configuration="buttermilk_bay">
+		<nml_option name="config_Buttermilk_bay_vert_levels" type="integer" default_value="1" units="unitless"
+			description="Number of vertical levels in Buttermilk bay problem."
+			possible_values="Any positive integer number greater than 1."
+	        />
+	        <nml_option name="config_Buttermilk_bay_adjust_domain" type="logical" default_value=".true." units="unitless"
+			description="Flag to adjust mesh coordinates"
+			possible_values='.true. or .false'
+		/>
+		<nml_option name="config_Buttermilk_bay_subgrid_table_levels" type="integer" default_value="10" units="unitless"
+			description="Number of levels in suvgrid lookup tables"
+			possible_values="Any positive integer number"
+	         />
+	</nml_record>

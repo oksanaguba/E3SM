@@ -20,6 +20,7 @@
 
 #include "utilities/VectorUtils.hpp"
 
+#include <cmath>
 #include <memory>
 
 #include "profiling.hpp"
@@ -34,20 +35,31 @@ class HyperviscosityFunctorImpl
 {
   // TODO: don't pass nu_ratio1/2. Instead, do like in F90: compute them from
   //       nu, nu_div, and hv_scaling
+public:
   struct HyperviscosityData {
     HyperviscosityData(const int hypervis_subcycle_in, 
+                       const int horiz_turb_subcycle_in,
                        const int hypervis_subcycle_tom_in, 
                        const Real nu_ratio1_in, const Real nu_ratio2_in, const Real nu_top_in,
                        const Real nu_in, const Real nu_p_in, const Real nu_s_in,
-                       const Real hypervis_scaling_in)
+                       const Real hypervis_scaling_in, bool do_3d_turbulence_in,
+                       const double tom_sponge_start_in, const Real laplace_scaling_in = 0.0)
                       : hypervis_subcycle(hypervis_subcycle_in) 
+                      , horiz_turb_subcycle(horiz_turb_subcycle_in)
                       , hypervis_subcycle_tom(hypervis_subcycle_tom_in)
+                      , do_3d_turbulence(do_3d_turbulence_in)
                       , nu_ratio1(nu_ratio1_in), nu_ratio2(nu_ratio2_in)
                       , nu_top(nu_top_in), nu(nu_in), nu_p(nu_p_in), nu_s(nu_s_in)
-                      , consthv(hypervis_scaling_in == 0){}
+                      , dt_hvs(-1.0), dt_hvs_sgs(-1.0), dt_hvs_tom(-1.0)
+                      , consthv(hypervis_scaling_in == 0)
+                      , constsponge(laplace_scaling_in == 0)
+                      , tom_sponge_start(tom_sponge_start_in) {}
 
     const int   hypervis_subcycle;
+    const int   horiz_turb_subcycle;
     const int   hypervis_subcycle_tom;
+
+    bool do_3d_turbulence;
 
     Real  nu_ratio1;
     Real  nu_ratio2;
@@ -60,12 +72,17 @@ class HyperviscosityFunctorImpl
     int         np1; // The time-level on which to apply hv
     Real        dt;
     Real        dt_hvs;
+    Real        dt_hvs_sgs;
     Real        dt_hvs_tom;
 
     Real        eta_ave_w;
 
     bool consthv;
+    bool constsponge;
+    double tom_sponge_start;
   };//hyperviscosityData
+
+  // tom_sponge_start is now in HyperviscosityData
 
   struct Buffers {
     ExecViewManaged<Scalar * [NP][NP][NUM_LEV]>    dptens;
@@ -73,6 +90,7 @@ class HyperviscosityFunctorImpl
     ExecViewManaged<Scalar * [NP][NP][NUM_LEV]>    wtens;
     ExecViewManaged<Scalar * [NP][NP][NUM_LEV]>    phitens;
     ExecViewManaged<Scalar * [2][NP][NP][NUM_LEV]> vtens;
+    ExecViewManaged<Scalar * [NP][NP][NUM_LEV_P]>  turb_diff_mom_i;
   };//buffers
 
 public:
@@ -81,10 +99,13 @@ public:
   struct TagSecondLaplaceConstHV {};
   struct TagSecondLaplaceTensorHV {};
   struct TagUpdateStates {};
-  struct TagUpdateStates2 {};
   struct TagApplyInvMass {};
   struct TagHyperPreExchange {};
-  struct TagNutopLaplace {};
+  struct TagNutopUpdateStates {};
+  struct TagNutopLaplaceConst {};
+  struct TagNutopLaplaceTensor {};
+  struct TagSGSTurbUpdateStates {};
+  struct TagSGSTurbLaplace {};
 
   HyperviscosityFunctorImpl (const SimulationParams&     params,
                              const ElementsGeometry&     geometry,
@@ -183,81 +204,22 @@ public:
                               Homme::subview(m_buffers.vtens,kv.ie));
   }//TagFirstLaplaceHV
 
-
-
   // Laplace for nu_top
   KOKKOS_INLINE_FUNCTION
-  void operator() (const TagNutopLaplace&, const TeamMember& team) const {
-    KernelVariables kv(team, m_tu);
+  void operator()(const TagNutopLaplaceConst&, const TeamMember& team) const;
 
-    using MidColumn = decltype(Homme::subview(m_buffers.wtens,0,0,0));
+  KOKKOS_INLINE_FUNCTION
+  void operator()(const TagNutopLaplaceTensor&, const TeamMember& team) const;
 
-    // Laplacian of layer thickness
-    m_sphere_ops.laplace_simple(kv,
-                   Homme::subview(m_state.m_dp3d,kv.ie,m_data.np1),
-                   Homme::subview(m_buffers.dptens,kv.ie));
-    // Laplacian of theta
-    m_sphere_ops.laplace_simple(kv,
-                   Homme::subview(m_state.m_vtheta_dp,kv.ie,m_data.np1),
-                   Homme::subview(m_buffers.ttens,kv.ie));
+  KOKKOS_INLINE_FUNCTION
+  void operator()(const TagNutopUpdateStates&, const TeamMember& team) const;
 
-    if (m_process_nh_vars) {
-      // Laplacian of vertical velocity (do not compute last interface)
-      m_sphere_ops.laplace_simple<NUM_LEV,NUM_LEV_P>(kv,
-                     Homme::subview(m_state.m_w_i,kv.ie,m_data.np1),
-                     Homme::subview(m_buffers.wtens,kv.ie));
-      // Laplacian of geopotential (do not compute last interface)
-      m_sphere_ops.laplace_simple<NUM_LEV,NUM_LEV_P>(kv,
-                     Homme::subview(m_state.m_phinh_i,kv.ie,m_data.np1),
-                     Homme::subview(m_buffers.phitens,kv.ie));
-    }
+  // Laplace for SGS Horizontal Turbulence
+  KOKKOS_INLINE_FUNCTION
+  void operator()(const TagSGSTurbLaplace&, const TeamMember& team) const;
 
-    // Laplacian of velocity
-    m_sphere_ops.vlaplace_sphere_wk_contra(kv, m_data.nu_ratio1,
-                              Homme::subview(m_state.m_v,kv.ie,m_data.np1),
-                              Homme::subview(m_buffers.vtens,kv.ie));
-
-    kv.team_barrier();
-
-    Kokkos::parallel_for(Kokkos::TeamThreadRange(kv.team,NP*NP),
-                         [&](const int idx) {
-      const int igp = idx / NP;
-      const int jgp = idx % NP;
-
-      auto utens   = Homme::subview(m_buffers.vtens,kv.ie,0,igp,jgp);
-      auto vtens   = Homme::subview(m_buffers.vtens,kv.ie,1,igp,jgp);
-      auto ttens   = Homme::subview(m_buffers.ttens,kv.ie,igp,jgp);
-      auto dptens  = Homme::subview(m_buffers.dptens,kv.ie,igp,jgp);
-     
-      //why not auto here?
-      MidColumn wtens, phitens;
-
-      if (m_process_nh_vars) {
-        wtens   = Homme::subview(m_buffers.wtens,kv.ie,igp,jgp);
-        phitens = Homme::subview(m_buffers.phitens,kv.ie,igp,jgp);
-      }
-
-      Kokkos::parallel_for(Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
-                           [&](const int ilev) {
-
-        const auto xf = m_data.dt_hvs_tom  * m_nu_scale_top(ilev) * m_data.nu_top;
-        utens(ilev) *= xf;
-        vtens(ilev) *= xf;
-        ttens(ilev) *= xf;
-        dptens(ilev) *= xf;
-
-        if (m_process_nh_vars) {
-          wtens(ilev)   *= xf;
-          phitens(ilev) *= xf;
-        }
-
-      });//threadvectorrange
-
-    });//teamthreadrange
-
-  } //TagNutopLaplace
-
-
+  KOKKOS_INLINE_FUNCTION
+  void operator()(const TagSGSTurbUpdateStates&, const TeamMember& team) const;
 
   //second iter of laplace, const hv
   KOKKOS_INLINE_FUNCTION
@@ -380,65 +342,6 @@ public:
     });
   }  //tagupdatestates
 
-
-
-
-  KOKKOS_INLINE_FUNCTION
-  void operator() (const TagUpdateStates2&, const TeamMember& team) const {
-    KernelVariables kv(team, m_tu);
-
-    using MidColumn = decltype(Homme::subview(m_buffers.wtens,0,0,0));
-    using IntColumn = decltype(Homme::subview(m_state.m_w_i,0,0,0,0));
-
-    Kokkos::parallel_for(Kokkos::TeamThreadRange(kv.team,NP*NP),
-                         [&](const int idx) {
-      const int igp = idx / NP;
-      const int jgp = idx % NP;
-
-      // Add Xtens quantities back to the states, except for vtheta
-      auto u = Homme::subview(m_state.m_v,kv.ie,m_data.np1,0,igp,jgp);
-      auto v = Homme::subview(m_state.m_v,kv.ie,m_data.np1,1,igp,jgp);
-      auto vtheta = Homme::subview(m_state.m_vtheta_dp,kv.ie,m_data.np1,igp,jgp);
-      auto dp     = Homme::subview(m_state.m_dp3d,kv.ie,m_data.np1,igp,jgp);
-
-      auto utens   = Homme::subview(m_buffers.vtens,kv.ie,0,igp,jgp);
-      auto vtens   = Homme::subview(m_buffers.vtens,kv.ie,1,igp,jgp);
-      auto ttens   = Homme::subview(m_buffers.ttens,kv.ie,igp,jgp);
-      auto dptens  = Homme::subview(m_buffers.dptens,kv.ie,igp,jgp);
-      const auto& rspheremp = m_geometry.m_rspheremp(kv.ie,igp,jgp);
-
-      MidColumn wtens, phitens;
-      IntColumn w, phi_i;
-
-      if (m_process_nh_vars) {
-        wtens   = Homme::subview(m_buffers.wtens,kv.ie,igp,jgp);
-        phitens = Homme::subview(m_buffers.phitens,kv.ie,igp,jgp);
-        w       = Homme::subview(m_state.m_w_i,kv.ie,m_data.np1,igp,jgp);
-        phi_i   = Homme::subview(m_state.m_phinh_i,kv.ie,m_data.np1,igp,jgp);
-      }
-
-      Kokkos::parallel_for(Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
-                           [&](const int ilev) {
-        utens(ilev)   *= rspheremp;
-        vtens(ilev)   *= rspheremp;
-        ttens(ilev)   *= rspheremp;
-        dptens(ilev)  *= rspheremp;
-        u(ilev)      += utens(ilev);
-        v(ilev)      += vtens(ilev);
-        vtheta(ilev) += ttens(ilev);
-        dp(ilev)     += dptens(ilev);
-
-	if (m_process_nh_vars) {
-          wtens(ilev)   *= rspheremp;
-          phitens(ilev) *= rspheremp;
-          w(ilev)     += wtens(ilev);
-          phi_i(ilev) += phitens(ilev);
-        }
-      });//threadvectorrange
-    });//threadteamrange
-  }//tagUpdateStates2
-
-
   KOKKOS_INLINE_FUNCTION
   void operator()(const TagHyperPreExchange, const TeamMember &team) const {
     using IntColumn = decltype(Homme::subview(m_state.m_w_i,0,0,0,0));
@@ -529,17 +432,20 @@ protected:
 
   // Policies
   Kokkos::TeamPolicy<ExecSpace,TagUpdateStates>     m_policy_update_states;
-  Kokkos::TeamPolicy<ExecSpace,TagUpdateStates2>    m_policy_update_states2;
   Kokkos::TeamPolicy<ExecSpace,TagFirstLaplaceHV>   m_policy_first_laplace;
   Kokkos::TeamPolicy<ExecSpace,TagHyperPreExchange> m_policy_pre_exchange;
 
-  Kokkos::TeamPolicy<ExecSpace,TagNutopLaplace>     m_policy_nutop_laplace;
+  Kokkos::TeamPolicy<ExecSpace,TagNutopUpdateStates> m_policy_nutop_update_states;
+
+  Kokkos::TeamPolicy<ExecSpace,TagSGSTurbLaplace>      m_policy_sgsturb_laplace;
+  Kokkos::TeamPolicy<ExecSpace,TagSGSTurbUpdateStates> m_policy_sgsturb_update_states;
 
   TeamUtils<ExecSpace> m_tu; // If the policies only differ by tag, just need one tu
 
-  std::shared_ptr<BoundaryExchange> m_be;
+  std::shared_ptr<BoundaryExchange> m_be, m_be_tom, m_be_sgs;
 
   ExecViewManaged<Scalar[NUM_LEV]> m_nu_scale_top;
+  int m_nu_scale_top_ilev_pack_lim;
 }; //HVfunctorImpl
 
 } // namespace Homme

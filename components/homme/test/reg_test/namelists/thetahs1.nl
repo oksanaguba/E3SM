@@ -25,7 +25,7 @@ nu_div            = 3.4e-8 ! test this too?
 nu_p              = -1
 nu_q              = -1
 nu_s              = -1
-nu_top            = 0 !2.5e5
+nu_top            = 2.5e5
 se_ftype          = 0
 limiter_option    = 9
 vert_remap_q_alg  = 1
@@ -37,6 +37,7 @@ theta_hydrostatic_mode = false
 theta_advect_form = 1
 tstep_type        = 10
 moisture          = 'notdry'
+pgrad_correction  = 1
 /
 &solver_nl
 precon_method = "identity"

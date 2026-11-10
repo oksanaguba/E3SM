@@ -30,12 +30,14 @@ add_library (${COMPOSE_LIBRARY}
   compose_slmm_islmpi_pack.cpp
   compose_slmm_islmpi_q.cpp
   compose_slmm_islmpi_qextrema.cpp
+  compose_slmm_islmpi_interpolate.cpp
   compose_slmm_islmpi_step.cpp
   compose_cedr_sl_run_global.cpp
   compose_cedr_sl_run_local.cpp
   compose_cedr_sl_run_check.cpp
   compose_cedr_qlt.cpp
   compose_cedr_caas.cpp
+  compose_slmm_islmpi_calc_trajectory.cpp
   cedr_util.cpp
   cedr_mpi.cpp
   cedr_local.cpp
@@ -44,4 +46,5 @@ add_library (${COMPOSE_LIBRARY}
   cedr_caas.cpp
   cedr_qlt.cpp
   cedr_test_randomized.cpp)
-link_to_kokkos(${COMPOSE_LIBRARY})
+
+target_link_libraries(${COMPOSE_LIBRARY} Kokkos::kokkos)

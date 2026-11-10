@@ -21,19 +21,20 @@ module histFileMod
   use ColumnType     , only : col_pp                
   use VegetationType , only : veg_pp                
   use ncdio_pio 
-  use EDTypesMod        , only : nclmax_fates     => nclmax
-  use EDTypesMod        , only : nlevleaf_fates   => nlevleaf
+  use EDParamsMod            , only : nclmax_fates     => nclmax
+  use EDParamsMod            , only : nlevleaf_fates   => nlevleaf
   use FatesInterfaceTypesMod , only : nlevsclass_fates => nlevsclass
   use FatesInterfaceTypesMod , only : nlevage_fates    => nlevage
   use FatesInterfaceTypesMod , only : nlevheight_fates => nlevheight
   use FatesInterfaceTypesMod , only : nlevdamage_fates => nlevdamage
   use FatesInterfaceTypesMod , only : nlevcoage
-  use EDTypesMod        , only : nfsc_fates       => nfsc
-  use FatesLitterMod    , only : ncwd_fates       => ncwd
+  use FatesFuelClassesMod    , only : nfc_fates       => num_fuel_classes
+  use FatesConstantsMod      , only : n_landuse_cats
+  use FatesLitterMod         , only : ncwd_fates       => ncwd
   use FatesInterfaceTypesMod , only : numpft_fates     => numpft
   use PRTGenericMod          , only : nelements_fates  => num_elements
-  use TopounitType      , only : top_pp
-  use topounit_varcon   , only: max_topounits, has_topounit
+  use TopounitType           , only : top_pp
+  use topounit_varcon        , only: max_topounits, has_topounit
 
   !
   implicit none
@@ -48,6 +49,7 @@ module histFileMod
   integer , public, parameter :: max_flds = 2500        ! max number of history fields
   integer , public, parameter :: max_namlen = 64        ! maximum number of characters for field name
   integer , private, parameter :: hist_dim_name_length = 16 ! lenngth of character strings in dimension names
+  integer , private, parameter :: hist_date_str_len    =  8 ! length of date/time strings (cdate, ctime from getdatetime)
 
   ! Possible ways to treat multi-layer snow fields at times when no snow is present in a
   ! given layer. Note that the public parameters are the only ones that can be used by
@@ -147,7 +149,7 @@ module histFileMod
   private :: hist_set_snow_field_2d    ! Set values in history field dimensioned by levsno
   private :: list_index                ! Find index of field in exclude list
   private :: set_hist_filename         ! Determine history dataset filenames
-  private :: getname                   ! Retrieve name portion of input "inname"
+  public  :: getname                   ! Retrieve name portion of input "inname" (PUBLIC for FATES)
   private :: getflag                   ! Retrieve flag
   private :: pointer_index             ! Track data pointer indices
   private :: max_nFields               ! The max number of fields on any tape
@@ -180,10 +182,10 @@ module histFileMod
      integer :: num1d_out                      ! size of hbuf first dimension (all nodes)
      integer :: num2d                          ! size of hbuf second dimension (e.g. number of vertical levels)
      integer :: hpindex                        ! history pointer index 
-     character(len=8) :: p2c_scale_type        ! scale factor when averaging pft to column
-     character(len=8) :: c2l_scale_type        ! scale factor when averaging column to landunit
-     character(len=8) :: l2g_scale_type        ! scale factor when averaging landunit to gridcell
-     character(len=8) :: t2g_scale_type        ! scale factor when averaging topounit to gridcell
+     character(len=hist_dim_name_length) :: p2c_scale_type        ! scale factor when averaging pft to column
+     character(len=hist_dim_name_length) :: c2l_scale_type        ! scale factor when averaging column to landunit
+     character(len=hist_dim_name_length) :: l2g_scale_type        ! scale factor when averaging landunit to gridcell
+     character(len=hist_dim_name_length) :: t2g_scale_type        ! scale factor when averaging topounit to gridcell
      integer :: no_snow_behavior               ! for multi-layer snow fields, flag saying how to treat times when a given snow layer is absent
   end type field_info
 
@@ -250,7 +252,8 @@ module histFileMod
   type(file_desc_t) :: ncid_hist(max_tapes)  ! file ids for history restart files
   integer :: time_dimid                      ! time dimension id
   integer :: hist_interval_dimid             ! time bounds dimension id
-  integer :: strlen_dimid                    ! string dimension id
+  integer :: strlen_dimid                    ! string dimension id (length hist_dim_name_length)
+  integer :: strlen_dt_dimid                 ! date/time string dimension id (length hist_date_str_len)
   !
   ! Time Constant variable names and filename
   !
@@ -441,7 +444,7 @@ contains
     ! appropriate variables and calling appropriate routines
     !
     ! !USES:
-    use clm_time_manager, only: get_prev_time
+    use elm_time_manager, only: get_prev_time
     use elm_varcon      , only: secspday
     !
     ! !ARGUMENTS:
@@ -1047,10 +1050,10 @@ contains
     character(len=hist_dim_name_length)  :: type1d         ! 1d clm pointerr type   ["gridcell","landunit","column","pft"]
     character(len=hist_dim_name_length)  :: type1d_out     ! 1d history buffer type ["gridcell","landunit","column","pft"]
     character(len=1)  :: avgflag        ! time averaging flag
-    character(len=8)  :: p2c_scale_type ! scale type for subgrid averaging of pfts to column
-    character(len=8)  :: c2l_scale_type ! scale type for subgrid averaging of columns to landunits
-    character(len=8)  :: l2g_scale_type ! scale type for subgrid averaging of landunits to gridcells
-    character(len=8)  :: t2g_scale_type ! scale type for subgrid averaging of topounits to gridcells
+    character(len=hist_dim_name_length)  :: p2c_scale_type ! scale type for subgrid averaging of pfts to column
+    character(len=hist_dim_name_length)  :: c2l_scale_type ! scale type for subgrid averaging of columns to landunits
+    character(len=hist_dim_name_length)  :: l2g_scale_type ! scale type for subgrid averaging of landunits to gridcells
+    character(len=hist_dim_name_length)  :: t2g_scale_type ! scale type for subgrid averaging of topounits to gridcells
     real(r8), pointer :: hbuf(:,:)      ! history buffer
     integer , pointer :: nacs(:,:)      ! accumulation counter
     real(r8), pointer :: field(:)       ! clm 1d pointer field
@@ -1299,10 +1302,10 @@ contains
     character(len=hist_dim_name_length)  :: type1d         ! 1d clm pointerr type   ["gridcell","landunit","column","pft"]
     character(len=hist_dim_name_length)  :: type1d_out     ! 1d history buffer type ["gridcell","landunit","column","pft"]
     character(len=1)  :: avgflag        ! time averaging flag
-    character(len=8)  :: p2c_scale_type ! scale type for subgrid averaging of pfts to column
-    character(len=8)  :: c2l_scale_type ! scale type for subgrid averaging of columns to landunits
-    character(len=8)  :: l2g_scale_type ! scale type for subgrid averaging of landunits to gridcells
-    character(len=8)  :: t2g_scale_type ! scale type for subgrid averaging of topounits to gridcells
+    character(len=hist_dim_name_length)  :: p2c_scale_type ! scale type for subgrid averaging of pfts to column
+    character(len=hist_dim_name_length)  :: c2l_scale_type ! scale type for subgrid averaging of columns to landunits
+    character(len=hist_dim_name_length)  :: l2g_scale_type ! scale type for subgrid averaging of landunits to gridcells
+    character(len=hist_dim_name_length)  :: t2g_scale_type ! scale type for subgrid averaging of topounits to gridcells
     integer  :: no_snow_behavior        ! for multi-layer snow fields, behavior to use when a given layer is absent
     real(r8), pointer :: hbuf(:,:)      ! history buffer
     integer , pointer :: nacs(:,:)      ! accumulation counter
@@ -1743,10 +1746,10 @@ contains
     !
     ! !USES:
     use elm_varpar      , only : nlevgrnd, nlevsno, nlevlak, nlevurb, numrad, nmonth
-    use elm_varpar      , only : natpft_size, cft_size, maxpatch_glcmec, nlevdecomp_full, nlevtrc_full, nvegwcs
+    use elm_varpar      , only : natpft_size, cft_size, maxpatch_glcmec, nlevdecomp_full, nvegwcs
     use elm_varpar      , only : nlevsoi
-    use landunit_varcon , only : max_lunit
-    use elm_varctl      , only : caseid, ctitle, fsurdat, finidat, paramfile
+    use landunit_varcon , only : max_lunit, max_non_poly_lunit
+    use elm_varctl      , only : caseid, ctitle, fsurdat, finidat, paramfile, use_polygonal_tundra
     use elm_varctl      , only : version, hostname, username, conventions, source
     use domainMod       , only : ldomain
     use fileutils       , only : get_filename
@@ -1850,18 +1853,20 @@ contains
     call ncd_putatt(lnfid, ncd_global, 'history' , trim(str))
     call ncd_putatt(lnfid, ncd_global, 'institution_id', 'E3SM-Project')
     call ncd_putatt(lnfid, ncd_global, 'institution', &
-    'LLNL (Lawrence Livermore National Laboratory, Livermore, CA 94550, USA); &
-    &ANL (Argonne National Laboratory, Argonne, IL 60439, USA); &
-    &BNL (Brookhaven National Laboratory, Upton, NY 11973, USA); &
-    &LANL (Los Alamos National Laboratory, Los Alamos, NM 87545, USA); &
-    &LBNL (Lawrence Berkeley National Laboratory, Berkeley, CA 94720, USA); &
-    &ORNL (Oak Ridge National Laboratory, Oak Ridge, TN 37831, USA); &
-    &PNNL (Pacific Northwest National Laboratory, Richland, WA 99352, USA); &
-    &SNL (Sandia National Laboratories, Albuquerque, NM 87185, USA). &
-    &Mailing address: LLNL Climate Program, c/o David C. Bader, &
+    'LLNL (Lawrence Livermore National Laboratory); &
+    &ANL (Argonne National Laboratory); &
+    &BNL (Brookhaven National Laboratory); &
+    &LANL (Los Alamos National Laboratory); &
+    &LBNL (Lawrence Berkeley National Laboratory); &
+    &ORNL (Oak Ridge National Laboratory); &
+    &PNNL (Pacific Northwest National Laboratory); &
+    &SNL (Sandia National Laboratories). &
+    &Mailing address: LLNL Climate Program, c/o Peter M. Caldwell, &
     &Principal Investigator, L-103, 7000 East Avenue, Livermore, CA 94550, USA')
     call ncd_putatt(lnfid, ncd_global, 'contact', &
-          'e3sm-data-support@listserv.llnl.gov')
+          'e3sm-data-support@llnl.gov')
+    call ncd_putatt(lnfid, ncd_global, 'license', &
+          'http://spdx.org/licenses/CC-BY-4.0 (CC-BY-4.0)')
     call ncd_putatt(lnfid, ncd_global, 'Conventions', trim(conventions))
     call ncd_putatt(lnfid, ncd_global, 'comment', &
           "NOTE: None of the variables are weighted by land fraction!" )
@@ -1904,7 +1909,11 @@ contains
     call ncd_defdim(lnfid, 'numrad' , numrad , dimid)
     call ncd_defdim(lnfid, 'month'  , nmonth,  dimid)
     call ncd_defdim(lnfid, 'levsno' , nlevsno , dimid)
-    call ncd_defdim(lnfid, 'ltype', max_lunit, dimid)
+    if (use_polygonal_tundra) then
+      call ncd_defdim(lnfid, 'ltype', max_lunit, dimid)
+    else
+      call ncd_defdim(lnfid, 'ltype', max_non_poly_lunit, dimid)
+    end if
     call ncd_defdim(lnfid, 'nvegwcs',nvegwcs, dimid)
     call htape_add_ltype_metadata(lnfid)
     call ncd_defdim(lnfid, 'natpft', natpft_size, dimid)
@@ -1923,8 +1932,8 @@ contains
        call ncd_defdim(lnfid, subs_name(n), subs_dim(n), dimid)
     end do
     call ncd_defdim(lnfid, 'string_length', hist_dim_name_length, strlen_dimid)
+    call ncd_defdim(lnfid, 'string_date_len', hist_date_str_len, strlen_dt_dimid)
     call ncd_defdim( lnfid, 'levdcmp', nlevdecomp_full, dimid)
-    call ncd_defdim( lnfid, 'levtrc', nlevtrc_full, dimid)    
     
     if(use_fates)then
        call ncd_defdim(lnfid, 'fates_levscag', nlevsclass_fates * nlevage_fates, dimid)
@@ -1932,11 +1941,12 @@ contains
        call ncd_defdim(lnfid, 'fates_levcacls',nlevcoage, dimid)
        call ncd_defdim(lnfid, 'fates_levpft', numpft_fates, dimid)
        call ncd_defdim(lnfid, 'fates_levage', nlevage_fates, dimid)
-       call ncd_defdim(lnfid, 'fates_levfuel', nfsc_fates, dimid)
+       call ncd_defdim(lnfid, 'fates_levfuel', nfc_fates, dimid)
        call ncd_defdim(lnfid, 'fates_levcwdsc', ncwd_fates, dimid)
        call ncd_defdim(lnfid, 'fates_levscpf', nlevsclass_fates*numpft_fates, dimid)
        call ncd_defdim(lnfid, 'fates_levcapf',  nlevcoage*numpft_fates, dimid)
        call ncd_defdim(lnfid, 'fates_levcan', nclmax_fates, dimid)
+       call ncd_defdim(lnfid, 'fates_levleaf', nlevleaf_fates, dimid)
        call ncd_defdim(lnfid, 'fates_levcnlf', nlevleaf_fates * nclmax_fates, dimid)
        call ncd_defdim(lnfid, 'fates_levcnlfpf', nlevleaf_fates * nclmax_fates * numpft_fates, dimid)
        call ncd_defdim(lnfid, 'fates_levcdsc', nlevdamage_fates * nlevsclass_fates, dimid)
@@ -1949,7 +1959,10 @@ contains
        call ncd_defdim(lnfid, 'fates_levelpft', nelements_fates * numpft_fates, dimid)
        call ncd_defdim(lnfid, 'fates_levelcwd', nelements_fates * ncwd_fates, dimid)
        call ncd_defdim(lnfid, 'fates_levelage', nelements_fates * nlevage_fates, dimid)
-       call ncd_defdim(lnfid, 'fates_levagefuel', nlevage_fates * nfsc_fates, dimid)
+       call ncd_defdim(lnfid, 'fates_levagefuel', nlevage_fates * nfc_fates, dimid)
+       call ncd_defdim(lnfid, 'fates_levlanduse', n_landuse_cats, dimid)
+       call ncd_defdim(lnfid, 'fates_levlulu', n_landuse_cats * n_landuse_cats, dimid)
+       call ncd_defdim(lnfid, 'fates_levlupft', n_landuse_cats * numpft_fates, dimid)
     end if
 
     if ( .not. lhistrest )then
@@ -1979,7 +1992,8 @@ contains
     ! Add global metadata defining landunit types
     !
     ! !USES:
-    use landunit_varcon, only : max_lunit, landunit_names, landunit_name_length
+    use landunit_varcon, only : max_lunit, max_non_poly_lunit, landunit_names, landunit_name_length
+    use elm_varctl,      only : use_polygonal_tundra
     !
     ! !ARGUMENTS:
     type(file_desc_t), intent(inout) :: lnfid ! local file id
@@ -1992,10 +2006,17 @@ contains
     character(len=*), parameter :: subname = 'htape_add_ltype_metadata'
     !-----------------------------------------------------------------------
     
-    do ltype = 1, max_lunit
-       attname = att_prefix // landunit_names(ltype)
-       call ncd_putatt(lnfid, ncd_global, attname, ltype)
-    end do
+    if (use_polygonal_tundra) then
+      do ltype = 1, max_lunit
+        attname = att_prefix // landunit_names(ltype)
+        call ncd_putatt(lnfid, ncd_global, attname, ltype)
+      end do
+    else
+      do ltype = 1, max_non_poly_lunit
+        attname = att_prefix // landunit_names(ltype)
+        call ncd_putatt(lnfid, ncd_global, attname, ltype)
+      end do
+    end if
 
   end subroutine htape_add_ltype_metadata
 
@@ -2092,7 +2113,7 @@ contains
     character(len=max_chars) :: standard_name ! variable CF standard_name
     character(len=max_namlen):: varname   ! variable name
     character(len=max_namlen):: units     ! variable units
-    character(len=8) :: l2g_scale_type    ! scale type for subgrid averaging of landunits to grid cells
+    character(len=hist_dim_name_length) :: l2g_scale_type    ! scale type for subgrid averaging of landunits to grid cells
     !
     real(r8), pointer :: histi(:,:)       ! temporary
     real(r8), pointer :: histo(:,:)       ! temporary
@@ -2342,8 +2363,8 @@ contains
     use elm_varcon      , only : zsoi, zlak, secspday
     use elm_varpar      , only : nlevsoi
     use domainMod       , only : ldomain, lon1d, lat1d
-    use clm_time_manager, only : get_nstep, get_curr_date, get_curr_time
-    use clm_time_manager, only : get_ref_date, get_calendar, NO_LEAP_C, GREGORIAN_C
+    use elm_time_manager, only : get_nstep, get_curr_date, get_curr_time
+    use elm_time_manager, only : get_ref_date, get_calendar, NO_LEAP_C, GREGORIAN_C
     use FatesInterfaceTypesMod, only : fates_hdim_levsclass
     use FatesInterfaceTypesMod, only : fates_hdim_pfmap_levscpf
     use FatesInterfaceTypesMod, only : fates_hdim_scmap_levscpf
@@ -2352,6 +2373,7 @@ contains
     use FatesInterfaceTypesMod, only : fates_hdim_camap_levcapf
     use FatesInterfaceTypesMod, only : fates_hdim_levage
     use FatesInterfaceTypesMod, only : fates_hdim_levpft
+    use FatesInterfaceTypesMod, only : fates_hdim_levlanduse
     use FatesInterfaceTypesMod, only : fates_hdim_scmap_levscag
     use FatesInterfaceTypesMod, only : fates_hdim_agmap_levscag
     use FatesInterfaceTypesMod, only : fates_hdim_levfuel
@@ -2462,14 +2484,16 @@ contains
                    long_name='FATES patch age (yr)', ncid=nfid(t))
              call ncd_defvar(varname='fates_levpft',xtype=ncd_int, dim1name='fates_levpft', &
                    long_name='FATES pft number', ncid=nfid(t))
+             call ncd_defvar(varname='fates_levlanduse',xtype=ncd_int, dim1name='fates_levlanduse', &
+                   long_name='FATES land use label', ncid=nfid(t))
              call ncd_defvar(varname='fates_levfuel',xtype=ncd_int, dim1name='fates_levfuel', &
                    long_name='FATES fuel index', ncid=nfid(t))
              call ncd_defvar(varname='fates_levcwdsc',xtype=ncd_int, dim1name='fates_levcwdsc', &
                    long_name='FATES cwd size class', ncid=nfid(t))
              call ncd_defvar(varname='fates_levcan',xtype=ncd_int, dim1name='fates_levcan', &
                    long_name='FATES canopy level', ncid=nfid(t))
-             call ncd_defvar(varname='fates_levleaf',xtype=ncd_int, dim1name='fates_levleaf', &
-                   long_name='FATES leaf+stem level', units='VAI', ncid=nfid(t))
+             call ncd_defvar(varname='fates_levleaf', xtype=tape(t)%ncprec, dim1name='fates_levleaf', &
+                  long_name='FATES integrated leaf+stem area index lower bound', units='m2/m2', ncid=nfid(t))
              call ncd_defvar(varname='fates_canmap_levcnlf',xtype=ncd_int, dim1name='fates_levcnlf', &
                    long_name='FATES canopy level of combined canopy-leaf dimension', ncid=nfid(t))
              call ncd_defvar(varname='fates_lfmap_levcnlf',xtype=ncd_int, dim1name='fates_levcnlf', &
@@ -2547,6 +2571,7 @@ contains
              call ncd_io(varname='fates_scmap_levscpf',data=fates_hdim_scmap_levscpf, ncid=nfid(t), flag='write')
              call ncd_io(varname='fates_levage',data=fates_hdim_levage, ncid=nfid(t), flag='write')
              call ncd_io(varname='fates_levpft',data=fates_hdim_levpft, ncid=nfid(t), flag='write')
+             call ncd_io(varname='fates_levlanduse',data=fates_hdim_levlanduse, ncid=nfid(t), flag='write')
              call ncd_io(varname='fates_levfuel',data=fates_hdim_levfuel, ncid=nfid(t), flag='write')
              call ncd_io(varname='fates_levcwdsc',data=fates_hdim_levcwdsc, ncid=nfid(t), flag='write')
              call ncd_io(varname='fates_levcan',data=fates_hdim_levcan, ncid=nfid(t), flag='write')
@@ -2627,7 +2652,7 @@ contains
        call ncd_defvar(nfid(t), 'time_bounds', ncd_double, 2, dim2id, varid, &
           long_name = 'history time interval endpoints')
 
-       dim2id(1) = strlen_dimid;  dim2id(2) = time_dimid
+       dim2id(1) = strlen_dt_dimid;  dim2id(2) = time_dimid
        call ncd_defvar(nfid(t), 'date_written', ncd_char, 2, dim2id, varid)
        call ncd_defvar(nfid(t), 'time_written', ncd_char, 2, dim2id, varid)
 
@@ -3330,7 +3355,7 @@ contains
     !   date = yyyy/mm+1/01 with mscur = 0.
     !
     ! !USES:
-    use clm_time_manager, only : get_nstep, get_curr_date, get_curr_time, get_prev_date
+    use elm_time_manager, only : get_nstep, get_curr_date, get_curr_time, get_prev_date
     use elm_varcon      , only : secspday
     use perf_mod        , only : t_startf, t_stopf
     use elm_varpar      , only : nlevgrnd
@@ -3538,7 +3563,7 @@ contains
     use fileutils       , only : getfil
     use domainMod       , only : ldomain
     use elm_varpar      , only : nlevgrnd, nlevlak, numrad, nlevdecomp_full, nmonth
-    use clm_time_manager, only : is_restart
+    use elm_time_manager, only : is_restart
     use restUtilMod     , only : iflag_skip
     use pio
     !
@@ -4397,7 +4422,7 @@ contains
      !
      ! !USES:
      use elm_varctl, only : caseid, inst_suffix
-     use clm_time_manager, only : get_curr_date, get_prev_date
+     use elm_time_manager, only : get_curr_date, get_prev_date
      !
      ! !ARGUMENTS:
      integer, intent(in)  :: hist_freq   !history file frequency
@@ -4476,11 +4501,11 @@ contains
     integer :: hpindex                 ! history buffer pointer index
     character(len=hist_dim_name_length) :: l_type1d       ! 1d data type
     character(len=hist_dim_name_length) :: l_type1d_out   ! 1d output type
-    character(len=8) :: scale_type_p2c ! scale type for subgrid averaging of pfts to column
-    character(len=8) :: scale_type_c2l ! scale type for subgrid averaging of columns to landunits
-    character(len=8) :: scale_type_l2g ! scale type for subgrid averaging of landunits to gridcells
-    character(len=8) :: scale_type_t2g ! scale type for subgrid averaging of topounits to gridcells
-    type(bounds_type):: bounds         ! boudns 
+    character(len=hist_dim_name_length) :: scale_type_p2c ! scale type for subgrid averaging of pfts to column
+    character(len=hist_dim_name_length) :: scale_type_c2l ! scale type for subgrid averaging of columns to landunits
+    character(len=hist_dim_name_length) :: scale_type_l2g ! scale type for subgrid averaging of landunits to gridcells
+    character(len=hist_dim_name_length) :: scale_type_t2g ! scale type for subgrid averaging of topounits to gridcells
+    type(bounds_type):: bounds         ! boudns
     character(len=16):: l_default      ! local version of 'default'
     character(len=max_namlen) :: lstandard_name  ! local standard name
     character(len=*),parameter :: subname = 'hist_addfld1d'
@@ -4684,10 +4709,11 @@ contains
     ! initial or branch run to initialize the actual history tapes.
     !
     ! !USES:
-    use elm_varpar      , only : nlevgrnd, nlevsno, nlevlak, numrad, nlevdecomp_full, nlevtrc_soil, nmonth, nvegwcs
+    use elm_varpar      , only : nlevgrnd, nlevsno, nlevlak, numrad, nlevdecomp_full, nmonth, nvegwcs
     use elm_varpar      , only : natpft_size, cft_size, maxpatch_glcmec
     use elm_varpar      , only : nlevsoi
-    use landunit_varcon , only : max_lunit
+    use landunit_varcon , only : max_lunit, max_non_poly_lunit
+    use elm_varctl      , only : use_polygonal_tundra
     !
     ! !ARGUMENTS:
     character(len=*), intent(in) :: fname                      ! field name
@@ -4722,11 +4748,11 @@ contains
     integer :: hpindex                 ! history buffer index
     character(len=hist_dim_name_length) :: l_type1d         ! 1d data type
     character(len=hist_dim_name_length) :: l_type1d_out     ! 1d output type
-    character(len=8) :: scale_type_p2c ! scale type for subgrid averaging of pfts to column
-    character(len=8) :: scale_type_c2l ! scale type for subgrid averaging of columns to landunits
-    character(len=8) :: scale_type_l2g ! scale type for subgrid averaging of landunits to gridcells
-    character(len=8) :: scale_type_t2g ! scale type for subgrid averaging of topounits to gridcells
-    type(bounds_type):: bounds          
+    character(len=hist_dim_name_length) :: scale_type_p2c ! scale type for subgrid averaging of pfts to column
+    character(len=hist_dim_name_length) :: scale_type_c2l ! scale type for subgrid averaging of columns to landunits
+    character(len=hist_dim_name_length) :: scale_type_l2g ! scale type for subgrid averaging of landunits to gridcells
+    character(len=hist_dim_name_length) :: scale_type_t2g ! scale type for subgrid averaging of topounits to gridcells
+    type(bounds_type):: bounds
     character(len=16):: l_default      ! local version of 'default'
     character(len=max_namlen) :: lstandard_name  ! local standard name
     character(len=*),parameter :: subname = 'hist_addfld2d'
@@ -4773,10 +4799,12 @@ contains
        num2d = nmonth
     case ('levdcmp')
        num2d = nlevdecomp_full
-    case ('levtrc')
-       num2d = nlevtrc_soil       
     case('ltype')
-       num2d = max_lunit
+       if (use_polygonal_tundra) then
+         num2d = max_lunit
+       else
+         num2d = max_non_poly_lunit
+       end if
     case('natpft')
        num2d = natpft_size
     case ('fates_levelem')
@@ -4788,7 +4816,7 @@ contains
     case ('fates_levelage')
        num2d = nelements_fates*nlevage_fates
     case ('fates_levagefuel')
-       num2d = nlevage_fates*nfsc_fates
+       num2d = nlevage_fates*nfc_fates
     case('cft')
        if (cft_size > 0) then
           num2d = cft_size
@@ -4827,10 +4855,16 @@ contains
        num2d = nlevcoage*numpft_fates
     case ('fates_levpft')
        num2d = numpft_fates
+    case ('fates_levlanduse')
+       num2d = n_landuse_cats
+    case ('fates_levlulu')
+       num2d = n_landuse_cats * n_landuse_cats
+    case ('fates_levlupft')
+       num2d = n_landuse_cats * numpft_fates
     case ('fates_levage')
        num2d = nlevage_fates
     case ('fates_levfuel')
-       num2d = nfsc_fates
+       num2d = nfc_fates
     case ('fates_levcwdsc')
        num2d = ncwd_fates
     case ('fates_levscpf')
@@ -4839,6 +4873,8 @@ contains
        num2d = nlevsclass_fates*nlevage_fates
     case ('fates_levcan')
        num2d = nclmax_fates
+    case ('fates_levleaf')
+       num2d = nlevleaf_fates
     case ('fates_levcnlf')
        num2d = nlevleaf_fates * nclmax_fates
     case ('fates_levcnlfpf')
@@ -4858,7 +4894,7 @@ contains
     case default
        write(iulog,*) trim(subname),' ERROR: unsupported 2d type ',type2d, &
           ' currently supported types for multi level fields are: ', &
-          '[levgrnd,levlak,numrad,nmonthlevdcmp,levtrc,ltype,natpft,cft,glc_nec,elevclas,levsno,levsoi]'
+          '[levgrnd,levlak,numrad,nmonthlevdcmp,ltype,natpft,cft,glc_nec,elevclas,levsno,levsoi]'
        call endrun(msg=errMsg(__FILE__, __LINE__))
     end select
 
@@ -5182,7 +5218,7 @@ contains
     ! history file is not full.
     !
     ! !USES:
-    use clm_time_manager, only : is_last_step
+    use elm_time_manager, only : is_last_step
     !
     ! !ARGUMENTS:
     integer, intent(in)  :: ntapes              !actual number of history tapes

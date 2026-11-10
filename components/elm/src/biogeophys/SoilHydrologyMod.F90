@@ -9,17 +9,20 @@ module SoilHydrologyMod
   use decompMod         , only : bounds_type
   use elm_varctl        , only : iulog, use_vichydro
   use elm_varctl        , only : use_lnd_rof_two_way, lnd_rof_coupling_nstep
+  use elm_varctl        , only : use_modified_infil, use_ocn_lnd_one_way
   use elm_varcon        , only : e_ice, denh2o, denice, rpi
   use EnergyFluxType    , only : energyflux_type
   use SoilHydrologyType , only : soilhydrology_type
   use SoilStateType     , only : soilstate_type
   use WaterfluxType     , only : waterflux_type
+  use TopounitType      , only : top_pp
+  use TopounitDataType  , only : top_ws
   use LandunitType      , only : lun_pp
   use ColumnType        , only : col_pp
   use ColumnDataType    , only : col_es, col_ws, col_wf
   use VegetationType    , only : veg_pp
   use VegetationDataType, only : veg_wf
-  use abortutils      , only : endrun
+  use abortutils        , only : endrun
 
   !
   ! !PUBLIC TYPES:
@@ -46,12 +49,12 @@ contains
     !
     ! !USES:
       !$acc routine seq
-    use elm_varcon      , only : denice, denh2o, wimp, pondmx_urban
+    use elm_varcon      , only : denice, denh2o, wimp, pondmx_urban, frac_from_uphill
     use column_varcon   , only : icol_roof, icol_sunwall, icol_shadewall
     use column_varcon   , only : icol_road_imperv, icol_road_perv
     use elm_varpar      , only : nlevsoi, nlevgrnd, maxpatch_pft
     use elm_varpar      , only : nlayer, nlayert
-    use elm_varctl      , only : use_var_soil_thick
+    use elm_varctl      , only : use_var_soil_thick, use_IM2_hillslope_hydrology
     use SoilWaterMovementMod, only : zengdecker_2009_with_var_soil_thick
     !
     ! !ARGUMENTS:
@@ -65,7 +68,7 @@ contains
     real(r8), intent(in)  :: dtime
     !
     ! !LOCAL VARIABLES:
-    integer  :: c,j,fc,g,l,i                               !indices
+    integer  :: c,j,fc,g,l,t,i                             !indices
     integer  :: nlevbed                                    !# levels to bedrock
     real(r8) :: xs(bounds%begc:bounds%endc)                !excess soil water above urban ponding limit
     real(r8) :: vol_ice(bounds%begc:bounds%endc,1:nlevgrnd) !partial volume of ice lens in layer
@@ -100,6 +103,7 @@ contains
          qflx_floodc      =>    col_wf%qflx_floodc      , & ! Input:  [real(r8) (:)   ]  column flux of flood water from RTM
          qflx_evap_grnd   =>    col_wf%qflx_evap_grnd   , & ! Input:  [real(r8) (:)   ]  ground surface evaporation rate (mm H2O/s) [+]
          qflx_top_soil    =>    col_wf%qflx_top_soil    , & ! Output: [real(r8) (:)   ]  net water input into soil from top (mm/s)
+         qflx_from_uphill =>    col_wf%qflx_from_uphill , & ! Output: [real(r8) (:)   ]  water received from uphill topounit (mm/s)
          qflx_surf        =>    col_wf%qflx_surf        , & ! Output: [real(r8) (:)   ]  surface runoff (mm H2O /s)
          qflx_irrig       =>    col_wf%qflx_irrig       , & ! Input:  [real(r8) (:)   ]  irrigation flux (mm H2O /s)
          irrig_rate       =>    veg_wf%irrig_rate       , & ! Input:  [real(r8) (:)   ]  current irrigation rate (applied if !n_irrig_steps_left > 0) [mm/s]
@@ -111,6 +115,7 @@ contains
          b_infil          =>    soilhydrology_vars%b_infil_col      , & ! Input:  [real(r8) (:)   ]  VIC b infiltration parameter
          moist            =>    soilhydrology_vars%moist_col        , & ! Input:  [real(r8) (:,:) ]  soil moisture in each VIC layers (liq, mm)
          hkdepth          =>    soilhydrology_vars%hkdepth_col      , & ! Input:  [real(r8) (:)   ]  decay factor (m)
+         fover            =>    soilhydrology_vars%fover            , & ! Input:  [real(r8) (:)   ]  decay factor for saturation fraction (m)
          origflag         =>    soilhydrology_vars%origflag         , & ! Input:  logical
          fcov             =>    soilhydrology_vars%fcov_col         , & ! Output: [real(r8) (:)   ]  fractional impermeable area
          fsat             =>    soilhydrology_vars%fsat_col         , & ! Output: [real(r8) (:)   ]  fractional area with water table at surface
@@ -146,7 +151,8 @@ contains
 
       do fc = 1, num_hydrologyc
          c = filter_hydrologyc(fc)
-         fff(c) = 0.5_r8
+         g = col_pp%gridcell(c)
+         fff(c) = fover(g)
          if (zengdecker_2009_with_var_soil_thick) then
             nlevbed = nlev2bed(c)
             fff(c) = 0.5_r8 * col_pp%zi(c,nlevsoi) / min(col_pp%zi(c,nlevbed), col_pp%zi(c,nlevsoi))
@@ -198,13 +204,18 @@ contains
 
       do fc = 1, num_hydrologyc
          c = filter_hydrologyc(fc)
-
-         ! assume qinmax large relative to qflx_top_soil in control
-         if (origflag == 1) then
-            qflx_surf(c) =  fcov(c) * qflx_top_soil(c)
+         l = col_pp%landunit(c)
+         ! no qflx_surf in polygonal ground
+         if (lun_pp%ispolygon(l)) then
+            qflx_surf(c) = 0._r8
          else
-            ! only send fast runoff directly to streams
-            qflx_surf(c) =   fsat(c) * qflx_top_soil(c)
+            ! assume qinmax large relative to qflx_top_soil in control
+            if (origflag == 1) then
+               qflx_surf(c) =  fcov(c) * qflx_top_soil(c)
+            else
+               ! only send fast runoff directly to streams
+               qflx_surf(c) =   fsat(c) * qflx_top_soil(c)
+            endif
          endif
       end do
 
@@ -241,9 +252,38 @@ contains
       ! remove stormflow and snow on h2osfc from qflx_top_soil
       do fc = 1, num_hydrologyc
          c = filter_hydrologyc(fc)
+         t = col_pp%topounit(c)
          ! add flood water flux to qflx_top_soil
          qflx_top_soil(c) = qflx_top_soil(c) + qflx_snow_h2osfc(c) + qflx_floodc(c)
       end do
+
+      ! when using the subgrid hillslope lateral flow mechanism (IM2 from NGEE Arctic):
+      ! 1. calculate fraction of topounit flow that goes to each column
+      ! 2. Calculate the weighted flux from uphill (qflx_from_uphill) and add to qflx_top_soil 
+      if (use_IM2_hillslope_hydrology) then
+         ! calculate the sum of column weights on each topounit for columns in the hydrologyc filter
+         ! This will be the istsoil, istcrop, and icol_road_perv subset of urban columns
+         ! First zero the topounit sum of weights. This zeros some multiple times, but no harm done.
+         do fc = 1, num_hydrologyc
+            c = filter_hydrologyc(fc)
+            t = col_pp%topounit(c)
+            top_pp%uphill_wt(t) = 0._r8
+         end do
+         ! Next sum the relevant column weights
+         do fc = 1, num_hydrologyc
+            c = filter_hydrologyc(fc)
+            t = col_pp%topounit(c)
+            top_pp%uphill_wt(t) = top_pp%uphill_wt(t) + col_pp%wttopounit(c)
+         end do
+
+         ! flow from uphill topounit goes to top of soil for soil, crop, and pervious road columns
+         do fc = 1, num_hydrologyc
+            c = filter_hydrologyc(fc)
+            t = col_pp%topounit(c)
+            qflx_from_uphill(c) = (col_pp%wttopounit(c)/top_pp%uphill_wt(t)) * (frac_from_uphill * top_ws%from_uphill(t)) / dtime
+            qflx_top_soil(c) = qflx_top_soil(c) + qflx_from_uphill(c)
+         end do
+      endif
 
     end associate
 
@@ -251,7 +291,7 @@ contains
 
    !-----------------------------------------------------------------------
    subroutine Infiltration(bounds, num_hydrologyc, filter_hydrologyc, num_urbanc, filter_urbanc, &
-        atm2lnd_vars, lnd2atm_vars, energyflux_vars, soilhydrology_vars, soilstate_vars, dtime)
+        atm2lnd_vars, ocn2lnd_vars, lnd2atm_vars, energyflux_vars, soilhydrology_vars, soilstate_vars, dtime)
      !
      ! !DESCRIPTION:
      ! Calculate infiltration into surface soil layer (minus the evaporation)
@@ -261,12 +301,13 @@ contains
      use shr_const_mod    , only : shr_const_pi
      use elm_varpar       , only : nlayer, nlayert
      use elm_varpar       , only : nlevsoi, nlevgrnd
-     use elm_varcon       , only : denh2o, denice, roverg, wimp, pc, mu, tfrz
+     use elm_varcon       , only : denh2o, denice, roverg, wimp, mu, tfrz
      use elm_varcon       , only : pondmx, watmin
      use column_varcon    , only : icol_roof, icol_road_imperv, icol_sunwall, icol_shadewall, icol_road_perv
-     use landunit_varcon  , only : istsoil, istcrop
-     use clm_time_manager , only : get_step_size, get_nstep
+     use landunit_varcon  , only : istsoil, istcrop, ilowcenpoly, iflatcenpoly, ihighcenpoly
+     use elm_time_manager , only : get_step_size, get_nstep
      use atm2lndType      , only : atm2lnd_type ! land river two way coupling
+     use ocn2lndType      , only : ocn2lnd_type
      use lnd2atmType      , only : lnd2atm_type
      use subgridAveMod    , only : c2g
      !
@@ -277,6 +318,7 @@ contains
      integer                  , intent(in)    :: num_urbanc           ! number of column urban points in column filter
      integer                  , intent(in)    :: filter_urbanc(:)     ! column filter for urban points
      type(atm2lnd_type)       , intent(in)    :: atm2lnd_vars         ! land river two way coupling
+     type(ocn2lnd_type)       , intent(in)    :: ocn2lnd_vars         ! ocean land one way coupling
      type(lnd2atm_type)       , intent(in)    :: lnd2atm_vars 
      type(energyflux_type)    , intent(in)    :: energyflux_vars
      type(soilhydrology_type) , intent(inout) :: soilhydrology_vars
@@ -310,6 +352,9 @@ contains
      real(r8) :: d
      real(r8) :: h2osoi_vol
      real(r8) :: basis                                      ! temporary, variable soil moisture holding capacity
+     real(r8) :: vdep                                       ! temporary, ice wedge polygon volumetric depression depth (m)
+     real(r8) :: phi_eff                                    ! temporary, polygonal ground effective subsidence (maxes out at 0.4) (m)
+     real(r8) :: swc                                        ! temporary, polygonal surface water content in m
      ! in top VIC layers for runoff calculation
      real(r8) :: rsurf_vic                                  ! temp VIC surface runoff
      real(r8) :: top_moist(bounds%begc:bounds%endc)         ! temporary, soil moisture in top VIC layers
@@ -317,6 +362,7 @@ contains
      real(r8) :: top_ice(bounds%begc:bounds%endc)           ! temporary, ice len in top VIC layers
      real(r8) :: top_icefrac                                ! temporary, ice fraction in top VIC layers
      real(r8) :: h2osoi_left_vol1                           ! temporary, available volume in the first soil layer
+     real(r8) :: pc                                         ! temporary, threhold for surface water storage to outflow
      !-----------------------------------------------------------------------
 
      associate(                                                    &
@@ -324,11 +370,13 @@ contains
           dz                   =>    col_pp%dz                   , & ! Input:  [real(r8) (:,:) ]  layer depth (m)
           nlev2bed             =>    col_pp%nlevbed              , & ! Input:  [integer  (:)   ]  number of layers to bedrock
           cgridcell            =>    col_pp%gridcell             , & ! Input:  [integer  (:)   ]  column's gridcell    
-          wtgcell              =>    col_pp%wtgcell              , & ! Input:  [real(r8) (:)   ]  weight (relative to gridcell) 
+          wtgcell              =>    col_pp%wtgcell              , & ! Input:  [real(r8) (:)   ]  weight (relative to gridcell)
+          meangradz            =>    col_pp%meangradz            , & ! Input:  [real(r8) (:)   ]  mean topographic gradient at the column level (unitless)
 
           t_soisno             =>    col_es%t_soisno             , & ! Input:  [real(r8) (:,:) ]  soil temperature (Kelvin)
 
           frac_h2osfc          =>    col_ws%frac_h2osfc          , & ! Input:  [real(r8) (:)   ]  fraction of ground covered by surface water (0 to 1)
+          frac_h2osfc_act      =>    col_ws%frac_h2osfc_act      , & ! Input:  [real(r8) (:)   ]  fraction of ground covered by surface water (0 to 1) without adjustment from snow fraction
           frac_sno             =>    col_ws%frac_sno_eff         , & ! Input:  [real(r8) (:)   ]  fraction of ground covered by snow (0 to 1)
           h2osoi_ice           =>    col_ws%h2osoi_ice           , & ! Input:  [real(r8) (:,:) ]  ice lens (kg/m2)
           h2osoi_liq           =>    col_ws%h2osoi_liq           , & ! Input:  [real(r8) (:,:) ]  liquid water (kg/m2)
@@ -337,6 +385,11 @@ contains
           h2osfc               =>    col_ws%h2osfc               , & ! Output: [real(r8) (:)   ]  surface water (mm)
           h2orof               =>    col_ws%h2orof               , & ! Output:  [real(r8) (:)   ]  floodplain inudntion volume (mm)
           frac_h2orof          =>    col_ws%frac_h2orof          , & ! Output:  [real(r8) (:)   ]  floodplain inudntion fraction (-)
+          frac_h2oocn          =>    col_ws%frac_h2oocn          , & ! Output: [real(r8) (:)   ]  coastal inudntion fraction (-)
+          iwp_microrel         =>    col_ws%iwp_microrel         , & ! Input:  [real(r8) (:)   ]  ice wedge polygon microtopographic relief (m)
+          iwp_exclvol          =>    col_ws%iwp_exclvol          , & ! Input:  [real(r8) (:)   ]  ice wedge polygon excluded volume (m)
+          iwp_ddep             =>    col_ws%iwp_ddep             , & ! Input:  [real(r8) (:)   ]  ice wedge polygon depression depth (m)
+          iwp_subsidence       =>    col_ws%iwp_subsidence       , & ! Input:  [real(r8) (:)   ]  ice wedge polygon ground subsidence (m)
 
           qflx_ev_soil         =>    col_wf%qflx_ev_soil         , & ! Input:  [real(r8) (:)   ]  evaporation flux from soil (W/m**2) [+ to atm]
           qflx_evap_soi        =>    col_wf%qflx_evap_soi        , & ! Input:  [real(r8) (:)   ]  ground surface evaporation rate (mm H2O/s) [+]
@@ -349,6 +402,7 @@ contains
           qflx_gross_infl_soil =>    col_wf%qflx_gross_infl_soil , & ! Output: [real(r8) (:)] gross infiltration (mm H2O/s)
           qflx_gross_evap_soil =>    col_wf%qflx_gross_evap_soil , & ! Output: [real(r8) (:)] gross evaporation (mm H2O/s)
           qflx_h2orof_drain    =>    col_wf%qflx_h2orof_drain    , & ! Output: [real(r8) (:)] drainange from floodplain inundation volume (mm H2O/s) 
+          qflx_h2oocn_drain    =>    col_wf%qflx_h2oocn_drain    , & ! Output: [real(r8) (:)] drainange from coastal inundation volume (mm H2O/s) 
 
           smpmin               =>    soilstate_vars%smpmin_col               , & ! Input:  [real(r8) (:)   ]  restriction for min of soil potential (mm)
           sucsat               =>    soilstate_vars%sucsat_col               , & ! Input:  [real(r8) (:,:) ]  minimum soil suction (mm)
@@ -370,6 +424,7 @@ contains
           ice                  =>    soilhydrology_vars%ice_col              , & ! Input:  [real(r8) (:,:) ]  ice len in each VIC layers(ice, mm)
           i_0                  =>    soilhydrology_vars%i_0_col              , & ! Input:  [real(r8) (:)   ]  column average soil moisture in top VIC layers (mm)
           h2osfcflag           =>    soilhydrology_vars%h2osfcflag           , & ! Input:  logical
+          pc_grid              =>    soilhydrology_vars%pc                   , & ! Input:  [real(r8) (:)   ]  threshold for outflow from surface water storage
           icefrac              =>    soilhydrology_vars%icefrac_col            & ! Output: [real(r8) (:,:) ]  fraction of ice
               )
 
@@ -387,10 +442,13 @@ contains
        end do
 
        do fc = 1, num_hydrologyc
-          c = filter_hydrologyc(fc)
-          g = cgridcell(c)
+          c  = filter_hydrologyc(fc)
+          g  = cgridcell(c)
+          l = col_pp%landunit(c)
+          pc = pc_grid(g)
+          
           ! partition moisture fluxes between soil and h2osfc
-          if (lun_pp%itype(col_pp%landunit(c)) == istsoil .or. lun_pp%itype(col_pp%landunit(c))==istcrop) then
+          if (col_pp%is_soil(c) .or. col_pp%is_crop(c)) then
 
              ! explicitly use frac_sno=0 if snl=0
              if (snl(c) >= 0) then
@@ -402,7 +460,7 @@ contains
                 qflx_evap(c)=qflx_ev_soil(c)
              endif
 
-             !0. partition grid-level floodplain inundation volume and fraction to each column
+             !0. partition grid-level floodplain/coastal inundation volume and fraction to each column
              if (use_lnd_rof_two_way) then
                 if (mod(get_nstep(),lnd_rof_coupling_nstep) == 1 .or. get_nstep() <= 1 .or. lnd_rof_coupling_nstep == 1) then
                    h2orof(c)      = atm2lnd_vars%h2orof_grc(g) * wtgcell(c)
@@ -411,6 +469,13 @@ contains
                 ! TODO: add inundfrac from ocean 
                 if ( frac_h2orof(c) > 1.0_r8 - fsno - frac_h2osfc(c) ) then
                   frac_h2orof(c) = 1.0_r8 - fsno - frac_h2osfc(c)
+                endif
+             endif
+
+             if (use_ocn_lnd_one_way) then
+                frac_h2oocn(c) = ocn2lnd_vars%frac_h2oocn_grc(g) * wtgcell(c)
+                if ( frac_h2oocn(c) > 1.0_r8 - fsno - frac_h2osfc(c) ) then
+                  frac_h2oocn(c) = 1.0_r8 - fsno - frac_h2osfc(c)
                 endif
              endif
 
@@ -455,11 +520,28 @@ contains
                 rsurf_vic = min(qflx_in_soil(c), rsurf_vic)
                 qinmax = (1._r8 - fsat(c)) * 10._r8**(-e_ice*top_icefrac)*(qflx_in_soil(c) - rsurf_vic)
              else
-                qinmax=(1._r8 - fsat(c)) * minval(10._r8**(-e_ice*(icefrac(c,1:3)))*hksat(c,1:3))
+                if ( use_modified_infil ) then
+                  qinmax=minval(10._r8**(-e_ice*(icefrac(c,1:3)))*hksat(c,1:3))
+                else
+                  qinmax=(1._r8 - fsat(c)) * minval(10._r8**(-e_ice*(icefrac(c,1:3)))*hksat(c,1:3))
+                end if
              end if
-
+             
+             if ( use_modified_infil ) then
+                ! Assume frac_h2osfc occurs on fsat
+                if ( frac_h2osfc(c) >= fsat(c) ) then
+                   qflx_infl_excess(c) = max(0._r8,qflx_in_soil(c) -  (1.0_r8 - frac_h2osfc(c))*qinmax)
+                else
+                   qflx_infl_excess(c) = max(0._r8,qflx_in_soil(c) -  (1.0_r8 - fsat(c))*qinmax)
+                end if
+             else
+                qflx_infl_excess(c) = max(0._r8,qflx_in_soil(c) -  (1.0_r8 - frac_h2osfc(c))*qinmax)
+             end if
+             
              if (use_lnd_rof_two_way) then
                 qflx_infl_excess(c) = max(0._r8,qflx_in_soil(c) -  (1.0_r8 - frac_h2osfc(c) - frac_h2orof(c))*qinmax)
+             elseif (use_ocn_lnd_one_way) then
+                qflx_infl_excess(c) = max(0._r8,qflx_in_soil(c) -  (1.0_r8 - frac_h2osfc(c) - frac_h2oocn(c))*qinmax)
              else
                 qflx_infl_excess(c) = max(0._r8,qflx_in_soil(c) -  (1.0_r8 - frac_h2osfc(c))*qinmax)
              endif
@@ -470,24 +552,63 @@ contains
              qflx_gross_infl_soil(c) = qflx_gross_infl_soil(c)- qflx_infl_excess(c)
 
              !5. surface runoff from h2osfc
+             ! ELM ponding/runoff, not a CLM cryosphere physics port.
              if (h2osfcflag==1) then
                 ! calculate runoff from h2osfc  -------------------------------------
-                if (frac_h2osfc(c) <= pc) then
-                   frac_infclust=0.0_r8
+                if (use_modified_infil) then
+                  if (frac_h2osfc_act(c) <= pc .and. frac_h2osfc(c) <= pc) then
+                     frac_infclust=0.0_r8
+                  else
+                      if (frac_h2osfc(c) <= pc) then
+                        frac_infclust=(frac_h2osfc_act(c)-pc)**mu
+                      else
+                        frac_infclust=(frac_h2osfc(c)-pc)**mu
+                      endif
+                  endif
                 else
-                   frac_infclust=(frac_h2osfc(c)-pc)**mu
+                  ! Default path: use unadjusted frac_h2osfc_act so snow-cover
+                  ! adjustment of frac_h2osfc does not suppress ponded runoff.
+                  if (frac_h2osfc_act(c) <= pc) then
+                    frac_infclust=0.0_r8
+                  else
+                    frac_infclust=(frac_h2osfc_act(c)-pc)**mu
+                  endif
                 endif
              endif
 
-             ! limit runoff to value of storage above S(pc)
-             if(h2osfc(c) >= h2osfc_thresh(c) .and. h2osfcflag/=0) then
-                ! spatially variable k_wet
-                k_wet=1.0_r8 * sin((rpi/180.) * col_pp%topo_slope(c))
-                qflx_h2osfc_surf(c) = k_wet * frac_infclust * (h2osfc(c) - h2osfc_thresh(c))
-
-                qflx_h2osfc_surf(c)=min(qflx_h2osfc_surf(c),(h2osfc(c) - h2osfc_thresh(c))/dtime)
+             if (lun_pp%ispolygon(col_pp%landunit(c))) then
+                vdep = (2_r8*iwp_exclvol(c) - iwp_microrel(c)) * (iwp_ddep(c)/iwp_microrel(c))**3_r8 &
+                       + (2_r8*iwp_microrel(c) - 3_r8*iwp_exclvol(c)) * (iwp_ddep(c)/iwp_microrel(c))**2_r8
+                phi_eff = min(iwp_subsidence(c), 0.4_r8)  !fix this variable when available to pull from alt calculations
+                swc = h2osfc(c)/1000_r8 ! convert to m
+                
+                if (swc >= vdep) then
+                   if (lun_pp%polygontype(col_pp%landunit(c)) == ilowcenpoly) then
+                      k_wet = (2890_r8*phi_eff**4_r8 - 1171.1_r8*phi_eff**3_r8 + 144.94_r8*phi_eff**2_r8 + 1.682_r8*phi_eff + 2.028_r8) &
+                              * (710.3_r8*meangradz(c)**2_r8 - 28.736_r8*meangradz(c) + 12.74_r8)
+                   else
+                      k_wet = 24.925_r8 * (710.3_r8*meangradz(c)**2_r8 - 28.736_r8*meangradz(c) + 12.74_r8)
+                   endif
+                   qflx_h2osfc_surf(c) = k_wet * (swc - vdep) / 86400_r8 ! coefficients estimated for mm/day; convert from mm/day -> mm/s
+                   qflx_h2osfc_surf(c) = min(qflx_h2osfc_surf(c), (swc - vdep)*1000_r8/dtime)
+                else
+                   qflx_h2osfc_surf(c) = 0._r8
+                endif
+                
              else
-                qflx_h2osfc_surf(c)= 0._r8
+                ! limit runoff to value of storage above S(pc)
+                if(h2osfc(c) >= h2osfc_thresh(c) .and. h2osfcflag/=0) then
+                   ! spatially variable k_wet
+                   ! Reduce k_wet from 1 to 1e-4 and apply a minimum slope so h2osfc
+                   ! does not drain in a single timestep; this is an ELM ponding
+                   ! calibration, not CLM cryosphere physics.
+                   k_wet=1.0e-4_r8 * sin((rpi/180._r8) * max(col_pp%topo_slope(c), 1.0e-3_r8))
+                   qflx_h2osfc_surf(c) = k_wet * frac_infclust * (h2osfc(c) - h2osfc_thresh(c))
+
+                   qflx_h2osfc_surf(c)=min(qflx_h2osfc_surf(c),(h2osfc(c) - h2osfc_thresh(c))/dtime)
+                else
+                   qflx_h2osfc_surf(c)= 0._r8
+                endif
              endif
 
              ! cutoff lower limit
@@ -514,7 +635,17 @@ contains
                 h2osfc(c) = 0.0
                 qflx_h2osfc_drain(c)= 0._r8
              else
-                qflx_h2osfc_drain(c)=min(frac_h2osfc(c)*qinmax,h2osfc(c)/dtime)
+                if ( use_modified_infil ) then
+                   ! Assume frac_h2osfc occurs on top of fsat
+                   if (frac_h2osfc(c) <= fsat(c)) then
+                     qflx_h2osfc_drain(c)=0._r8
+                   else
+                     qflx_h2osfc_drain(c)=min((frac_h2osfc(c)-fsat(c))*qinmax,h2osfc(c)/dtime)
+                   endif
+                else
+                   ! Original scheme
+                   qflx_h2osfc_drain(c)=min(frac_h2osfc(c)*qinmax,h2osfc(c)/dtime)
+                end if
              endif
 
              if(h2osfcflag==0) then
@@ -554,6 +685,32 @@ contains
                qflx_gross_infl_soil(c) = qflx_gross_infl_soil(c) + qflx_h2osfc_drain(c)
              endif
 
+             !9. add drainage from coastal inundation to qflx_infl (ocean land one way coupling)
+             if (use_ocn_lnd_one_way) then
+
+               ! estimate the available volume [mm H2O] in the first soil layer for floodplain infiltration
+               h2osoi_left_vol1 = max(0._r8,(pondmx+watsat(c,1)*dz(c,1)*1.e3_r8-h2osoi_ice(c,1)-watmin)) - &
+                                  max(0._r8,h2osoi_liq(c,1)-watmin)
+               if (h2osoi_left_vol1 < 0._r8) then
+                   h2osoi_left_vol1 = 0._r8
+               endif
+
+               if (frac_h2oocn(c) > 0._r8) then
+                  h2osoi_left_vol1 = frac_h2oocn(c) * h2osoi_left_vol1
+                  ! no drainage from ocn inundation if the 1st layer soil is saturated
+                  qflx_h2oocn_drain(c)=min(frac_h2oocn(c)*qinmax, h2osoi_left_vol1/dtime)
+               else
+                  qflx_h2oocn_drain(c)=0._r8
+               endif
+
+               qflx_infl(c) = qflx_infl(c) + qflx_h2oocn_drain(c) 
+               qflx_gross_infl_soil(c) = qflx_gross_infl_soil(c) + qflx_h2osfc_drain(c) + qflx_h2oocn_drain(c) 
+
+             else
+               qflx_gross_infl_soil(c) = qflx_gross_infl_soil(c) + qflx_h2osfc_drain(c)
+             endif
+
+
           else
              ! non-vegetated landunits (i.e. urban) use original CLM4 code
              if (snl(c) >= 0) then
@@ -581,6 +738,9 @@ contains
              if (use_lnd_rof_two_way) then
                 qflx_h2orof_drain(c) = 0._r8
              endif
+             if (use_ocn_lnd_one_way) then
+                qflx_h2oocn_drain(c) = 0._r8
+             endif
           end if
        end do
 
@@ -600,7 +760,7 @@ contains
      use elm_varcon       , only : pondmx, tfrz, watmin,denice,denh2o
      use elm_varpar       , only : nlevsoi, nlevgrnd
      use column_varcon    , only : icol_roof, icol_road_imperv
-     use elm_varctl       , only : use_vsfm, use_var_soil_thick
+     use elm_varctl       , only : use_var_soil_thick
      use domainMod        , only : ldomain
      use SoilWaterMovementMod, only : zengdecker_2009_with_var_soil_thick
      !
@@ -651,7 +811,7 @@ contains
      real(r8) :: q_perch
      real(r8) :: q_perch_max
      real(r8) :: dflag=0._r8
-	 real(r8) :: qcharge_temp
+     real(r8) :: qcharge_temp
      !-----------------------------------------------------------------------
 
      associate(                                                            &
@@ -705,14 +865,12 @@ contains
           end do
        end do
 
-       if (.not.use_vsfm) then
-          do fc = 1, num_hydrologyc
-             c = filter_hydrologyc(fc)
-             qflx_drain(c)    = 0._r8
-             qflx_rsub_sat(c) = 0._r8
-             qflx_drain_perched(c)  = 0._r8
-          end do
-       endif
+       do fc = 1, num_hydrologyc
+          c = filter_hydrologyc(fc)
+          qflx_drain(c)    = 0._r8
+          qflx_rsub_sat(c) = 0._r8
+          qflx_drain_perched(c)  = 0._r8
+       end do
 
        ! The layer index of the first unsaturated layer, i.e., the layer right above
        ! the water table
@@ -738,7 +896,7 @@ contains
        ! Water table changes due to qcharge
        do fc = 1, num_hydrologyc
           c = filter_hydrologyc(fc)
-       	  nlevbed = nlev2bed(c)
+          nlevbed = nlev2bed(c)
 
           !scs: use analytical expression for aquifer specific yield
           rous = watsat(c,nlevbed) &
@@ -746,7 +904,7 @@ contains
           rous=max(rous,0.02_r8)
 
           !--  water table is below the soil column  --------------------------------------
-		      g = col_pp%gridcell(c)
+          g = col_pp%gridcell(c)
           l = col_pp%landunit(c)
           qcharge_temp = qcharge(c)
 
@@ -754,10 +912,10 @@ contains
           zwt(c) = zwt(c) + (qflx_grnd_irrig_col(c) * dtime)/1000._r8/rous
 
           if(jwt(c) == nlevbed) then
-	           if (.not. (zengdecker_2009_with_var_soil_thick)) then
-                wa(c)  = wa(c) + qcharge(c)  * dtime
-                zwt(c) = zwt(c) - (qcharge(c)  * dtime)/1000._r8/rous
-             end if
+            if (.not. (zengdecker_2009_with_var_soil_thick)) then
+              wa(c)  = wa(c) + qcharge(c)  * dtime
+              zwt(c) = zwt(c) - (qcharge(c)  * dtime)/1000._r8/rous
+            end if
           else
              !-- water table within soil layers 1-9  -------------------------------------
              ! try to raise water table to account for qcharge
@@ -820,7 +978,7 @@ contains
        ! perched water table code
        do fc = 1, num_hydrologyc
           c = filter_hydrologyc(fc)
-       	  nlevbed = nlev2bed(c)
+          nlevbed = nlev2bed(c)
 
           ! define frost table as first frozen layer with unfrozen layer above it
           if(t_soisno(c,1) > tfrz) then
@@ -830,10 +988,10 @@ contains
           endif
 
           do k=2, nlevbed
-             if (t_soisno(c,k-1) > tfrz .and. t_soisno(c,k) <= tfrz) then
-                k_frz=k
-                exit
-             endif
+            if (t_soisno(c,k-1) > tfrz .and. t_soisno(c,k) <= tfrz) then
+               k_frz=k
+               exit
+            endif
           enddo
 
           frost_table(c)=z(c,k_frz)
@@ -890,15 +1048,13 @@ contains
           if (snl(c)+1 >= 1) then
 
              ! make consistent with how evap_grnd removed in infiltration
-             if (.not.use_vsfm) then
-                h2osoi_liq(c,1) = h2osoi_liq(c,1) + (1._r8 - frac_h2osfc(c))*qflx_dew_grnd(c) * dtime
-                h2osoi_ice(c,1) = h2osoi_ice(c,1) + (1._r8 - frac_h2osfc(c))*qflx_dew_snow(c) * dtime
-                if (qflx_sub_snow(c)*dtime > h2osoi_ice(c,1)) then
-                   qflx_sub_snow(c) = h2osoi_ice(c,1)/dtime
-                   h2osoi_ice(c,1) = 0._r8
-                else
-                   h2osoi_ice(c,1) = h2osoi_ice(c,1) - (1._r8 - frac_h2osfc(c)) * qflx_sub_snow(c) * dtime
-                end if
+             h2osoi_liq(c,1) = h2osoi_liq(c,1) + (1._r8 - frac_h2osfc(c))*qflx_dew_grnd(c) * dtime
+             h2osoi_ice(c,1) = h2osoi_ice(c,1) + (1._r8 - frac_h2osfc(c))*qflx_dew_snow(c) * dtime
+             if (qflx_sub_snow(c)*dtime > h2osoi_ice(c,1)) then
+                qflx_sub_snow(c) = h2osoi_ice(c,1)/dtime
+                h2osoi_ice(c,1) = 0._r8
+             else
+                h2osoi_ice(c,1) = h2osoi_ice(c,1) - (1._r8 - frac_h2osfc(c)) * qflx_sub_snow(c) * dtime
              end if
           end if
        end do
@@ -929,7 +1085,7 @@ contains
 
    !-----------------------------------------------------------------------
    subroutine Drainage(bounds, num_hydrologyc, filter_hydrologyc, num_urbanc, filter_urbanc,  &
-        soilhydrology_vars, soilstate_vars, dtime)
+        soilhydrology_vars, soilstate_vars, ocn2lnd_vars, dtime)
      !
      ! !DESCRIPTION:
      ! Calculate subsurface drainage
@@ -939,9 +1095,14 @@ contains
      use elm_varpar       , only : nlevsoi, nlevgrnd, nlayer, nlayert
      use elm_varcon       , only : pondmx, tfrz, watmin,rpi, secspday, nlvic
      use column_varcon    , only : icol_roof, icol_road_imperv, icol_road_perv
-     use elm_varctl       , only : use_vsfm, use_var_soil_thick
+     use elm_varctl       , only : use_var_soil_thick, use_firn_percolation_and_compaction
      use SoilWaterMovementMod, only : zengdecker_2009_with_var_soil_thick
      use pftvarcon        , only : rsub_top_globalmax
+     use LandunitType     , only : lun_pp
+     use landunit_varcon  , only : istice_mec, istice
+     use domainMod        , only : ldomain
+     use ocn2lndType      , only : ocn2lnd_type 
+
      !
      ! !ARGUMENTS:
      type(bounds_type)        , intent(in)    :: bounds
@@ -951,11 +1112,12 @@ contains
      integer                  , intent(in)    :: filter_hydrologyc(:) ! column filter for soil points
      type(soilstate_type)     , intent(in)    :: soilstate_vars
      type(soilhydrology_type) , intent(inout) :: soilhydrology_vars
+     type(ocn2lnd_type)       , intent(in)    :: ocn2lnd_vars
      real(r8), intent(in)  :: dtime
      !
      ! !LOCAL VARIABLES:
      !character(len=32) :: subname = 'Drainage'           ! subroutine name
-     integer  :: c,j,fc,i                                ! indices
+     integer  :: c,g,l,j,fc,i                            ! indices
      integer  :: nlevbed                                 ! # layers to bedrock
      real(r8) :: xs(bounds%begc:bounds%endc)             ! water needed to bring soil moisture to watmin (mm)
      real(r8) :: dzmm(bounds%begc:bounds%endc,1:nlevgrnd) ! layer thickness (mm)
@@ -1003,6 +1165,11 @@ contains
      real(r8) :: frac                     ! temporary variable for ARNO subsurface runoff calculation
      real(r8) :: rel_moist                ! relative moisture, temporary variable
      real(r8) :: wtsub_vic                ! summation of hk*dzmm for layers in the third VIC layer
+     real(r8) :: T1                       ! transmissivity of saturated portion of the soil column  (m^2/s)
+     real(r8) :: T2                       ! transmissivity for the depth below the bottom-most layer(m^2/s)
+     real(r8) :: f                        ! e-folding length representing the complexity of sediment-bedrock profile (Zeng et al., 2016) (m)
+     integer  :: jtran                    ! from jth layer to count for transmissivity
+     real(r8) :: dz_jtran                 
      !-----------------------------------------------------------------------
 
      associate(                                                            &
@@ -1010,7 +1177,7 @@ contains
           zi                 =>    col_pp%zi                                , & ! Input:  [real(r8) (:,:) ] interface level below a "z" level (m)
           dz                 =>    col_pp%dz                                , & ! Input:  [real(r8) (:,:) ] layer depth (m)
           snl                =>    col_pp%snl                               , & ! Input:  [integer  (:)   ] number of snow layers
-         nlev2bed            =>    col_pp%nlevbed                           , & ! Input:  [integer  (:)   ]  number of layers to bedrock
+          nlev2bed           =>    col_pp%nlevbed                           , & ! Input:  [integer  (:)   ] number of layers to bedrock
 
           t_soisno           =>    col_es%t_soisno         , & ! Input:  [real(r8) (:,:) ] soil temperature (Kelvin)
 
@@ -1044,6 +1211,7 @@ contains
 
           qflx_snwcp_liq     =>    col_wf%qflx_snwcp_liq     , & ! Output: [real(r8) (:)   ] excess rainfall due to snow capping (mm H2O /s) [+]
           qflx_snwcp_ice     =>    col_wf%qflx_snwcp_ice     , & ! Output: [real(r8) (:)   ] excess snowfall due to snow capping (mm H2O /s) [+]
+          qflx_ice_runoff_xs =>    col_wf%qflx_ice_runoff_xs , & ! Output: solid runoff from excess ice in soil (mm H2O /s) [+]
           !qflx_dew_grnd      =>    col_wf%qflx_dew_grnd      , & ! Output: [real(r8) (:)   ] ground surface dew formation (mm H2O /s) [+]
           !qflx_dew_snow      =>    col_wf%qflx_dew_snow      , & ! Output: [real(r8) (:)   ] surface dew added to snow pack (mm H2O /s) [+]
           !qflx_sub_snow      =>    col_wf%qflx_sub_snow      , & ! Output: [real(r8) (:)   ] sublimation rate from snow pack (mm H2O /s) [+]
@@ -1051,6 +1219,7 @@ contains
           qflx_qrgwl         =>    col_wf%qflx_qrgwl         , & ! Output: [real(r8) (:)   ] qflx_surf at glaciers, wetlands, lakes (mm H2O /s)
           qflx_rsub_sat      =>    col_wf%qflx_rsub_sat      , & ! Output: [real(r8) (:)   ] soil saturation excess [mm h2o/s]
           qflx_drain_perched =>    col_wf%qflx_drain_perched , & ! Output: [real(r8) (:)   ] perched wt sub-surface runoff (mm H2O /s)
+          qflx_lnd2ocn       =>    col_wf%qflx_lnd2ocn       , & ! Output: [real(r8) (:)   ] lateral flow from lnd to ocn (mm H2O /s)
 
           h2osoi_liq         =>    col_ws%h2osoi_liq        , & ! Output: [real(r8) (:,:) ] liquid water (kg/m2)
           h2osoi_ice         =>    col_ws%h2osoi_ice          & ! Output: [real(r8) (:,:) ] ice lens (kg/m2)
@@ -1075,6 +1244,7 @@ contains
        do fc = 1, num_hydrologyc
           c = filter_hydrologyc(fc)
           qflx_drain(c)    = 0._r8
+          qflx_lnd2ocn(c)  = 0._r8
           rsub_bot(c)      = 0._r8
           qflx_rsub_sat(c) = 0._r8
           rsub_top(c)      = 0._r8
@@ -1085,19 +1255,20 @@ contains
        ! The layer index of the first unsaturated layer, i.e., the layer right above
        ! the water table
 
-       do fc = 1, num_hydrologyc
+       do fc = 1, num_hydrologyc !TODO: introduce a filter for coastline grid cells
           c = filter_hydrologyc(fc)
-       	  nlevbed = nlev2bed(c)
+          g = col_pp%gridcell(c)
+          nlevbed = nlev2bed(c)
           jwt(c) = nlevbed
           ! allow jwt to equal zero when zwt is in top layer
           do j = 1,nlevbed
-             if(zwt(c) <= zi(c,j)) then
+             if (zwt(c) <= zi(c,j)) then
                 if (zengdecker_2009_with_var_soil_thick .and. zwt(c) == zi(c,nlevbed)) then
                    exit
                 else
                    jwt(c) = j-1
                    exit
-	        end if
+                end if
              end if
           enddo
        end do
@@ -1108,7 +1279,7 @@ contains
        ! perched water table code
        do fc = 1, num_hydrologyc
           c = filter_hydrologyc(fc)
-       	  nlevbed = nlev2bed(c)
+          nlevbed = nlev2bed(c)
 
           !  specify maximum drainage rate
           q_perch_max = 1.e-5_r8 * sin(col_pp%topo_slope(c) * (rpi/180._r8))
@@ -1159,9 +1330,6 @@ contains
              do k = jwt(c)+1, k_frz
                 rsub_top_layer=max(rsub_top_tot,-(h2osoi_liq(c,k)-watmin))
                 rsub_top_layer=min(rsub_top_layer,0._r8)
-                if (use_vsfm) then
-                   rsub_top_layer = 0._r8
-                endif
                 rsub_top_tot = rsub_top_tot - rsub_top_layer
 
                 h2osoi_liq(c,k) = h2osoi_liq(c,k) + rsub_top_layer
@@ -1245,7 +1413,6 @@ contains
                 do k = k_perch+1, k_frz
                    rsub_top_layer=max(rsub_top_tot,-(h2osoi_liq(c,k)-watmin))
                    rsub_top_layer=min(rsub_top_layer,0._r8)
-                   if (use_vsfm) rsub_top_layer = 0._r8
                    rsub_top_tot = rsub_top_tot - rsub_top_layer
 
                    h2osoi_liq(c,k) = h2osoi_liq(c,k) + rsub_top_layer
@@ -1312,14 +1479,14 @@ contains
                 ! make sure baseflow isn't negative
                 rsub_top(c) = max(0._r8, rsub_top(c))
              else
-	        if (jwt(c) == nlevbed .and. zengdecker_2009_with_var_soil_thick) then
+
+                if (jwt(c) == nlevbed .and. zengdecker_2009_with_var_soil_thick) then
                    rsub_top(c)    = 0._r8
                 else
                    rsub_top(c)    = imped * rsub_top_max* exp(-fff(c)*zwt(c))
-		end if
-             end if
+                end if
 
-             if (use_vsfm) rsub_top(c) = 0._r8
+             end if
 
              ! use analytical expression for aquifer specific yield
              rous = watsat(c,nlevbed) &
@@ -1328,28 +1495,29 @@ contains
 
              !--  water table is below the soil column  --------------------------------------
              if(jwt(c) == nlevbed) then
-	        if (zengdecker_2009_with_var_soil_thick) then
-         	   if (-1._r8 * smp_l(c,nlevbed) < 0.5_r8 * dzmm(c,nlevbed)) then
-           	      zwt(c) = z(c,nlevbed) - (smp_l(c,nlevbed) / 1000._r8)
-		   end if
-                   rsub_top(c) = imped * rsub_top_max * exp(-fff(c) * zwt(c))
-                   rsub_top_tot = - rsub_top(c) * dtime
-                   s_y = watsat(c,nlevbed) &
+               if (zengdecker_2009_with_var_soil_thick) then
+                 if (-1._r8 * smp_l(c,nlevbed) < 0.5_r8 * dzmm(c,nlevbed)) then
+                    zwt(c) = z(c,nlevbed) - (smp_l(c,nlevbed) / 1000._r8)
+                 end if
+                 rsub_top(c) = imped * rsub_top_max * exp(-fff(c) * zwt(c))
+                 rsub_top_tot = - rsub_top(c) * dtime
+                 s_y = watsat(c,nlevbed) &
                      * ( 1. - (1.+1.e3*zwt(c)/sucsat(c,nlevbed))**(-1./bsw(c,nlevbed)))
-                   s_y=max(s_y,0.02_r8)
-                   rsub_top_layer=max(rsub_top_tot,-(s_y*(zi(c,nlevbed) - zwt(c))*1.e3))
-                   rsub_top_layer=min(rsub_top_layer,0._r8)
-                   h2osoi_liq(c,nlevbed) = h2osoi_liq(c,nlevbed) + rsub_top_layer
-                   rsub_top_tot = rsub_top_tot - rsub_top_layer
-                   if (rsub_top_tot >= 0.) then
-                      zwt(c) = zwt(c) - rsub_top_layer/s_y/1000._r8
-                   else
-                      zwt(c) = zi(c,nlevbed)
-                   end if
-	           if (rsub_top_tot < 0.) then
-	              rsub_top(c) = rsub_top(c) + rsub_top_tot / dtime
-                      rsub_top_tot = 0.
-                   end if
+                 s_y=max(s_y,0.02_r8)
+                 rsub_top_layer=max(rsub_top_tot,-(s_y*(zi(c,nlevbed) - zwt(c))*1.e3_r8))
+                 rsub_top_layer=min(rsub_top_layer,0._r8)
+                 h2osoi_liq(c,nlevbed) = h2osoi_liq(c,nlevbed) + rsub_top_layer
+                 rsub_top_tot = rsub_top_tot - rsub_top_layer
+                 if (rsub_top_tot >= 0._r8) then
+                    zwt(c) = zwt(c) - rsub_top_layer/s_y/1000._r8
+                 else
+                    zwt(c) = zi(c,nlevbed)
+                 end if
+                 if (rsub_top_tot < 0.) then
+                   rsub_top(c) = rsub_top(c) + rsub_top_tot / dtime
+                   rsub_top_tot = 0.
+                 end if
+
                 else
                    wa(c)  = wa(c) - rsub_top(c) * dtime
                    zwt(c)     = zwt(c) + (rsub_top(c) * dtime)/1000._r8/rous
@@ -1376,7 +1544,6 @@ contains
                       do j = (nlvic(1)+nlvic(2)+1), nlevbed
                          rsub_top_layer=max(rsub_top_tot, rsub_top_tot*hk_l(c,j)*dzmm(c,j)/wtsub_vic)
                          rsub_top_layer=min(rsub_top_layer,0._r8)
-                         if (use_vsfm) rsub_top_layer = 0._r8
                          h2osoi_liq(c,j) = h2osoi_liq(c,j) + rsub_top_layer
                          rsub_top_tot = rsub_top_tot - rsub_top_layer
                       end do
@@ -1389,7 +1556,6 @@ contains
 
                          rsub_top_layer=max(rsub_top_tot,-(s_y*(zi(c,j) - zwt(c))*1.e3))
                          rsub_top_layer=min(rsub_top_layer,0._r8)
-                         if (use_vsfm) rsub_top_layer = 0._r8
                          h2osoi_liq(c,j) = h2osoi_liq(c,j) + rsub_top_layer
 
                          rsub_top_tot = rsub_top_tot - rsub_top_layer
@@ -1438,33 +1604,56 @@ contains
 
        end do
 
+       if (use_ocn_lnd_one_way) then
+          call Drainage_To_OCN(bounds, num_hydrologyc, filter_hydrologyc,         &
+               soilhydrology_vars, soilstate_vars, ocn2lnd_vars, dtime)
+
+          !-- recompute jwt for following calculations  ---------------------------------
+          ! allow jwt to equal zero when zwt is in top layer
+          do fc = 1, num_hydrologyc
+             c = filter_hydrologyc(fc)
+             nlevbed = nlev2bed(c)
+             jwt(c) = nlevbed
+             do j = 1,nlevbed
+                if(zwt(c) <= zi(c,j)) then
+                   if (zengdecker_2009_with_var_soil_thick .and. zwt(c) == zi(c,nlevbed)) then
+                      exit
+                   else
+                      jwt(c) = j-1
+                      exit
+                   end if
+                end if
+             enddo
+             zwt(c) = max(0.0_r8,zwt(c))
+             zwt(c) = min(80._r8,zwt(c))
+          enddo
+
+       endif
+
        !  excessive water above saturation added to the above unsaturated layer like a bucket
        !  if column fully saturated, excess water goes to runoff
 
        do fc = 1, num_hydrologyc
           c = filter_hydrologyc(fc)
-      	  nlevbed = nlev2bed(c)
+          nlevbed = nlev2bed(c)
+
           do j = nlevbed,2,-1
              xsi(c)            = max(h2osoi_liq(c,j)-eff_porosity(c,j)*dzmm(c,j),0._r8)
-             if (use_vsfm) then
-                xsi(c) = 0._r8
-             else
-                h2osoi_liq(c,j)   = min(eff_porosity(c,j)*dzmm(c,j), h2osoi_liq(c,j))
-                h2osoi_liq(c,j-1) = h2osoi_liq(c,j-1) + xsi(c)
-             endif
+             h2osoi_liq(c,j)   = min(eff_porosity(c,j)*dzmm(c,j), h2osoi_liq(c,j))
+             h2osoi_liq(c,j-1) = h2osoi_liq(c,j-1) + xsi(c)
           end do
        end do
 
        do fc = 1, num_hydrologyc
           c = filter_hydrologyc(fc)
+          l = col_pp%landunit(c)
 
           !scs: watmin addition to fix water balance errors
           xs1(c)          = max(max(h2osoi_liq(c,1)-watmin,0._r8)- &
                max(0._r8,(pondmx+watsat(c,1)*dzmm(c,1)-h2osoi_ice(c,1)-watmin)),0._r8)
-          if (use_vsfm) xs1(c) = 0._r8
           h2osoi_liq(c,1) = h2osoi_liq(c,1) - xs1(c)
 
-          if (lun_pp%urbpoi(col_pp%landunit(c))) then
+          if (lun_pp%urbpoi(l)) then
              qflx_rsub_sat(c)     = xs1(c) / dtime
           else
              if(h2osfcflag == 1) then
@@ -1477,12 +1666,14 @@ contains
              endif
           endif
 
-          if (use_vsfm) qflx_rsub_sat(c) = 0._r8
-
           ! add in ice check
           xs1(c)          = max(max(h2osoi_ice(c,1),0._r8)-max(0._r8,(pondmx+watsat(c,1)*dzmm(c,1)-h2osoi_liq(c,1))),0._r8)
           h2osoi_ice(c,1) = min(max(0._r8,pondmx+watsat(c,1)*dzmm(c,1)-h2osoi_liq(c,1)), h2osoi_ice(c,1))
-          qflx_snwcp_ice(c) = qflx_snwcp_ice(c) + xs1(c) / dtime
+          if ( (lun_pp%itype(l) == istice .or. lun_pp%itype(l) == istice_mec) .or. (.not. use_firn_percolation_and_compaction)) then
+                qflx_snwcp_ice(c) = qflx_snwcp_ice(c) + xs1(c) / dtime
+          else
+                qflx_ice_runoff_xs(c) = qflx_ice_runoff_xs(c) + xs1(c) / dtime
+          endif
        end do
 
        ! Limit h2osoi_liq to be greater than or equal to watmin.
@@ -1491,8 +1682,8 @@ contains
 
        do fc = 1, num_hydrologyc
           c = filter_hydrologyc(fc)
-       	  nlevbed = nlev2bed(c)
-       	  do j = 1, nlevbed-1
+          nlevbed = nlev2bed(c)
+          do j = 1, nlevbed-1
              if (h2osoi_liq(c,j) < watmin) then
                 xs(c) = watmin - h2osoi_liq(c,j)
                 ! deepen water table if water is passed from below zwt layer
@@ -1510,8 +1701,8 @@ contains
        ! Get water for bottom layer from layers above if possible
        do fc = 1, num_hydrologyc
           c = filter_hydrologyc(fc)
-       	  nlevbed = nlev2bed(c)
-       	  j = nlevbed
+          nlevbed = nlev2bed(c)
+          j = nlevbed
           if (h2osoi_liq(c,j) < watmin) then
              xs(c) = watmin-h2osoi_liq(c,j)
              searchforwater: do i = nlevbed-1, 1, -1
@@ -1557,15 +1748,229 @@ contains
        do fc = 1, num_urbanc
           c = filter_urbanc(fc)
           if (col_pp%itype(c) /= icol_road_perv) then
-             qflx_drain(c) = 0._r8
+             qflx_drain(c)   = 0._r8
+             qflx_lnd2ocn(c) = 0._r8
              ! This must be done for roofs and impervious road (walls will be zero)
-             qflx_qrgwl(c) = qflx_snwcp_liq(c)
+             qflx_qrgwl(c)   = qflx_snwcp_liq(c)
           end if
        end do
 
      end associate
 
    end subroutine Drainage
+
+   !-----------------------------------------------------------------------
+   subroutine Drainage_To_OCN(bounds, num_hydrologyc, filter_hydrologyc,      &
+        soilhydrology_vars, soilstate_vars, ocn2lnd_vars, dtime)
+     !
+     ! !DESCRIPTION:
+     ! Calculate subsurface drainage
+     !
+     ! !USES:
+      !$acc routine seq
+     use elm_varpar       , only : nlevsoi, nlevgrnd, nlayer, nlayert
+     use elm_varcon       , only : pondmx, tfrz, watmin,rpi, secspday, nlvic, e_ice
+     use pftvarcon        , only : rsub_top_globalmax
+     use domainMod        , only : ldomain
+     use ocn2lndType      , only : ocn2lnd_type 
+     use SoilWaterMovementMod, only : zengdecker_2009_with_var_soil_thick
+     !
+     ! !ARGUMENTS:
+     type(bounds_type)        , intent(in)    :: bounds
+     integer                  , intent(in)    :: num_hydrologyc       ! number of column soil points in column filter
+     integer                  , intent(in)    :: filter_hydrologyc(:) ! column filter for soil points
+     type(soilstate_type)     , intent(in)    :: soilstate_vars
+     type(soilhydrology_type) , intent(inout) :: soilhydrology_vars
+     type(ocn2lnd_type)       , intent(in)    :: ocn2lnd_vars
+     real(r8)                 , intent(in)    :: dtime
+     !
+     ! !LOCAL VARIABLES:
+     !character(len=32) :: subname = 'Drainage_To_OCN'    ! subroutine name
+     integer  :: c,g,j,fc,i                               ! indices
+     integer  :: nlevbed                                  ! # layers to bedrock
+     integer  :: jwt(bounds%begc:bounds%endc)             ! index of the soil layer right above the water table (-)
+     integer  :: jss(bounds%begc:bounds%endc)             ! index of the soil layer right above the sea surface height
+     real(r8) :: dzsum, icefracsum, imped
+     real(r8) :: T1                       ! transmissivity of saturated portion of the soil column  (m^2/s)
+     real(r8) :: T2                       ! transmissivity for the depth below the bottom-most layer(m^2/s)
+     real(r8) :: f                        ! e-folding length representing the complexity of sediment-bedrock profile (Zeng et al., 2016) (m)
+     real(r8) :: head                     ! water head between WTD and SSH (m)
+     integer  :: jtran                    ! from jth layer to count for transmissivity
+     real(r8) :: dz_jtran, lateral_tot, lateral_layer, rous, s_y, h2osoi_left_vol          
+     !-----------------------------------------------------------------------
+
+     associate(                                                  &
+          z                  =>    col_pp%z                      , & ! Input:  [real(r8) (:,:) ] layer depth (m)
+          zi                 =>    col_pp%zi                     , & ! Input:  [real(r8) (:,:) ] interface level below a "z" level (m)
+          dz                 =>    col_pp%dz                     , & ! Input:  [real(r8) (:,:) ] layer depth (m)
+          nlev2bed           =>    col_pp%nlevbed                , & ! Input:  [integer  (:)   ] number of layers to bedrock
+          bsw                =>    soilstate_vars%bsw_col        , & ! Input:  [real(r8) (:,:) ] Clapp and Hornberger "b"
+          hksat              =>    soilstate_vars%hksat_col      , & ! Input:  [real(r8) (:,:) ] hydraulic conductivity at saturation (mm H2O /s)
+          sucsat             =>    soilstate_vars%sucsat_col     , & ! Input:  [real(r8) (:,:) ] minimum soil suction (mm)
+          watsat             =>    soilstate_vars%watsat_col     , & ! Input:  [real(r8) (:,:) ] volumetric soil water at saturation (porosity)
+          cellclay_col       =>    soilstate_vars%cellclay_col   , & ! Input:  [real(r8) (:,:) ] clay percentage
+          zwt                =>    soilhydrology_vars%zwt_col    , & ! Output: [real(r8) (:)   ] water table depth (m)
+          wa                 =>    soilhydrology_vars%wa_col     , & ! Output: [real(r8) (:)   ] water in the unconfined aquifer (mm)
+          icefrac            =>    soilhydrology_vars%icefrac_col, & ! Input:  [real(r8) (:,:) ] fraction of ice in layer
+          qflx_lnd2ocn       =>    col_wf%qflx_lnd2ocn           , & ! Output: [real(r8) (:)   ] lateral flow from lnd to ocn (mm H2O /s)
+          h2osoi_ice         =>    col_ws%h2osoi_ice             , &
+          h2osoi_liq         =>    col_ws%h2osoi_liq               & ! Output: [real(r8) (:,:) ] liquid water (kg/m2)
+          )
+
+       do fc = 1, num_hydrologyc !TODO: introduce a filter for coastline grid cells
+          c = filter_hydrologyc(fc)
+          g = col_pp%gridcell(c)
+          nlevbed = nlev2bed(c)
+
+          jwt(c) = nlevbed
+          ! allow jwt to equal zero when zwt is in top layer
+          do j = 1,nlevbed
+             if (zwt(c) <= zi(c,j)) then
+                if (zengdecker_2009_with_var_soil_thick .and. zwt(c) == zi(c,nlevbed)) then
+                   exit
+                else
+                   jwt(c) = j-1
+                   exit
+                end if
+             end if
+          enddo
+
+          jss(c) = nlevbed
+          do j = nlevbed,1,-1
+             if(ocn2lnd_vars%ssh_grc(g) <= ldomain%topo(g) - zi(c,j)) then
+                jss(c) = j
+                exit
+             end if
+          enddo
+
+          dzsum = 0._r8
+          icefracsum = 0._r8
+          do j = max(jwt(c),1), nlevbed
+             dzsum  = dzsum + dz(c,j)*1.e3_r8
+             icefracsum = icefracsum + icefrac(c,j) * dz(c,j)*1.e3_r8
+          end do
+          imped=10._r8**(-e_ice*(icefracsum/dzsum))
+
+          ! Lateral flow to ocean
+          T1 = 0._r8
+          if (col_pp%topo_slope(c) > 0.16_r8) then
+             f = 1._r8
+          else
+             f = 20._r8/(1._r8 + 125._r8*col_pp%topo_slope(c))
+          endif
+
+          if (ldomain%topo(g)-zwt(c) > ocn2lnd_vars%ssh_grc(g)) then
+             jtran = jss(c)
+             dz_jtran = ldomain%topo(g)-zi(c,jtran) - ocn2lnd_vars%ssh_grc(g)
+          else
+             jtran = jwt(c) + 1
+             dz_jtran = zi(c,jtran) - zwt(c)
+          endif
+
+          dz_jtran = max(dz_jtran, 0.0_r8)
+
+          ! Transmissivity equation from Fan et al., 2007, and 
+          if (jtran <= nlevbed) then
+             ! SSH is within the soil column
+             do j = jtran, nlevbed
+                if (j == jtran) then
+                   T1 = T1 + 1.e-3_r8*hksat(c,j)*cellclay_col(c,j)*dz_jtran
+                else
+                   T1 = T1 + 1.e-3_r8*hksat(c,j)*cellclay_col(c,j)*dz(c,j)
+                endif
+             enddo
+             T2 = 1.e-3_r8*hksat(c,nlevbed)*cellclay_col(c,nlevbed)*f
+          else
+             ! SSH or ZWT is below the soil column
+             if (ldomain%topo(g)-zwt(c) > ocn2lnd_vars%ssh_grc(g)) then
+                T2 = 1.e-3_r8*hksat(c,nlevbed)*cellclay_col(c,nlevbed)*f*exp(-((ldomain%topo(g)-zi(c,nlevbed))-ocn2lnd_vars%ssh_grc(g))/f)
+             else
+                T2 = 1.e-3_r8*hksat(c,nlevbed)*cellclay_col(c,nlevbed)*f*exp(-(zwt(c)-zi(c,nlevbed))/f)
+             endif
+          endif
+          ! positive: lnd->ocn, negative: ocn->lnd
+          if (ldomain%topo(g) - ocn2lnd_vars%ssh_grc(g) < 80._r8) then
+             head = ldomain%topo(g) - zwt(c) - ocn2lnd_vars%ssh_grc(g);
+             qflx_lnd2ocn(c) = imped*2._r8*(T1+T2)*(head)/ (ldomain%frac(g) * ldomain%area(g) * 1.e6_r8) * 1.e3_r8 ! [mm H2O/s]
+          else
+             ! Land surface is much higher than the SSH, then there is no lateral flow
+             qflx_lnd2ocn(c) = 0._r8
+          endif
+
+          !scs: use analytical expression for aquifer specific yield
+          rous = watsat(c,nlevbed) &
+               * ( 1. - (1.+1.e3*zwt(c)/sucsat(c,nlevbed))**(-1./bsw(c,nlevbed)))
+          rous=max(rous,0.02_r8)
+
+          if (jwt(c) == nlevbed) then
+          !--  water table is below the soil column  --!
+             wa(c)  = wa(c) - qflx_lnd2ocn(c)  * dtime
+             zwt(c) = zwt(c) - (qflx_lnd2ocn(c) * dtime)/1000._r8/rous
+             h2osoi_liq(c,nlevsoi) = h2osoi_liq(c,nlevsoi) + max(0._r8,(wa(c)-5000._r8))
+             wa(c)  = min(wa(c), 5000._r8)
+          else
+          !--   water table within soil layers 1-9   --!
+             lateral_tot = -qflx_lnd2ocn(c) * dtime
+             if(lateral_tot > 0._r8) then !rising water table (posive qflx_lnd2ocn)
+                do j = jwt(c)+1, 1,-1
+                   !scs: use analytical expression for specific yield
+                   s_y = watsat(c,j) &
+                        * ( 1. -  (1.+1.e3*zwt(c)/sucsat(c,j))**(-1./bsw(c,j)))
+                   s_y = max(s_y,0.02_r8)
+
+                   lateral_layer = min(lateral_tot,(s_y*(zwt(c) - zi(c,j-1))*1.e3))
+                   lateral_layer = max(lateral_layer,0._r8)
+                   h2osoi_left_vol = max(0._r8,(watsat(c,j)*dz(c,j)*1.e3_r8-h2osoi_ice(c,j)-watmin)) - &
+                                     max(0._r8,h2osoi_liq(c,j)-watmin)
+                   lateral_layer = min(lateral_layer, h2osoi_left_vol)
+
+                   h2osoi_liq(c,j) = h2osoi_liq(c,j) + lateral_layer
+                   if(s_y > 0._r8) zwt(c) = zwt(c) - lateral_layer/s_y/1000._r8
+                   lateral_tot = lateral_tot - lateral_layer
+
+                   if (lateral_tot <= 0._r8) then
+                      qflx_lnd2ocn(c) = qflx_lnd2ocn(c) + lateral_tot/dtime
+                      exit
+                   endif
+                enddo
+                if (lateral_tot > 1.e-14_r8) then
+                   qflx_lnd2ocn(c) = qflx_lnd2ocn(c) + lateral_tot/dtime
+                endif 
+
+             else ! deepening water table (negative qflx_lnd2ocn)
+                do j = jwt(c)+1, nlevbed
+                   !scs: use analytical expression for specific yield
+                   s_y = watsat(c,j) &
+                        * ( 1. -  (1.+1.e3*zwt(c)/sucsat(c,j))**(-1./bsw(c,j)))
+                   s_y = max(s_y,0.02_r8)
+
+                   lateral_layer = max(lateral_tot,-(s_y*(zi(c,j) - zwt(c))*1.e3))
+                   lateral_layer = min(lateral_layer,0._r8)
+                   h2osoi_liq(c,j) = h2osoi_liq(c,j) + lateral_layer
+
+                   lateral_tot   = lateral_tot - lateral_layer
+                   if (lateral_tot >= 0.) then
+                      exit
+                   else
+                      zwt(c) = zi(c,j)
+                   endif
+
+                enddo
+                if (lateral_tot > 0.) then
+                   zwt(c) = zwt(c) - lateral_tot/1000._r8/rous
+                endif
+                if (lateral_tot < -1.e-14_r8) then 
+                   qflx_lnd2ocn(c) = qflx_lnd2ocn(c) + lateral_tot/dtime
+                endif 
+             endif
+
+          endif
+
+       end do
+
+     end associate
+
+   end subroutine Drainage_To_OCN
 
    !-----------------------------------------------------------------------
    subroutine DrainageVSFM(bounds, num_hydrologyc, filter_hydrologyc, num_urbanc, filter_urbanc,  &
@@ -1579,7 +1984,6 @@ contains
      use elm_varpar       , only : nlevsoi, nlevgrnd, nlayer, nlayert
      use elm_varcon       , only : pondmx, tfrz, watmin,rpi, secspday, nlvic
      use column_varcon    , only : icol_roof, icol_road_imperv, icol_road_perv
-     use elm_varctl       , only : use_vsfm
      use pftvarcon        , only : rsub_top_globalmax
      !
      ! !ARGUMENTS:

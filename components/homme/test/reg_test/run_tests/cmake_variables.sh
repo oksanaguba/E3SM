@@ -4,6 +4,9 @@ HOMME_DIR=@Homme_Build_DIR@
 # The location of the baseline results
 HOMME_BASELINE_DIR=@Homme_Baseline_DIR@
 
+# Whether the tests should skip the comparison against baseline results
+HOMME_SKIP_BASELINE_COMPARE=@HOMME_SKIP_BASELINE_COMPARE@
+
 # The location of the baseline results
 HOMME_DEFAULT_BASELINE_DIR=${HOMME_DIR}/tests/baseline
 
@@ -34,8 +37,16 @@ MPI_EXEC=@USE_MPIEXEC@
 # User defined MPI options
 MPI_OPTIONS="@USE_MPI_OPTIONS@"
 
+# User defined MPI run line. This is a script that is given 'n', the number of
+# processes, as its first argument and an arbitrary number of additional
+# arguments that make up the run command. The run script must be executable.
+MPI_RUN_SCRIPT=@USE_MPI_RUN_SCRIPT@
+
 # User provided header for submission
 HOMME_Submission_Header=@HOMME_SUBMISSION_HEADER@
 
 # Machine
 HOMME_MACHINE=@HOMME_MACHINE@
+
+# Per-test timeout in seconds for runTestsStd() (0 = no limit)
+HOMME_TESTING_TIMELIMIT=@HOMME_TESTING_TIMELIMIT@

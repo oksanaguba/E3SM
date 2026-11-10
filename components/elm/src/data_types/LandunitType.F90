@@ -18,7 +18,6 @@ module LandunitType
   !
   use shr_kind_mod   , only : r8 => shr_kind_r8
   use elm_varcon     , only : ispval, spval
-  use shr_infnan_mod , only : nan => shr_infnan_nan, assignment(=)
   !
   ! !PUBLIC TYPES:
   implicit none
@@ -48,6 +47,8 @@ module LandunitType
      logical , pointer :: urbpoi       (:) => null() ! true=>urban point
      logical , pointer :: glcmecpoi    (:) => null() ! true=>glacier_mec point
      logical , pointer :: active       (:) => null() ! true=>do computations on this landunit
+     logical , pointer :: ispolygon    (:) => null() ! true=>is polygonal tundra
+     integer , pointer :: polygontype  (:) => null() ! ice wedge polygon initial condition (LCP, FCP, or HCP)
 
      ! urban properties
      real(r8), pointer :: canyon_hwr   (:) => null() ! urban landunit canyon height to width ratio (-)
@@ -80,9 +81,9 @@ contains
 
     ! The following is set in InitGridCellsMod
     allocate(this%gridcell     (begl:endl)); this%gridcell  (:) = ispval
-    allocate(this%wtgcell      (begl:endl)); this%wtgcell   (:) = nan
+    allocate(this%wtgcell      (begl:endl)); this%wtgcell   (:) = spval
     allocate(this%topounit     (begl:endl)); this%topounit  (:) = ispval
-    allocate(this%wttopounit   (begl:endl)); this%wttopounit(:) = nan
+    allocate(this%wttopounit   (begl:endl)); this%wttopounit(:) = spval
     allocate(this%coli         (begl:endl)); this%coli      (:) = ispval
     allocate(this%colf         (begl:endl)); this%colf      (:) = ispval
     allocate(this%ncolumns     (begl:endl)); this%ncolumns  (:) = ispval
@@ -94,17 +95,19 @@ contains
     allocate(this%lakpoi       (begl:endl)); this%lakpoi    (:) = .false.
     allocate(this%urbpoi       (begl:endl)); this%urbpoi    (:) = .false.
     allocate(this%glcmecpoi    (begl:endl)); this%glcmecpoi (:) = .false.
+    allocate(this%ispolygon    (begl:endl)); this%ispolygon (:) = .false.
+    allocate(this%polygontype  (begl:endl)); this%polygontype(:) = ispval
 
     ! The following is initialized in routine setActive in module reweightMod
     allocate(this%active       (begl:endl))
 
     ! The following is set in routine urbanparams_vars%Init in module UrbanParamsMod
-    allocate(this%canyon_hwr   (begl:endl)); this%canyon_hwr   (:) = nan
-    allocate(this%wtroad_perv  (begl:endl)); this%wtroad_perv  (:) = nan
-    allocate(this%wtlunit_roof (begl:endl)); this%wtlunit_roof (:) = nan
-    allocate(this%ht_roof      (begl:endl)); this%ht_roof      (:) = nan
-    allocate(this%z_0_town     (begl:endl)); this%z_0_town     (:) = nan
-    allocate(this%z_d_town     (begl:endl)); this%z_d_town     (:) = nan
+    allocate(this%canyon_hwr   (begl:endl)); this%canyon_hwr   (:) = spval
+    allocate(this%wtroad_perv  (begl:endl)); this%wtroad_perv  (:) = spval
+    allocate(this%wtlunit_roof (begl:endl)); this%wtlunit_roof (:) = spval
+    allocate(this%ht_roof      (begl:endl)); this%ht_roof      (:) = spval
+    allocate(this%z_0_town     (begl:endl)); this%z_0_town     (:) = spval
+    allocate(this%z_d_town     (begl:endl)); this%z_d_town     (:) = spval
 
   end subroutine lun_pp_init
 
@@ -130,6 +133,8 @@ contains
     deallocate(this%lakpoi       )
     deallocate(this%urbpoi       )
     deallocate(this%glcmecpoi    )
+    deallocate(this%ispolygon    )
+    deallocate(this%polygontype  )
     deallocate(this%active       )
     deallocate(this%canyon_hwr   )
     deallocate(this%wtroad_perv  )

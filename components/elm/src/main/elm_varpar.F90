@@ -6,11 +6,11 @@ module elm_varpar
   !
   ! !USES:
   use shr_kind_mod , only: r8 => shr_kind_r8
-  use elm_varctl   , only: use_extralakelayers, use_vertsoilc, use_crop, use_betr
+  use elm_varctl   , only: use_extralakelayers, use_vertsoilc, use_crop
   use elm_varctl   , only: use_century_decomp, use_c13, use_c14, use_fates
   use elm_varctl   , only: iulog, create_crop_landunit, irrigate
   use elm_varctl   , only: use_vichydro
-  use elm_varctl   , only: use_extrasnowlayers
+  use elm_varctl   , only: use_extrasnowlayers, iac_present
 
   !
   ! !PUBLIC TYPES:
@@ -20,6 +20,9 @@ module elm_varpar
   logical, public :: more_vertlayers = .false. ! true => run with more vertical soil layers
 
   ! Note - model resolution is read in from the surface dataset
+  integer, parameter :: numharvest = 5 ! number of harvest types
+  integer, parameter :: iac_npft = 17  ! number of veg pfts (index 0 for bare ground)
+  integer, parameter :: iac_nharvest = 5 ! number of harvest types in ehc
 
   integer, parameter :: nlev_equalspace   = 15
   integer, parameter :: toplev_equalspace =  6
@@ -32,8 +35,6 @@ module elm_varpar
   integer            :: nlevdecomp            ! number of biogeochemically active soil layers
   integer            :: nlevdecomp_full       ! number of biogeochemical layers 
                                               ! (includes lower layers that are biogeochemically inactive)
-  integer            :: nlevtrc_soil
-  integer            :: nlevtrc_full
   
   integer            :: nlevsno               ! maximum number of snow layers
   integer, parameter :: ngases      =   3     ! CH4, O2, & CO2
@@ -48,25 +49,46 @@ module elm_varpar
   integer, parameter :: ndst        =   4     ! number of dust size classes (BGC only)
   integer, parameter :: dst_src_nbr =   3     ! number of size distns in src soil (BGC only)
   integer, parameter :: sz_nbr      = 200     ! number of sub-grid bins in large bin of dust size distribution (BGC only)
-  integer, parameter :: mxpft       =  50     ! maximum number of PFT's for any mode;
+  integer :: mxpft                  =  50     ! maximum number of PFT's for any mode;
+                                              ! can be modified from reading pft-physiology in 'main/pftvarcon.F90:pftconrd'
   ! FIX(RF,032414) might we set some of these automatically from reading pft-physiology?
   integer, parameter :: numveg      =  16     ! number of veg types (without specific crop)
   integer, parameter :: nlayer      =   3     ! number of VIC soil layer --Added by AWang
   integer            :: nlayert               ! number of VIC soil layer + 3 lower thermal layers
 
-  integer :: numpft      = mxpft   ! actual # of patches (without bare), a total that spans LUs
+  integer :: numpft      =  50     ! actual # of patches (without bare), a total that spans LUs
   integer :: numcft      =  36     ! actual # of crops
   logical :: crop_prog   = .true.  ! If prognostic crops is turned on
   integer :: maxpatch_urb= 5       ! max number of urban patches (columns) in urban landunit
 
   integer :: mxpft_nc            ! maximum number of PFT's when use_crop=False;
 
-  integer :: maxpatch_pft        ! max number of plant functional types in naturally vegetated landunit (namelist setting)
+  integer :: maxpatch_pft        ! max number of plant functional types in naturally vegetated landunit (namelist setting: maxpft)
+                                 ! This number must be exactly matched with 'natpft' in surfdata.nc
 
   integer, parameter :: nsoilorder  =  15     ! number of soil orders
 
   integer, parameter :: nlevslp = 11          ! number of slope percentile levels
 
+  !   Parameters that define the thickness of the soil layers. By default, we define the 
+  ! mid-point of the soil layers as:
+  !
+  !    zsoi(j) = scalez * ( exp( zecoeff * (j - 0.5_r8) ) - 1.0_r8 )
+  !
+  !   The default values scalez = 0.025_r8 and zecoeff = 0.50_r8 trace back to the original
+  ! ELM configuration, but depending on the specific needs by the user, these can be
+  ! modified.
+  real(r8), parameter :: scalez  = 0.025_r8
+  real(r8), parameter :: zecoeff = 0.50_r8
+
+  integer, parameter :: ndir_horizon_angle = 8    ! number of directions for horizon angle
+
+  ! These strings define the elm-fates nutrient coupling, i.e. which chemical species
+  ! are cycled between the two, see corresponding values for fates_parteh_mode:
+  ! bld/namelist_files/namelist_definition.xml
+  character(len=256), public, parameter :: elmfates_carbon_only = 'carbon_only'
+  character(len=256), public, parameter :: elmfates_cnp         = 'cnp'
+  
   ! constants for decomposition cascade
 
   integer :: i_met_lit 
@@ -126,6 +148,9 @@ contains
   !------------------------------------------------------------------------------
   
   subroutine elm_varpar_init()
+
+    use shr_sys_mod , only: shr_sys_abort ! cannot use endrun here due to circular dependency
+
     !
     ! !DESCRIPTION:
     ! Initialize module variables 
@@ -217,10 +242,6 @@ contains
        nlevdecomp_full = 1
     end if
     
-    nlevtrc_full   = nlevsoi
-    if(use_betr) then
-      nlevtrc_soil = nlevsoi
-    endif
 
     if (.not. use_extralakelayers) then
        nlevlak     =  10     ! number of lake layers
@@ -244,9 +265,20 @@ contains
        i_cwd = 4
     end if
 
-    
+   ! Consistency checks for EHC coupling
+   if (iac_present) then
+      ! EHC number of PFTs consistency checks
+      if (mxpft_nc + 1 <= iac_npft) then
+         write(iulog,*) 'ERROR: mxpft_nc + 1 = ', mxpft_nc + 1, ' is less than or equal to iac_npft = ', iac_npft
+         call shr_sys_abort('ERROR: mxpft_nc + 1 should be greater than iac_npft')
+      endif
 
-
+      !EHC number of harvests consistency checks
+      if(iac_nharvest .ne. numharvest) then
+         write(iulog,*) 'ERROR: iac_nharvest = ', iac_nharvest, ' is not equal to numharvest = ', numharvest
+         call shr_sys_abort('ERROR: iac_nharvest should be equal to numharvest')
+      endif
+   endif
   end subroutine elm_varpar_init
 
 end module elm_varpar

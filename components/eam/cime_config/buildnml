@@ -11,7 +11,7 @@ sys.path.append(os.path.join(_CIMEROOT, "scripts", "Tools"))
 
 from standard_script_setup import *
 from CIME.case import Case
-from CIME.utils import expect, run_cmd_no_fail, safe_copy
+from CIME.utils import expect, run_cmd_no_fail, safe_copy, SharedArea
 from CIME.buildnml import create_namelist_infile, parse_input
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,7 @@ def buildnml(case, caseroot, compname):
     ncpl_base_period	= case.get_value("NCPL_BASE_PERIOD")
     nthrds_atm		= case.get_value("NTHRDS_ATM")
     ntasks_atm		= case.get_value("NTASKS_ATM")
+    ntasks          = case.get_value("NTASKS_PER_INST_ATM")
     ninst_atm		= case.get_value("NINST_ATM")
     pts_mode		= case.get_value("PTS_MODE")
     rundir		= case.get_value("RUNDIR")
@@ -60,6 +61,11 @@ def buildnml(case, caseroot, compname):
     eamconf_dir = os.path.join(casebuild, "eamconf")
 
     if not os.path.isdir(eamconf_dir): os.mkdir(eamconf_dir)
+
+    # Coupler and surface components now required to accept gustiness when EAM
+    # is used as the atmosphere model, unless SCREAM physics is used.
+    if not (atm_gustiness or "-DSCREAM" in cam_config_opts):
+        sys.exit("\n *** STOP: EAM requires ATM_SUPPLIES_GUSTINESS=TRUE. ***\n")
 
     #--------------------------------------------------------------------
     # Invoke eam configure - output will go in $CASEBUILD/eamconf
@@ -92,6 +98,7 @@ def buildnml(case, caseroot, compname):
         comp = ""
         if comp_interface == "mct":  comp = "mct"
         if comp_interface == "esmf": comp = "esmf"
+        if comp_interface == "moab": comp = "moab"
 
         cam_lib_dirs = "-cosp_libdir {}/atm/obj/cosp".format(exeroot) if "cosp" in cam_config_opts else ""
 
@@ -175,7 +182,6 @@ def buildnml(case, caseroot, compname):
             logger.warning("WARNING: {} is being used".format(ncpl_base_period))
 
         start_ymd = run_startdate.replace("-", "")
-        ntasks = ntasks_atm / ninst_atm
 
         if atm_flux_method == 'implicit_stress':
             linearize_pbl_winds = True
@@ -191,7 +197,6 @@ def buildnml(case, caseroot, compname):
         if cam_branch_file: infile_text += " cam_branch_file = {} \n".format(cam_branch_file)
         if debug:           infile_text += " state_debug_checks = .true. \n"
         if linearize_pbl_winds: infile_text += " linearize_pbl_winds = .true. \n"
-        if atm_gustiness: infile_text += " export_gustiness = .true. \n"
 
         create_namelist_infile(case,
                                "{}/user_nl_eam{}".format(caseroot, inst_string),

@@ -18,7 +18,7 @@ module prim_advance_mod
   use control_mod,        only: dcmip16_mu, dcmip16_mu_s, hypervis_order, hypervis_subcycle,&
     integration, nu, nu_div, nu_p, nu_s, nu_top, prescribed_wind, qsplit, rsplit, test_case,&
     theta_hydrostatic_mode, tstep_type, theta_advect_form, hypervis_subcycle_tom, pgrad_correction,&
-    vtheta_thresh
+    vtheta_thresh, dp3d_thresh, laplace_scaling
   use derivative_mod,     only: derivative_t, divergence_sphere, gradient_sphere, laplace_sphere_wk,&
     laplace_z, vorticity_sphere, vlaplace_sphere_wk 
   use derivative_mod,     only: subcell_div_fluxes, subcell_dss_fluxes
@@ -50,6 +50,10 @@ module prim_advance_mod
     use, intrinsic :: iso_c_binding
 #endif
  
+#ifdef HOMMEXX_BFB_TESTING
+  use bfb_mod,        only: cxx_log
+#endif
+
   implicit none
   private
   save
@@ -67,8 +71,6 @@ contains
     type (parallel_t) :: par
     type (element_t), intent(inout), target   :: elem(:)
     character(len=*)    , intent(in) :: integration
-    integer :: i
-    integer :: ie
 
 
   end subroutine prim_advance_init1
@@ -96,13 +98,13 @@ contains
     integer              , intent(in)            :: nete
     logical,               intent(in)            :: compute_diagnostics
 
-    real (kind=real_kind) :: dt2, time, dt_vis, x, eta_ave_w
-    real (kind=real_kind) :: itertol,a1,a2,a3,a4,a5,a6,ahat1,ahat2
-    real (kind=real_kind) :: ahat3,ahat4,ahat5,ahat6,dhat1,dhat2,dhat3,dhat4
-    real (kind=real_kind) ::  gamma,delta,ap,aphat,dhat5,offcenter
+    real (kind=real_kind) :: dt2, dt_vis, eta_ave_w
+    real (kind=real_kind) :: itertol,a1,a2,a3
+    real (kind=real_kind) :: dhat3
+    real (kind=real_kind) :: aphat,offcenter
 
-    integer :: ie,nm1,n0,np1,nstep,qsplit_stage,k
-    integer :: n,i,j,maxiter
+    integer :: ie,nm1,n0,np1,nstep
+    integer :: maxiter
 
 #ifdef ARKODE 
     type(parameter_list)    :: arkode_parameters
@@ -563,7 +565,7 @@ contains
 
   ! local
   real (kind=real_kind) :: eta_ave_w  ! weighting for mean flux terms
-  integer :: k2,k,kptr,i,j,ie,ic,nt,nlyr_tot,nlyr_tom,ssize
+  integer :: k,kptr,ie,ic,nt,nlyr_tot,nlyr_tom,ssize
   real (kind=real_kind), dimension(np,np,2,nlev,nets:nete)      :: vtens
   real (kind=real_kind), dimension(np,np,nlev,4,nets:nete)      :: stens  ! dp3d,theta,w,phi
 
@@ -577,14 +579,16 @@ contains
   real (kind=real_kind), dimension(np,np,4) :: lap_s  ! dp3d,theta,w,phi
   real (kind=real_kind), dimension(np,np,2) :: lap_v
   real (kind=real_kind) :: exner0(nlev)
-  real (kind=real_kind) :: heating(np,np,nlev)
+#if 0
   real (kind=real_kind) :: exner(np,np,nlev)
-  real (kind=real_kind) :: pnh(np,np,nlevp)    
   real (kind=real_kind) :: temp(np,np,nlev)    
+  real (kind=real_kind) :: pnh(np,np,nlevp)    
   real (kind=real_kind) :: temp_i(np,np,nlevp)    
+  real (kind=real_kind) :: heating(np,np,nlev)
+  integer :: k2
+#endif
   real (kind=real_kind) :: dt,xfac
 
-  integer :: l1p,l2p,l1n,l2n,l
   call t_startf('advance_hypervis')
 
 #ifdef HOMMEXX_BFB_TESTING
@@ -781,11 +785,11 @@ contains
      do ie=nets,nete
         do k=1,nlev_tom
            ! add regular diffusion near top
-           lap_s(:,:,1)=laplace_sphere_wk(elem(ie)%state%dp3d     (:,:,k,nt),deriv,elem(ie),var_coef=.false.)
-           lap_s(:,:,2)=laplace_sphere_wk(elem(ie)%state%vtheta_dp(:,:,k,nt),deriv,elem(ie),var_coef=.false.)
-           lap_s(:,:,3)=laplace_sphere_wk(elem(ie)%state%w_i      (:,:,k,nt),deriv,elem(ie),var_coef=.false.)
-           lap_s(:,:,4)=laplace_sphere_wk(elem(ie)%state%phinh_i  (:,:,k,nt),deriv,elem(ie),var_coef=.false.)
-           lap_v=vlaplace_sphere_wk(elem(ie)%state%v            (:,:,:,k,nt),deriv,elem(ie),var_coef=.false.)
+           lap_s(:,:,1)=laplace_sphere_wk(elem(ie)%state%dp3d     (:,:,k,nt),deriv,elem(ie),var_coef=(laplace_scaling>0),tensor=elem(ie)%tensorVisc_2)
+           lap_s(:,:,2)=laplace_sphere_wk(elem(ie)%state%vtheta_dp(:,:,k,nt),deriv,elem(ie),var_coef=(laplace_scaling>0),tensor=elem(ie)%tensorVisc_2)
+           lap_s(:,:,3)=laplace_sphere_wk(elem(ie)%state%w_i      (:,:,k,nt),deriv,elem(ie),var_coef=(laplace_scaling>0),tensor=elem(ie)%tensorVisc_2)
+           lap_s(:,:,4)=laplace_sphere_wk(elem(ie)%state%phinh_i  (:,:,k,nt),deriv,elem(ie),var_coef=(laplace_scaling>0),tensor=elem(ie)%tensorVisc_2)
+           lap_v=vlaplace_sphere_wk(elem(ie)%state%v            (:,:,:,k,nt),deriv,elem(ie),var_coef=(laplace_scaling>0),tensor=elem(ie)%tensorVisc_2)
            
            xfac=dt*nu_scale_top(k)*nu_top
 
@@ -1060,6 +1064,7 @@ contains
   real (kind=real_kind) :: eta_dot_dpdn(np,np,nlevp)  ! vertical velocity at interfaces
   real (kind=real_kind) :: KE(np,np,nlev)             ! Kinetic energy
   real (kind=real_kind) :: gradexner(np,np,2,nlev)    ! grad(p^kappa)
+  real (kind=real_kind) :: gradpterm(np,np,2,nlev)    ! gradp term in momentum equation
   real (kind=real_kind) :: gradphinh_i(np,np,2,nlevp) ! gradphi at interfaces
   real (kind=real_kind) :: mgrad(np,np,2,nlev)        ! gradphi metric term at cell centers
   real (kind=real_kind) :: gradKE(np,np,2,nlev)       ! grad(0.5 u^T u )
@@ -1067,7 +1072,6 @@ contains
 
   real (kind=real_kind) :: gradw_i(np,np,2,nlevp)
   real (kind=real_kind) :: v_gradw_i(np,np,nlevp)     
-  real (kind=real_kind) :: v_gradtheta(np,np,nlev)     
   real (kind=real_kind) :: v_theta(np,np,2,nlev)
   real (kind=real_kind) :: div_v_theta(np,np,nlev)
   real (kind=real_kind) :: v_gradphinh_i(np,np,nlevp) ! v*gradphi at interfaces
@@ -1080,8 +1084,6 @@ contains
 
   real (kind=real_kind) :: vtens1(np,np,nlev)
   real (kind=real_kind) :: vtens2(np,np,nlev)
-  real (kind=real_kind) :: stens(np,np,nlev,3) ! tendencies w,phi,theta
-                                               ! w,phi tendencies not computed at nlevp
   real (kind=real_kind) :: w_tens(np,np,nlevp)  ! need to update w at surface as well
   real (kind=real_kind) :: theta_tens(np,np,nlev)
   real (kind=real_kind) :: phi_tens(np,np,nlevp)
@@ -1094,7 +1096,11 @@ contains
   real (kind=real_kind) ::  temp(np,np,nlev)
   real (kind=real_kind) ::  vtemp(np,np,2,nlev)       ! generic gradient storage
   real (kind=real_kind), dimension(np,np) :: sdot_sum ! temporary field
-  real (kind=real_kind) ::  v1,v2,w,d_eta_dot_dpdn_dn, T0
+  real (kind=real_kind) ::  v1,v2, T0
+
+#ifdef ENERGY_DIAGNOSTICS
+  real (kind=real_kind) ::  d_eta_dot_dpdn_dn
+#endif
   integer :: i,j,k,kptr,ie, nlyr_tot
 
   call t_startf('compute_andor_apply_rhs')
@@ -1368,12 +1374,23 @@ contains
            v_theta(:,:,1,k)=elem(ie)%state%v(:,:,1,k,n0)*vtheta_dp(:,:,k)
            v_theta(:,:,2,k)=elem(ie)%state%v(:,:,2,k,n0)*vtheta_dp(:,:,k)
            div_v_theta(:,:,k)=divergence_sphere(v_theta(:,:,:,k),deriv,elem(ie))
-        else
+        else if (theta_advect_form==1) then
            ! alternate form, non-conservative, better HS topography results
            v_theta(:,:,:,k) = gradient_sphere(vtheta(:,:,k),deriv,elem(ie)%Dinv)
            div_v_theta(:,:,k)=vtheta(:,:,k)*divdp(:,:,k) + &
                 dp3d(:,:,k)*elem(ie)%state%v(:,:,1,k,n0)*v_theta(:,:,1,k) + &
                 dp3d(:,:,k)*elem(ie)%state%v(:,:,2,k,n0)*v_theta(:,:,2,k) 
+        else
+           v_theta(:,:,1,k)=elem(ie)%state%v(:,:,1,k,n0)*vtheta_dp(:,:,k)
+           v_theta(:,:,2,k)=elem(ie)%state%v(:,:,2,k,n0)*vtheta_dp(:,:,k)
+           div_v_theta(:,:,k)=divergence_sphere(v_theta(:,:,:,k),deriv,elem(ie))/2
+
+           v_theta(:,:,:,k) = gradient_sphere(vtheta(:,:,k),deriv,elem(ie)%Dinv)
+           div_v_theta(:,:,k)=div_v_theta(:,:,k) + (  &
+                vtheta(:,:,k)*divdp(:,:,k) + &
+                dp3d(:,:,k)*elem(ie)%state%v(:,:,1,k,n0)*v_theta(:,:,1,k) + &
+                dp3d(:,:,k)*elem(ie)%state%v(:,:,2,k,n0)*v_theta(:,:,2,k)  ) /2
+
         endif
 #ifdef HOMMEXX_BFB_TESTING
         theta_tens(:,:,k)=(-theta_vadv(:,:,k)-div_v_theta(:,:,k))
@@ -1393,6 +1410,9 @@ contains
         KE(:,:,k) = ( elem(ie)%state%v(:,:,1,k,n0)**2 + elem(ie)%state%v(:,:,2,k,n0)**2)/2
         gradKE(:,:,:,k) = gradient_sphere(KE(:,:,k),deriv,elem(ie)%Dinv)
         gradexner(:,:,:,k) = gradient_sphere(exner(:,:,k),deriv,elem(ie)%Dinv)
+
+! Some experimental calculations for gradexner, leaving here to document.
+! TODO: Clean up and remove from codebase if not used.
 #if 0
         ! another form: (good results in dcmip2012 test2.0)  max=0.195
         ! but bad results with HS topo
@@ -1421,6 +1441,17 @@ contains
         gradexner(:,:,2,k) = gradexner(:,:,2,k)*(Rgas/Cp)*exner(:,:,k)/pnh(:,:,k)
 #endif
 
+        gradpterm(:,:,1,k) = Cp*vtheta(:,:,k)*gradexner(:,:,1,k)
+        gradpterm(:,:,2,k) = Cp*vtheta(:,:,k)*gradexner(:,:,2,k)
+
+        if (theta_advect_form==2) then
+           ! split form. average of default and above
+           vtemp(:,:,:,k) = gradient_sphere(vtheta(:,:,k)*exner(:,:,k),deriv,elem(ie)%Dinv)
+           v_theta(:,:,:,k) = gradient_sphere(vtheta(:,:,k),deriv,elem(ie)%Dinv)
+           gradpterm(:,:,1,k) = (gradpterm(:,:,1,k) + Cp*(vtemp(:,:,1,k)-exner(:,:,k)*v_theta(:,:,1,k)))/2
+           gradpterm(:,:,2,k) = (gradpterm(:,:,2,k) + Cp*(vtemp(:,:,2,k)-exner(:,:,k)*v_theta(:,:,2,k)))/2
+        endif
+
         ! special averaging of dpnh/dpi grad(phi) for E conservation
         mgrad(:,:,1,k) = (dpnh_dp_i(:,:,k)*gradphinh_i(:,:,1,k)+ &
               dpnh_dp_i(:,:,k+1)*gradphinh_i(:,:,1,k+1))/2
@@ -1429,11 +1460,22 @@ contains
 
         if (pgrad_correction==1) then
            T0 = TREF-tref_lapse_rate*TREF*Cp/g     ! = 97  
+#ifdef HOMMEXX_BFB_TESTING
+           ! For BFB testing, calculate log(exner) using cxx_log()
+           ! and then call gradient sphere.
+           do j=1,np
+             do i=1,np
+               temp(i,j,k) = cxx_log(exner(i,j,k))
+             end do
+           end do
+
+           vtemp(:,:,:,k)=gradient_sphere(temp(:,:,k),deriv,elem(ie)%Dinv)
+#else
            vtemp(:,:,:,k)=gradient_sphere(log(exner(:,:,k)),deriv,elem(ie)%Dinv)
+#endif
            mgrad(:,:,1,k)=mgrad(:,:,1,k) + Cp*T0*(vtemp(:,:,1,k)-gradexner(:,:,1,k)/exner(:,:,k))
            mgrad(:,:,2,k)=mgrad(:,:,2,k) + Cp*T0*(vtemp(:,:,2,k)-gradexner(:,:,2,k)/exner(:,:,k))
         endif
-
 
         do j=1,np
            do i=1,np
@@ -1441,12 +1483,12 @@ contains
               v2     = elem(ie)%state%v(i,j,2,k,n0)
 
 #ifdef HOMMEXX_BFB_TESTING
-              vtens1(i,j,k) = ( - Cp*vtheta(i,j,k)*gradexner(i,j,1,k) &
+              vtens1(i,j,k) = ( - gradpterm(i,j,1,k) &
                                 - (v_vadv(i,j,1,k) + gradKE(i,j,1,k)) &
                                 - (mgrad(i,j,1,k) + wvor(i,j,1,k))    &
                                 + v2*(elem(ie)%fcor(i,j) + vort(i,j,k)) )
 
-              vtens2(i,j,k) = ( - Cp*vtheta(i,j,k)*gradexner(i,j,2,k) &
+              vtens2(i,j,k) = ( - gradpterm(i,j,2,k) &
                                 - (v_vadv(i,j,2,k) + gradKE(i,j,2,k)) &
                                 - (mgrad(i,j,2,k) + wvor(i,j,2,k))    &
                                 - v1*(elem(ie)%fcor(i,j) + vort(i,j,k)) )
@@ -1454,14 +1496,14 @@ contains
               vtens1(i,j,k) = (-v_vadv(i,j,1,k) &
                    + v2*(elem(ie)%fcor(i,j) + vort(i,j,k))        &
                    - gradKE(i,j,1,k) - mgrad(i,j,1,k) &
-                  -Cp*vtheta(i,j,k)*gradexner(i,j,1,k)&
+                  -gradpterm(i,j,1,k)&
                   -wvor(i,j,1,k) )*scale1
 
 
               vtens2(i,j,k) = (-v_vadv(i,j,2,k) &
                    - v1*(elem(ie)%fcor(i,j) + vort(i,j,k)) &
                    - gradKE(i,j,2,k) - mgrad(i,j,2,k) &
-                  -Cp*vtheta(i,j,k)*gradexner(i,j,2,k) &
+                  -gradpterm(i,j,2,k) &
                   -wvor(i,j,2,k) )*scale1
 #endif
            end do
@@ -1569,9 +1611,9 @@ contains
                
                !  Form T01
                elem(ie)%accum%T01(i,j)=elem(ie)%accum%T01(i,j)               &
-                    -(Cp*elem(ie)%state%vtheta_dp(i,j,k,n0))                       &
-                    *(gradexner(i,j,1,k)*elem(ie)%state%v(i,j,1,k,n0) +           &
-                    gradexner(i,j,2,k)*elem(ie)%state%v(i,j,2,k,n0))              
+                    -(elem(ie)%state%dp3d(i,j,k,n0))                       &
+                    *(gradpterm(i,j,1,k)*elem(ie)%state%v(i,j,1,k,n0) +           &
+                    gradpterm(i,j,2,k)*elem(ie)%state%v(i,j,2,k,n0))              
                !  Form S1 
                elem(ie)%accum%S1(i,j)=elem(ie)%accum%S1(i,j)                 &
                     -Cp*exner(i,j,k)*div_v_theta(i,j,k)
@@ -1796,7 +1838,6 @@ contains
   ! local
   real (kind=real_kind) :: Qcol(nlev)
   real (kind=real_kind) :: mass,mass_new
-  real (kind=real_kind) :: dp3d_thresh=.125
   logical :: warn
   integer i,j,k
 

@@ -45,6 +45,7 @@ module li_mask
    integer, parameter :: li_mask_ValueAlbanyMarginNeighbor  = 128  ! This the first cell beyond the last active albany cell
    integer, parameter :: li_mask_ValueGroundingLine         = 256
       !< This is grounded cell that has a floating neighbor, or vertex/edge on that boundary
+   integer, parameter :: li_mask_ValueDomainBoundary        = 512
 
    !--------------------------------------------------------------------
    !
@@ -143,7 +144,18 @@ module li_mask
       module procedure li_mask_is_grounding_line_logout_0d
    end interface
 
-   !--------------------------------------------------------------------
+
+   interface li_mask_is_boundary
+      module procedure li_mask_is_boundary_logout_1d
+      module procedure li_mask_is_boundary_logout_0d
+   end interface
+
+
+   interface li_mask_is_boundary_int
+      module procedure li_mask_is_boundary_intout_1d
+      module procedure li_mask_is_boundary_intout_0d
+   end interface   
+!--------------------------------------------------------------------
    !
    ! Private module variables
    !
@@ -294,10 +306,10 @@ contains
       logical :: isMargin
       logical :: isAlbanyMarginNeighbor
       logical :: aCellOnVertexHasIce, aCellOnVertexHasNoIce, aCellOnVertexHasDynamicIce, aCellOnVertexHasNoDynamicIce, &
-         aCellOnVertexIsFloating, aCellOnVertexIsAlbanyActive
+         aCellOnVertexIsFloating, aCellOnVertexIsFloatingAndDynamic, aCellOnVertexIsAlbanyActive, aCellOnVertexIsDomainBoundary
       logical :: aCellOnVertexIsGrounded
       logical :: aCellOnEdgeHasIce, aCellOnEdgeHasNoIce, aCellOnEdgeHasDynamicIce, aCellOnEdgeHasNoDynamicIce, &
-         aCellOnEdgeIsFloating
+         aCellOnEdgeIsFloating, aCellOnEdgeIsFloatingAndDynamic, aCellOnEdgeIsDomainBoundary
       logical :: aCellOnEdgeIsGrounded
       logical :: aCellOnEdgeIsOpenOcean
       integer :: numCellsOnVertex
@@ -342,7 +354,7 @@ contains
       ! ====
       ! Calculate cellMask values===========================
       ! ====
-
+      !call mpas_log_write("Updating masks")  ! Disabled to avoid excessive logging from shared routine
       !call mpas_timer_start('calculate mask cell')
       ! Set mask to 0 everywhere, but need to preserve bits the initial ice extent bit
       do i=1, nCells
@@ -455,18 +467,32 @@ contains
       endif
 
       ! Identify the grounding line
-      ! For a cell, we define the GL as a grounded cell with ice with at least one neighbor with floating ice or open ocean
+      ! For a cell, we define the GL as a grounded cell with ice with at least one dynamic floating neighbor
+      ! Note that this is a different definition that prior to Oct 2022. Earlier
+      ! defined the grounding line as a grounded cell with at least one neighbor
+      ! that was floating or open ocean, which caused issues with calculating
+      ! mass budgets at grounded marine margins.
       do i=1,nCells
           if (li_mask_is_grounded_ice(cellMask(i))) then  ! only need to check grounded cells
-              do j=1,nEdgesOnCell(i) ! Check if any neighbors are floating or open ocean
+              do j=1,nEdgesOnCell(i) ! Check if any neighbors are floating dynamic ice
                  iCellNeighbor = cellsOnCell(j,i)
-                 if (li_mask_is_floating_ice(cellMask(iCellNeighbor)) .or. &
-                   ((bedTopography(iCellNeighbor) < config_sea_level) .and. (.not. li_mask_is_ice(cellMask(iCellNeighbor)))) ) then
+                 if ( li_mask_is_floating_ice(cellMask(iCellNeighbor)) .and. &
+                      li_mask_is_dynamic_ice(cellMask(iCellNeighbor)) ) then
                     cellMask(i) = ior(cellMask(i), li_mask_ValueGroundingLine)
+                    exit  ! if we found a floating neighbor, no need to look at additional neighbors
                  endif
-                 cycle  ! no need to look at additional neighbors
               enddo
           endif
+      enddo
+
+      !identify domain boundaries
+      do i=1,nCells
+          do j=1,nEdgesOnCell(i)
+             iCellNeighbor = cellsOnCell(j,i)
+             if (iCellNeighbor == nCells+1) then
+                cellMask(i) = ior(cellMask(i), li_mask_ValueDomainBoundary)
+             endif
+          enddo
       enddo
 
       !call mpas_timer_stop('calculate mask cell')
@@ -485,7 +511,8 @@ contains
       !       cells (i.e., the cells exist in the mesh).  This allows external dycores to use the
       !       vertexMask to get information about triangles in the Delaunay triangulation.
       !       (This is done in a way which does not assume vertexMask==3.)
-      ! Bit: GL is a vertex with at least one neighboring cell grounded ice and at least one neighboring cell floating ice
+      ! Bit: GL is a vertex with at least one neighboring cell grounded ice and at least one neighboring cell dynamic floating ice
+      !      Note: this definition was changed Oct 2022 from one cell grounded and one cell floating
 
       !call mpas_timer_start('calculate mask vertex')
 
@@ -497,6 +524,8 @@ contains
           aCellOnVertexHasNoDynamicIce = .false.
           aCellOnVertexIsFloating = .false.
           aCellOnVertexIsGrounded = .false.
+          aCellOnVertexIsFloatingAndDynamic = .false.
+          aCellOnVertexIsDomainBoundary = .false.
           do j = 1, vertexDegree  ! vertexDegree is usually 3 (e.g. CVT mesh) but could be something else (e.g. 4 for quad mesh)
               iCell = cellsOnVertex(j,i)
               aCellOnVertexHasIce = (aCellOnVertexHasIce .or. li_mask_is_ice(cellMask(iCell)))
@@ -504,8 +533,13 @@ contains
               aCellOnVertexHasDynamicIce = (aCellOnVertexHasDynamicIce .or. li_mask_is_dynamic_ice(cellMask(iCell)))
               aCellOnVertexHasNoDynamicIce = (aCellOnVertexHasNoDynamicIce .or. (.not. (li_mask_is_dynamic_ice(cellMask(iCell)))))
               aCellOnVertexIsFloating = (aCellOnVertexIsFloating .or. li_mask_is_floating_ice(cellMask(iCell)))
+              aCellOnVertexIsFloatingAndDynamic = ( aCellOnVertexIsFloatingAndDynamic .or. &
+                                                   (li_mask_is_floating_ice(cellMask(iCell)) .and. &
+                                                    li_mask_is_dynamic_ice(cellMask(iCell))) )
               aCellOnVertexIsGrounded = (aCellOnVertexIsGrounded .or. li_mask_is_grounded_ice(cellMask(iCell)))
+              aCellOnVertexIsDomainBoundary = (aCellOnVertexIsDomainBoundary .or. li_mask_is_boundary(cellMask(iCell)))
           end do
+
           if (aCellOnVertexHasIce) then
              vertexMask(i) = ior(vertexMask(i), li_mask_ValueIce)
           endif
@@ -515,7 +549,7 @@ contains
           if (aCellOnVertexIsFloating) then
              vertexMask(i) = ior(vertexMask(i), li_mask_ValueFloating)
           endif
-          if (aCellOnVertexIsFloating .and. aCellOnVertexIsGrounded) then
+          if (aCellOnVertexIsFloatingAndDynamic .and. aCellOnVertexIsGrounded) then
              vertexMask(i) = ior(vertexMask(i), li_mask_ValueGroundingLine)
           endif
           if (aCellOnVertexHasIce .and. aCellOnVertexHasNoIce) then
@@ -526,6 +560,9 @@ contains
              vertexMask(i) = ior(vertexMask(i), li_mask_ValueDynamicMargin)
              ! vertex with both 1+ dynamic ice cell(s) and 1+ non-dynamic cell(s) as neighbors
           endif
+          if (aCellOnVertexIsDomainBoundary) then
+             vertexMask(i) = ior(vertexMask(i), li_mask_ValueDomainBoundary)
+          endif 
       end do
 
 
@@ -583,7 +620,8 @@ contains
       ! Bit: Edges on margin are edges with one neighboring cell with ice and one neighboring cell without ice
       ! Bit: Edges on dynamic margin are edges with one neighboring cell with dynamic ice and
       !      one neighboring cell without dynamic ice
-      ! Bit: GL is an edge with one cell grounded ice and one cell floating ice
+      ! Bit: GL is an edge with one cell grounded ice and one cell dynamic floating ice
+      !      Note: This was changed Oct 2022 from one cell grounded and one floating or open ocean
 
       !call mpas_timer_start('calculate mask edge')
 
@@ -596,6 +634,8 @@ contains
           aCellOnEdgeIsFloating = .false.
           aCellOnEdgeIsGrounded = .false.
           aCellOnEdgeIsOpenOcean = .false.
+          aCellOnEdgeIsFloatingAndDynamic = .false.
+          aCellOnEdgeIsDomainBoundary = .false.
           do j = 1, 2
               iCell = cellsOnEdge(j,i)
               aCellOnEdgeHasIce = (aCellOnEdgeHasIce .or. li_mask_is_ice(cellMask(iCell)))
@@ -603,9 +643,13 @@ contains
               aCellOnEdgeHasDynamicIce = (aCellOnEdgeHasDynamicIce .or. li_mask_is_dynamic_ice(cellMask(iCell)))
               aCellOnEdgeHasNoDynamicIce = (aCellOnEdgeHasNoDynamicIce .or. (.not. (li_mask_is_dynamic_ice(cellMask(iCell)))))
               aCellOnEdgeIsFloating = (aCellOnEdgeIsFloating .or. li_mask_is_floating_ice(cellMask(iCell)))
+              aCellOnEdgeIsFloatingAndDynamic = ( aCellOnEdgeIsFloatingAndDynamic .or. &
+                                                (li_mask_is_floating_ice(cellMask(iCell)) .and. &
+                                                 li_mask_is_dynamic_ice(cellMask(iCell))) )
               aCellOnEdgeIsGrounded = (aCellOnEdgeIsGrounded .or. li_mask_is_grounded_ice(cellMask(iCell)))
               aCellOnEdgeIsOpenOcean = aCellOnEdgeIsOpenOcean .or. &
                  ((bedTopography(iCell) < config_sea_level) .and. (.not. li_mask_is_ice(cellMask(iCell))))
+              aCellOnEdgeIsDomainBoundary = (aCellOnEdgeIsDomainBoundary .or. li_mask_is_boundary(cellMask(iCell)))
           end do
           if (aCellOnEdgeHasIce) then
              edgeMask(i) = ior(edgeMask(i), li_mask_ValueIce)
@@ -618,7 +662,7 @@ contains
           if (aCellOnEdgeIsFloating) then
              edgeMask(i) = ior(edgeMask(i), li_mask_ValueFloating)
           endif
-          if (aCellOnEdgeIsGrounded .and. (aCellOnEdgeIsFloating .or. aCellOnEdgeIsOpenOcean)) then
+          if (aCellOnEdgeIsGrounded .and. aCellOnEdgeIsFloatingAndDynamic) then
              edgeMask(i) = ior(edgeMask(i), li_mask_ValueGroundingLine)
           endif
           if (aCellOnEdgeHasIce .and. aCellOnEdgeHasNoIce) then
@@ -626,6 +670,9 @@ contains
           endif
           if (aCellOnEdgeHasDynamicIce .and. aCellOnEdgeHasNoDynamicIce) then
              edgeMask(i) = ior(edgeMask(i), li_mask_ValueDynamicMargin)
+          endif
+          if (aCellOnEdgeIsDomainBoundary) then
+             edgeMask(i) = ior(edgeMask(i), li_mask_ValueDomainBoundary)
           endif
 
       end do
@@ -891,8 +938,35 @@ contains
       li_mask_is_initial_ice_logout_0d = (iand(mask, li_mask_ValueInitialIceExtent) == li_mask_ValueInitialIceExtent)
    end function li_mask_is_initial_ice_logout_0d
 
+   ! -- Functions that check for domain boundary --
+   function li_mask_is_boundary_logout_1d(mask)
+      integer, dimension(:), intent(in) :: mask
+      logical, dimension(size(mask)) :: li_mask_is_boundary_logout_1d
+
+      li_mask_is_boundary_logout_1d = (iand(mask, li_mask_ValueDomainBoundary) == li_mask_ValueDomainBoundary)
+   end function li_mask_is_boundary_logout_1d
+
+   function li_mask_is_boundary_logout_0d(mask)
+      integer, intent(in) :: mask
+      logical :: li_mask_is_boundary_logout_0d
+
+      li_mask_is_boundary_logout_0d = (iand(mask, li_mask_ValueDomainBoundary) == li_mask_ValueDomainBoundary)
+   end function li_mask_is_boundary_logout_0d
 
 
+   function li_mask_is_boundary_intout_1d(mask)
+      integer, dimension(:), intent(in) :: mask
+      integer, dimension(size(mask)) :: li_mask_is_boundary_intout_1d
+
+      li_mask_is_boundary_intout_1d = iand(mask, li_mask_ValueDomainBoundary) / li_mask_ValueDomainBoundary
+   end function li_mask_is_boundary_intout_1d
+
+   function li_mask_is_boundary_intout_0d(mask)
+      integer, intent(in) :: mask
+      integer :: li_mask_is_boundary_intout_0d
+
+      li_mask_is_boundary_intout_0d = iand(mask, li_mask_ValueDomainBoundary) / li_mask_ValueDomainBoundary
+   end function li_mask_is_boundary_intout_0d
 !***********************************************************************
 ! Private subroutines:
 !***********************************************************************

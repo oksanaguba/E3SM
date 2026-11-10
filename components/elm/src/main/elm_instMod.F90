@@ -6,7 +6,8 @@ module elm_instMod
   use shr_log_mod                , only : errMsg => shr_log_errMsg
   use abortutils                 , only : endrun
   use decompMod                  , only : bounds_type, get_proc_bounds
-  use elm_varctl                 , only : use_cn, use_voc, use_c13, use_c14, use_fates, use_betr
+  use elm_varctl                 , only : use_cn, use_voc, use_c13, use_c14, use_fates
+  use elm_varctl , only : iulog
   !-----------------------------------------
   ! Definition of component types
   !-----------------------------------------
@@ -42,9 +43,12 @@ module elm_instMod
   use VOCEmissionMod             , only : vocemis_type
   use atm2lndType                , only : atm2lnd_type
   use lnd2atmType                , only : lnd2atm_type
+  use ocn2lndType                , only : ocn2lnd_type
   use lnd2glcMod                 , only : lnd2glc_type
   use glc2lndMod                 , only : glc2lnd_type
   use glcDiagnosticsMod          , only : glc_diagnostics_type
+  use lnd2iacMod                 , only : lnd2iac_type
+  use iac2lndMod                 , only : iac2lnd_type
   use SoilWaterRetentionCurveMod , only : soil_water_retention_curve_type
   use VegetationPropertiesType   , only : veg_vp             ! Ecophysical Constants
   use SoilorderConType           , only : soilordercon         ! Constants
@@ -72,8 +76,6 @@ module elm_instMod
 
   use elm_interface_dataType     , only : elm_interface_data_type
   use ChemStateType              , only : chemstate_type     ! structure for chemical indices of the soil, such as pH and Eh
-  use BeTRSimulationELM          , only : betr_simulation_elm_type
-  use PlantMicKineticsMod        , only : PlantMicKinetics_type
   use ELMFatesInterfaceMod       , only : hlm_fates_interface_type
 
   ! instances declared in their own modules
@@ -118,9 +120,12 @@ module elm_instMod
   type(surfalb_type)                                  :: surfalb_vars
   type(surfrad_type)                                  :: surfrad_vars
   type(atm2lnd_type)                                  :: atm2lnd_vars
+  type(ocn2lnd_type)                                  :: ocn2lnd_vars
   type(glc2lnd_type)                                  :: glc2lnd_vars
   type(lnd2atm_type)                                  :: lnd2atm_vars
   type(lnd2glc_type)                                  :: lnd2glc_vars
+  type(lnd2iac_type)                                  :: lnd2iac_vars
+  type(iac2lnd_type)                                  :: iac2lnd_vars
   type(glc_diagnostics_type)                          :: glc_diagnostics_vars
   class(soil_water_retention_curve_type), allocatable :: soil_water_retention_curve
   type(phosphorusstate_type)                          :: phosphorusstate_vars
@@ -128,8 +133,6 @@ module elm_instMod
   type(elm_interface_data_type)                       :: elm_interface_data
   type(chemstate_type)                                :: chemstate_vars
   type(hlm_fates_interface_type)                      :: alm_fates
-  class(betr_simulation_elm_type), pointer            :: ep_betr
-  type(PlantMicKinetics_type)                         :: PlantMicKinetics_vars
   public :: elm_inst_biogeochem
   public :: elm_inst_biogeophys
   public :: alm_fates
@@ -145,6 +148,8 @@ contains
     ! initialize biogeochemical variables
     use elm_varcon            , only : c13ratio, c14ratio
     use histFileMod           , only : hist_printflds
+    use elm_varctl            , only : flandusepftdat
+
     implicit none
     type(bounds_type), intent(in) :: bounds_proc
 
@@ -211,9 +216,6 @@ contains
        call grc_pf%Init(begg, endg)
        call col_pf%Init(begc, endc)
 
-       if(use_betr)then
-          call PlantMicKinetics_vars%Init(bounds_proc)
-       endif
 
     endif
 
@@ -245,7 +247,7 @@ contains
 
     ! Initialize the Functionaly Assembled Terrestrial Ecosystem Simulator (FATES)
     if (use_fates) then
-       call alm_fates%init(bounds_proc)
+       call alm_fates%init(bounds_proc, flandusepftdat)
     end if
 
     call hist_printflds()
@@ -262,10 +264,10 @@ contains
     !
     use shr_scam_mod                      , only : shr_scam_getCloseLatLon
     use landunit_varcon                   , only : istice, istice_mec, istsoil
-    use elm_varcon                        , only : h2osno_max, bdsno
+    use elm_varcon                        , only : h2osno_max, bdsno, bdfirn
     use domainMod                         , only : ldomain
     use elm_varpar                        , only : nlevsno, numpft
-    use elm_varctl                        , only : single_column, fsurdat, scmlat, scmlon, use_extrasnowlayers
+    use elm_varctl                        , only : single_column, fsurdat, scmlat, scmlon, use_extrasnowlayers, iac_present
     use controlMod                        , only : nlfilename
     use SoilWaterRetentionCurveFactoryMod , only : create_soil_water_retention_curve
     use fileutils                         , only : getfil
@@ -307,10 +309,10 @@ contains
        g = col_pp%gridcell(c)
 
        if (.not. use_extrasnowlayers) then ! original 5 layer shallow snowpack model
-           if (lun_pp%itype(l)==istice) then
+           if (lun_pp%itype(l) == istice) then
                h2osno_col(c) = h2osno_max
-           elseif (lun_pp%itype(l)==istice_mec .or. &
-               (lun_pp%itype(l)==istsoil .and. ldomain%glcmask(g) > 0._r8)) then
+           elseif (lun_pp%itype(l) == istice_mec .or. &
+               (col_pp%is_soil(c) .and. ldomain%glcmask(g) > 0._r8)) then
                ! Initialize a non-zero snow thickness where the ice sheet can/potentially operate.
                ! Using glcmask to capture all potential vegetated points around GrIS (ideally
                ! we would use icemask from CISM, but that isn't available until after initialization.)
@@ -318,8 +320,18 @@ contains
            else
               h2osno_col(c) = 0._r8
            endif
-       else ! With a deeper firn model, we can no longer depend on "h2osno_max," because this will
-           !  potentially be large, resulting in a lot of artificial firn at initialization.
+           snow_depth_col(c) = h2osno_col(c) / bdsno
+       else! With a deeper firn model, we can no longer depend on "h2osno_max," because this will
+           ! potentially be large, resulting in a lot of artificial firn at initialization.          ! 
+           ! amschnei@uci.edu: UPDATE - By including a new parameter, bdfirn, we can
+           ! initialize a dense (e.g, 730 kd m^-3) "deep firn" layer for glacier
+           ! land units. This deep firn layer can be set to half of the total
+           ! maximum allotted snowpack mass (i.e., "h2osno_max"), which effectively
+           ! sets the Greenland and Antarctic ice sheets' (and mountain glaciers')
+           ! climatic (aka surface) mass balance (SMB) initial condition to 0. With this
+           ! cold start condition, a multi-decadal (100 to 300 years or more)
+           ! spin up is first required to prognose nonzero SMB.
+           ! 
            ! However... (below docstring from CLMv5)
            ! In areas that should be snow-covered, it can be problematic to start with 0 snow
            ! cover, because this can affect the long-term state through soil heating, albedo
@@ -328,17 +340,20 @@ contains
            ! feedback may not activate on time (or at all). So, as a compromise, we start with
            ! a small amount of snow in places that are likely to be snow-covered for much or
            ! all of the year.
-           if (lun_pp%itype(l)==istice .or. lun_pp%itype(l)==istice_mec) then
+           ! amschnei@uci.edu: Initializing "deep firn" for glacier columns
+           if (lun_pp%itype(l) == istice .or. lun_pp%itype(l) == istice_mec) then
               ! land ice (including multiple elevation classes, i.e. glacier_mec)
-              h2osno_col(c) = 50._r8
-           else if (lun_pp%itype(l)==istsoil .and. grc_pp%latdeg(g) >= 44._r8) then
+              h2osno_col(c) = 0.5_r8*h2osno_max   ! start with half full snow column, representing deep firn
+              snow_depth_col(c)  = h2osno_col(c) / bdfirn
+           else if (col_pp%is_soil(c) .and. grc_pp%latdeg(g) >= 44._r8) then
               ! Northern hemisphere seasonal snow
               h2osno_col(c) = 50._r8
+              snow_depth_col(c) = h2osno_col(c) / bdsno
            else
               h2osno_col(c) = 0._r8
+              snow_depth_col(c) = h2osno_col(c) / bdsno
            endif
        endif
-       snow_depth_col(c)  = h2osno_col(c) / bdsno
     end do
 
    ! Initialize urban constants
@@ -373,11 +388,19 @@ contains
     call atm2lnd_vars%Init( bounds_proc )
     call lnd2atm_vars%Init( bounds_proc )
 
+    call ocn2lnd_vars%Init( bounds_proc )
+
     ! Initialize glc2lnd and lnd2glc even if running without create_glacier_mec_landunit,
     ! because at least some variables (such as the icemask) are referred to in code that
     ! is executed even when running without glc_mec.
     call glc2lnd_vars%Init( bounds_proc )
     call lnd2glc_vars%Init( bounds_proc )
+
+    ! Initialize lnd2iac and iac2lnd
+    if (iac_present) then
+      call lnd2iac_vars%Init( bounds_proc )
+      call iac2lnd_vars%Init( bounds_proc )
+    endif
 
     ! If single-column determine closest latitude and longitude
 
@@ -391,7 +414,7 @@ contains
 
     call grc_es%Init(bounds_proc%begg_all, bounds_proc%endg_all)
     call lun_es%Init(bounds_proc%begl_all, bounds_proc%endl_all)
-    call col_es%Init(bounds_proc%begc_all, bounds_proc%endc_all)
+    call col_es%Init(bounds_proc%begc_all, bounds_proc%endc_all, bounds_proc%endc)
     call veg_es%Init(bounds_proc%begp_all, bounds_proc%endp_all)
 
     call canopystate_vars%init(bounds_proc)
@@ -406,7 +429,7 @@ contains
 
     call grc_ws%Init(bounds_proc%begg_all, bounds_proc%endg_all)
     call lun_ws%Init(bounds_proc%begl_all, bounds_proc%endl_all)
-    call col_ws%Init(bounds_proc%begc_all, bounds_proc%endc_all, &
+    call col_ws%Init(bounds_proc%begc_all, bounds_proc%endc_all, bounds_proc%endc, &
          h2osno_col(begc:endc),                    &
          snow_depth_col(begc:endc),                &
          soilstate_vars%watsat_col(begc:endc, 1:))
@@ -415,7 +438,7 @@ contains
     call waterflux_vars%init(bounds_proc)
 
     call grc_wf%Init(bounds_proc%begg_all, bounds_proc%endg_all, bounds_proc)
-    call col_wf%Init(bounds_proc%begc_all, bounds_proc%endc_all)
+    call col_wf%Init(bounds_proc%begc_all, bounds_proc%endc_all, bounds_proc%endc)
     call veg_wf%Init(bounds_proc%begp_all, bounds_proc%endp_all)
 
     call chemstate_vars%Init(bounds_proc)
@@ -464,9 +487,6 @@ contains
     call cnstate_vars%Init(bounds_proc)
 
     call sedflux_vars%Init(bounds_proc)
-    ! --------------------------------------------------------------
-    ! Initialise the BeTR
-    ! --------------------------------------------------------------
 
     deallocate (h2osno_col)
     deallocate (snow_depth_col)

@@ -10,7 +10,7 @@ module CNCarbonFluxType
   use landunit_varcon        , only : istsoil, istcrop, istdlak 
   use elm_varctl             , only : use_c13, use_fates 
   use CH4varcon              , only : allowlakeprod
-  use pftvarcon              , only : npcropmin
+  use pftvarcon              , only : iscft
   use CNDecompCascadeConType , only : decomp_cascade_con
   use VegetationType         , only : veg_pp
   use ColumnType             , only : col_pp                
@@ -880,7 +880,6 @@ contains
     use elm_varpar , only : nlevdecomp, nlevdecomp_full, crop_prog, nlevgrnd
     use elm_varctl , only : hist_wrtch4diag
     use histFileMod, only : hist_addfld1d, hist_addfld2d, hist_addfld_decomp 
-    use tracer_varcon    , only : is_active_betr_bgc
     use elm_varctl,  only : get_carbontag
     !
     ! !ARGUMENTS:
@@ -1035,7 +1034,7 @@ contains
                 this%xsmrpool_c13ratio_patch(p)  = spval
              endif
           end if
-          if (lun_pp%itype(l) == istsoil .or. lun_pp%itype(l) == istcrop) then
+          if (veg_pp%is_on_soil_col(p) .or. veg_pp%is_on_crop_col(p)) then
              this%tempsum_npp_patch(p)           = 0._r8
              this%annsum_npp_patch(p)            = 0._r8
              this%availc_patch(p)                = 0._r8
@@ -1057,9 +1056,9 @@ contains
        end if
 
        this%fphr_col(c,nlevdecomp+1:nlevgrnd) = 0._r8 !used to be in CH4Mod
-       if (lun_pp%itype(l) == istsoil .or. lun_pp%itype(l) == istcrop) then
+       if (col_pp%is_soil(c) .or. col_pp%is_crop(c)) then
           this%fphr_col(c,nlevdecomp+1:nlevgrnd) = 0._r8 
-       else if (lun_pp%itype(l) == istdlak .and. allowlakeprod) then
+       else if (col_pp%is_lake(c) .and. allowlakeprod) then
           this%fphr_col(c,:) = spval
        else  ! Inactive CH4 columns
           this%fphr_col(c,:) = spval
@@ -1067,7 +1066,7 @@ contains
 
        ! also initialize dynamic landcover fluxes so that they have
        ! real values on first timestep, prior to calling pftdyn_cnbal
-       if (lun_pp%itype(l) == istsoil .or. lun_pp%itype(l) == istcrop) then
+       if (col_pp%is_soil(c) .or. col_pp%is_crop(c)) then
           this%dwt_conv_cflux_col(c)        = 0._r8
           this%dwt_prod10c_gain_col(c)      = 0._r8
           this%dwt_prod100c_gain_col(c)     = 0._r8
@@ -1113,9 +1112,9 @@ contains
     !
     ! !USES:
     use shr_infnan_mod   , only : isnan => shr_infnan_isnan, nan => shr_infnan_nan, assignment(=)
-    use clm_time_manager , only : is_restart
+    use elm_time_manager , only : is_restart
     use elm_varcon       , only : c13ratio, c14ratio
-    use elm_varctl       , only : use_lch4, use_betr
+    use elm_varctl       , only : use_lch4
     use restUtilMod
     use ncdio_pio
 
@@ -1584,12 +1583,10 @@ contains
     !
     ! !USES:
     use elm_varctl       , only : iulog
-    use clm_time_manager , only : get_step_size
+    use elm_time_manager , only : get_step_size
     use elm_varcon       , only : secspday
     use elm_varpar       , only : nlevdecomp, ndecomp_pools, ndecomp_cascade_transitions
     use subgridAveMod    , only : p2c
-    use tracer_varcon    , only : is_active_betr_bgc
-    use MathfuncMod      , only : dot_sum
     use elm_varpar       , only : nlevdecomp_full
     !
     ! !ARGUMENTS:
@@ -1675,7 +1672,7 @@ contains
             this%cpool_livecroot_storage_gr_patch(p) + &
             this%cpool_deadcroot_storage_gr_patch(p)
 
-       if ( crop_prog .and. veg_pp%itype(p) >= npcropmin )then
+       if ( crop_prog .and. iscft(veg_pp%itype(p)))then
           this%mr_patch(p) = &
                this%mr_patch(p) + &
                this%grain_mr_patch(p)
@@ -1700,7 +1697,7 @@ contains
             this%storage_gr_patch(p)
 
        ! autotrophic respiration (AR)
-       if ( crop_prog .and. veg_pp%itype(p) >= npcropmin )then
+       if ( crop_prog .and. iscft(veg_pp%itype(p)))then
           this%ar_patch(p) = &
                this%mr_patch(p) + &
                this%gr_patch(p) + &
@@ -1812,7 +1809,7 @@ contains
        this%wood_harvestc_patch(p) = &
             this%hrv_deadstemc_to_prod10c_patch(p) + &
             this%hrv_deadstemc_to_prod100c_patch(p)
-       if ( crop_prog .and. veg_pp%itype(p) >= npcropmin )then
+       if ( crop_prog .and. iscft(veg_pp%itype(p)))then
           this%wood_harvestc_patch(p) = &
                this%wood_harvestc_patch(p) + &
                this%hrv_cropc_to_prod1c_patch(p)
@@ -1842,7 +1839,7 @@ contains
             this%m_gresp_xfer_to_fire_patch(p)           + &
             this%m_cpool_to_fire_patch(p)
 
-       if ( crop_prog .and. veg_pp%itype(p) >= npcropmin )then
+       if ( crop_prog .and. iscft(veg_pp%itype(p)))then
 
           this%litfall_patch(p) =                  &
                this%litfall_patch(p)             + &
@@ -1878,7 +1875,7 @@ contains
             this%hrv_leafc_to_litter_patch(p)    + &
             this%leafc_to_litter_patch(p)
 
-       if ( crop_prog .and. veg_pp%itype(p) >= npcropmin )then
+       if ( crop_prog .and. iscft(veg_pp%itype(p)))then
           this%leafc_loss_patch(p) = &
                this%leafc_loss_patch(p) + &
                this%hrv_leafc_to_prod1c_patch(p)
@@ -1920,7 +1917,7 @@ contains
             this%hrv_deadcrootc_storage_to_litter_patch(p) + &
             this%hrv_deadcrootc_xfer_to_litter_patch(p)   
        ! putting the harvested crop stem and grain in the wood loss bdrewniak
-       if ( crop_prog .and. veg_pp%itype(p) >= npcropmin )then
+       if ( crop_prog .and. iscft(veg_pp%itype(p)))then
           this%woodc_loss_patch(p) = &
                this%woodc_loss_patch(p) + &
                this%hrv_grainc_to_prod1c_patch(p) + &
@@ -1996,8 +1993,7 @@ contains
        this%som_c_leached_col(c)      = 0._r8
     end do
 
-    if ( (.not. is_active_betr_bgc           ) .and. &
-         (.not. (use_pflotran .and. pf_cmode))) then
+    if ((.not. (use_pflotran .and. pf_cmode))) then
 
        ! vertically integrate HR and decomposition cascade fluxes
        do k = 1, ndecomp_cascade_transitions
@@ -2014,12 +2010,6 @@ contains
        end do
 
 
-    elseif (is_active_betr_bgc) then
-
-       do fc = 1, num_soilc
-          c = filter_soilc(fc)
-          this%hr_col(c) = dot_sum(this%hr_vr_col(c,1:nlevdecomp),dzsoi_decomp(1:nlevdecomp)) 
-       enddo
     endif
     
     ! some zeroing
@@ -2208,94 +2198,92 @@ contains
        end do
     end do
 
-    if  (.not. is_active_betr_bgc) then
 
-       ! _col(cWDC_HR) - coarse woody debris heterotrophic respiration
-       do fc = 1,num_soilc
-          c = filter_soilc(fc)
-          this%cwdc_hr_col(c) = 0._r8
-       end do
+    ! _col(cWDC_HR) - coarse woody debris heterotrophic respiration
+    do fc = 1,num_soilc
+       c = filter_soilc(fc)
+       this%cwdc_hr_col(c) = 0._r8
+    end do
 
-       ! _col(cWDC_LOSS) - coarse woody debris C loss
-       do l = 1, ndecomp_pools
-          if ( is_cwd(l) ) then
-             do fc = 1,num_soilc
-                c = filter_soilc(fc)
-                this%cwdc_loss_col(c) = &
-                     this%cwdc_loss_col(c) + &
-                     this%m_decomp_cpools_to_fire_col(c,l)
-             end do
-          end if
-       end do
-
-       do k = 1, ndecomp_cascade_transitions
-          if ( is_cwd(decomp_cascade_con%cascade_donor_pool(k)) ) then
-             do fc = 1,num_soilc
-                c = filter_soilc(fc)
-                this%cwdc_loss_col(c) = &
-                     this%cwdc_loss_col(c) + &
-                     this%decomp_cascade_ctransfer_col(c,k)
-             end do
-          end if
-       end do
-
-       if (.not.(use_pflotran .and. pf_cmode)) then
-          ! (LITTERC_LOSS) - litter C loss
+    ! _col(cWDC_LOSS) - coarse woody debris C loss
+    do l = 1, ndecomp_pools
+       if ( is_cwd(l) ) then
           do fc = 1,num_soilc
              c = filter_soilc(fc)
-             this%litterc_loss_col(c) = this%lithr_col(c)
-          end do
-       end if !(.not.(use_pflotran .and. pf_cmode))
-
-       do l = 1, ndecomp_pools
-          if ( is_litter(l) ) then
-             do fc = 1,num_soilc
-                 c = filter_soilc(fc)
-                 this%litterc_loss_col(c) = &
-                    this%litterc_loss_col(c) + &
-                    this%m_decomp_cpools_to_fire_col(c,l)
-             end do
-          end if
-       end do
-    
- 
-       do k = 1, ndecomp_cascade_transitions
-         if ( is_litter(decomp_cascade_con%cascade_donor_pool(k)) ) then
-           do fc = 1,num_soilc
-             c = filter_soilc(fc)
-             this%litterc_loss_col(c) = &
-                  this%litterc_loss_col(c) + &
-                  this%decomp_cascade_ctransfer_col(c,k)
-           end do
-         end if
-       end do
-
-       if (use_pflotran .and. pf_cmode) then
-          ! note: the follwoing should be useful to non-pflotran-coupled, but seems cause 1 BFB test unmatching.
-          ! add up all vertical transport tendency terms and calculate total som leaching loss as the sum of these
-          do l = 1, ndecomp_pools
-             do fc = 1,num_soilc
-                c = filter_soilc(fc)
-                this%decomp_cpools_leached_col(c,l) = 0._r8
-             end do
-             do j = 1, nlev
-                do fc = 1,num_soilc
-                   c = filter_soilc(fc)
-                   this%decomp_cpools_leached_col(c,l) = &
-                     this%decomp_cpools_leached_col(c,l) + &
-                     this%decomp_cpools_transport_tendency_col(c,j,l) * dzsoi_decomp(j)
-                end do
-             end do
-             do fc = 1,num_soilc
-                c = filter_soilc(fc)
-                this%som_c_leached_col(c) = &
-                   this%som_c_leached_col(c) + &
-                   this%decomp_cpools_leached_col(c,l)
-             end do
+             this%cwdc_loss_col(c) = &
+                  this%cwdc_loss_col(c) + &
+                  this%m_decomp_cpools_to_fire_col(c,l)
           end do
        end if
+    end do
 
+    do k = 1, ndecomp_cascade_transitions
+       if ( is_cwd(decomp_cascade_con%cascade_donor_pool(k)) ) then
+          do fc = 1,num_soilc
+             c = filter_soilc(fc)
+             this%cwdc_loss_col(c) = &
+                  this%cwdc_loss_col(c) + &
+                  this%decomp_cascade_ctransfer_col(c,k)
+          end do
+       end if
+    end do
+
+    if (.not.(use_pflotran .and. pf_cmode)) then
+       ! (LITTERC_LOSS) - litter C loss
+       do fc = 1,num_soilc
+          c = filter_soilc(fc)
+          this%litterc_loss_col(c) = this%lithr_col(c)
+       end do
+    end if !(.not.(use_pflotran .and. pf_cmode))
+
+    do l = 1, ndecomp_pools
+       if ( is_litter(l) ) then
+          do fc = 1,num_soilc
+              c = filter_soilc(fc)
+              this%litterc_loss_col(c) = &
+                 this%litterc_loss_col(c) + &
+                 this%m_decomp_cpools_to_fire_col(c,l)
+          end do
+       end if
+    end do
+    
+ 
+    do k = 1, ndecomp_cascade_transitions
+      if ( is_litter(decomp_cascade_con%cascade_donor_pool(k)) ) then
+        do fc = 1,num_soilc
+          c = filter_soilc(fc)
+          this%litterc_loss_col(c) = &
+               this%litterc_loss_col(c) + &
+               this%decomp_cascade_ctransfer_col(c,k)
+        end do
+      end if
+    end do
+
+    if (use_pflotran .and. pf_cmode) then
+       ! note: the follwoing should be useful to non-pflotran-coupled, but seems cause 1 BFB test unmatching.
+       ! add up all vertical transport tendency terms and calculate total som leaching loss as the sum of these
+       do l = 1, ndecomp_pools
+          do fc = 1,num_soilc
+             c = filter_soilc(fc)
+             this%decomp_cpools_leached_col(c,l) = 0._r8
+          end do
+          do j = 1, nlev
+             do fc = 1,num_soilc
+                c = filter_soilc(fc)
+                this%decomp_cpools_leached_col(c,l) = &
+                  this%decomp_cpools_leached_col(c,l) + &
+                  this%decomp_cpools_transport_tendency_col(c,j,l) * dzsoi_decomp(j)
+             end do
+          end do
+          do fc = 1,num_soilc
+             c = filter_soilc(fc)
+             this%som_c_leached_col(c) = &
+                this%som_c_leached_col(c) + &
+                this%decomp_cpools_leached_col(c,l)
+          end do
+       end do
     end if
+
     
     ! debug
     do fc = 1,num_soilc
@@ -2338,7 +2326,7 @@ subroutine CSummary_interface(this, bounds, num_soilc, filter_soilc)
    use shr_sys_mod, only: shr_sys_flush
    use elm_varpar , only: nlevdecomp_full,ndecomp_pools,ndecomp_cascade_transitions
    use elm_varpar , only: i_met_lit, i_cel_lit, i_lig_lit, i_cwd
-   use clm_time_manager    , only : get_step_size
+   use elm_time_manager    , only : get_step_size
 !
 ! !ARGUMENTS:
    implicit none
@@ -2557,7 +2545,6 @@ end subroutine CSummary_interface
 
   !summarize heterotrophic respiration for methane calculation
   !
-    use tracer_varcon    , only : is_active_betr_bgc
     use elm_varpar       , only : nlevdecomp, ndecomp_pools, ndecomp_cascade_transitions
   ! !ARGUMENTS:
     class(carbonflux_type) :: this
@@ -2592,7 +2579,7 @@ end subroutine CSummary_interface
             this%cpool_to_deadstemc_patch(p)              + &
             this%deadstemc_xfer_to_deadstemc_patch(p)
 
-       if ( crop_prog .and. veg_pp%itype(p) >= npcropmin )then
+       if ( crop_prog .and. iscft(veg_pp%itype(p)))then
           this%agnpp_patch(p) =                    &
                this%agnpp_patch(p)               + &
                this%cpool_to_grainc_patch(p)     + &
@@ -2631,8 +2618,7 @@ end subroutine CSummary_interface
        end if
     enddo
 
-    if ( (.not. is_active_betr_bgc           ) .and. &
-         (.not. (use_pflotran .and. pf_cmode))) then
+    if ((.not. (use_pflotran .and. pf_cmode))) then
       ! vertically integrate HR and decomposition cascade fluxes
       do k = 1, ndecomp_cascade_transitions
 

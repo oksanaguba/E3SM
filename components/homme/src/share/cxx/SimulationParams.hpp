@@ -23,7 +23,7 @@ struct SimulationParams
   void print(std::ostream& out = std::cout);
 
   TimeStepType  time_step_type;
-  MoistDry      moisture;
+  bool          use_moisture;
   RemapAlg      remap_alg;
   TestCase      test_case;
   ForcingAlg    ftype = ForcingAlg::FORCING_OFF;
@@ -43,7 +43,9 @@ struct SimulationParams
   int       transport_alg;
   bool      use_cpstar;
   bool      theta_hydrostatic_mode;   // Only for theta model
+  bool      do_3d_turbulence;
 
+  double    tom_sponge_start = 0.0;   // start of TOM sponge layer, in hPa (0 = use ptop)
   double    dcmip16_mu;               // Only for theta model
   double    nu;
   double    nu_p;
@@ -53,12 +55,27 @@ struct SimulationParams
   double    nu_div;
   int       hypervis_order;
   int       hypervis_subcycle;
+  int       horiz_turb_subcycle = 1;
   int       hypervis_subcycle_tom;
   double    hypervis_scaling;
-  double    nu_ratio1, nu_ratio2; //control balance between div and vort components in vector laplace
+  // Scaling exponent for the sponge-layer (nu_top) tensor viscosity, mirroring
+  // Fortran's laplace_scaling (theta-l_kokkos only; defaults to 0, i.e. constant
+  // coefficient sponge-layer diffusion, for preqx_kokkos and any case that
+  // doesn't set it explicitly).
+  double    laplace_scaling = 0.0;
+  double    nu_ratio1, nu_ratio2; // control balance between div and vort components in vector laplace
   int       nsplit = 0;
   int       nsplit_iteration;
-  double    rearth; //propagated then to Geometry and SphereOps
+  double    scale_factor; // radius of Earth in sphere case; propagated then to Geometry and SphereOps
+  double    laplacian_rigid_factor; // propagated to SphereOps
+  bool      pgrad_correction;
+
+  double    dp3d_thresh;
+  double    vtheta_thresh;
+
+  // Optionally run diagnostics and output information. Default is 0, none. Set
+  // to >0 for diagnostics.
+  int       internal_diagnostics_level = 0;
 
   // Use this member to check whether the struct has been initialized
   bool      params_set = false;
@@ -68,13 +85,15 @@ inline void SimulationParams::print (std::ostream& out) {
 
   out << "\n************** CXX SimulationParams **********************\n\n";
   out << "   time_step_type: " << etoi(time_step_type) << "\n";
-  out << "   moisture: " << (moisture==MoistDry::DRY ? "dry" : "moist") << "\n";
+  out << "   use_moisture: " << (use_moisture ? "moist" : "dry") << "\n";
   out << "   remap_alg: " << etoi(remap_alg) << "\n";
   out << "   test case: " << etoi(test_case) << "\n";
   out << "   ftype: " << etoi(ftype) << "\n";
   out << "   theta_adv_form: " << etoi(theta_adv_form) << "\n";
   out << "   rsplit: " << rsplit << "\n";
   out << "   qsplit: " << qsplit << "\n";
+  out << "   dt_remap_factor: " << dt_remap_factor << "\n";
+  out << "   dt_tracer_factor: " << dt_tracer_factor << "\n";
   out << "   qsize: " << qsize << "\n";
   out << "   limiter_option: " << limiter_option << "\n";
   out << "   state_frequency: " << state_frequency << "\n";
@@ -87,17 +106,25 @@ inline void SimulationParams::print (std::ostream& out) {
   out << "   nu_div: " << nu_div << "\n";
   out << "   hypervis_order: " << hypervis_order << "\n";
   out << "   hypervis_subcycle: " << hypervis_subcycle << "\n";
+  out << "   horiz_turb_subcycle: " << horiz_turb_subcycle << "\n";
   out << "   hypervis_subcycle_tom: " << hypervis_subcycle_tom << "\n";
   out << "   hypervis_scaling: " << hypervis_scaling << "\n";
+  out << "   laplace_scaling: " << laplace_scaling << "\n";
   out << "   nu_ratio1: " << nu_ratio1 << "\n";
   out << "   nu_ratio2: " << nu_ratio2 << "\n";
   out << "   use_cpstar: " << (use_cpstar ? "yes" : "no") << "\n";
   out << "   transport_alg: " << transport_alg << "\n";
   out << "   disable_diagnostics: " << (disable_diagnostics ? "yes" : "no") << "\n";
   out << "   theta_hydrostatic_mode: " << (theta_hydrostatic_mode ? "yes" : "no") << "\n";
+  out << "   do_3d_turbulence: " << (do_3d_turbulence ? "yes" : "no") << "\n";
+  out << "   tom_sponge_start: " << tom_sponge_start << "\n";
   out << "   prescribed_wind: " << (prescribed_wind ? "yes" : "no") << "\n";
   out << "   nsplit: " << nsplit << "\n";
-  out << "   rearth: " << rearth << "\n";
+  out << "   scale_factor: " << scale_factor << "\n";
+  out << "   laplacian_rigid_factor: " << laplacian_rigid_factor << "\n";
+  out << "   dp3d_thresh: " << dp3d_thresh << "\n";
+  out << "   vtheta_thresh: " << vtheta_thresh << "\n";
+  out << "   internal_diagnostics_level: " << internal_diagnostics_level << "\n";
   out << "\n**********************************************************\n";
 }
 

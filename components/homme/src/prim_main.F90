@@ -14,13 +14,13 @@ program prim_main
                               omp_set_num_threads, omp_get_nested, &
                               omp_get_num_threads, omp_get_max_threads
   use time_mod,         only: tstep, nendstep, timelevel_t, TimeLevel_init, nstep=>nextOutputStep
-  use dimensions_mod,   only: nelemd, qsize
+  use dimensions_mod,   only: nelemd
   use control_mod,      only: restartfreq, vfile_mid, vfile_int, runtype
   use domain_mod,       only: domain1d_t
   use element_mod,      only: element_t
   use common_io_mod,    only: output_dir, infilenames
   use common_movie_mod, only: nextoutputstep
-  use perf_mod,         only: t_initf, t_prf, t_finalizef, t_startf, t_stopf ! _EXTERNAL
+  use perf_mod,         only: t_initf, t_prf, t_finalizef, t_startf, t_stopf, t_disablef, t_enablef ! _EXTERNAL
   use restart_io_mod ,  only: restartheader_t, writerestart
   use hybrid_mod,       only: hybrid_create
 #if (defined MODEL_THETA_L && defined ARKODE)
@@ -55,19 +55,16 @@ program prim_main
   type (hybrid_t)             :: hybrid         ! parallel structure for shared memory/distributed memory
   type (parallel_t)           :: par            ! parallel structure for distributed memory programming
   type (domain1d_t), pointer  :: dom_mt(:)
-  type (RestartHeader_t)      :: RestartHeader
   type (TimeLevel_t)          :: tl             ! Main time level struct
   type (hvcoord_t)            :: hvcoord        ! hybrid vertical coordinate struct
 
-  real*8 timeit, et, st
   integer nets,nete
   integer ithr
   integer ierr
   
-  character (len=20) :: numproc_char
-  character (len=20) :: numtrac_char
   
   logical :: dir_e ! boolean existence of directory where output netcdf goes
+  logical :: call_enablef
   
   ! =====================================================
   ! Begin executable code set distributed memory world...
@@ -228,7 +225,20 @@ program prim_main
 
   if(par%masterproc) print *,"Entering main timestepping loop"
   call t_startf('prim_main_loop')
+  call_enablef = .false.
   do while(tl%nstep < nEndStep)
+#ifdef DISABLE_TIMERS_IN_FIRST_STEP
+     ! Certain compilers, e.g., for Intel GPU, do just-in-time compilation. Turn
+     ! off timers in the first step to avoid counting that cost.
+     if (tl%nstep == 0) then
+        call t_disablef()
+        call_enablef = .true.
+     elseif (call_enablef) then
+        call t_enablef()
+        call_enablef = .false.
+     end if
+#endif
+
 #if (defined HORIZ_OPENMP)
      !$OMP PARALLEL NUM_THREADS(hthreads), DEFAULT(SHARED), PRIVATE(ithr,nets,nete,hybrid)
      call omp_set_num_threads(vthreads)

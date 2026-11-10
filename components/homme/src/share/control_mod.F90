@@ -26,6 +26,8 @@ module control_mod
   !     3  CAAS
   !    20  QLT  with superlevels
   !    30  CAAS with superlevels
+  !    4*  reserved for debugging
+  !     5  CAAS-point
   integer, public  :: semi_lagrange_cdr_alg = 3
   ! If true, check mass conservation and shape preservation. The second
   ! implicitly checks tracer consistency.
@@ -39,10 +41,17 @@ module control_mod
   ! halo available to it if the actual point is outside the halo. This is done
   ! in levels <= this parameter.
   integer, public :: semi_lagrange_nearest_point_lev = 256
+  integer, public :: semi_lagrange_halo = -1
+  integer, public :: semi_lagrange_trajectory_nsubstep = 0
+  integer, public :: semi_lagrange_trajectory_nvelocity = -1
+  integer, public :: semi_lagrange_diagnostics = 0
 
 ! flag used by preqx, theta-l and theta-c models
 ! should be renamed to "hydrostatic_mode"
   logical, public :: theta_hydrostatic_mode
+
+! option to run 3d turbulence
+  logical, public :: do_3d_turbulence
 
 
   integer, public  :: tstep_type= 5                           ! preqx timestepping options
@@ -86,7 +95,8 @@ module control_mod
 ! advect theta 0: conservation form 
 !              1: expanded divergence form (less noisy, non-conservative)
  integer, public :: theta_advect_form = 0
- real (kind=real_kind), public :: vtheta_thresh = 100  ! threshold for virtual potential temperature minimum limiter
+ real (kind=real_kind), public :: vtheta_thresh = 100.d0  ! threshold for virtual potential temperature minimum limiter
+ real (kind=real_kind), public :: dp3d_thresh   = 0.125d0 ! threshold for dp3d minimum limiter
 
  integer, public :: pgrad_correction  = 0   ! 1=turn on theta model pressure gradient correction
  integer, public :: hv_ref_profiles   = 0   ! 1=turn on theta model HV reference profiles
@@ -127,7 +137,7 @@ module control_mod
   integer              , public :: restartfreq
   integer              , public :: runtype 
   integer              , public :: timerdetail 
-  integer              , public :: numnodes 
+  integer              , public :: numnodes
   character(len=MAX_STRING_LEN)    , public :: restartfile 
   character(len=MAX_STRING_LEN)    , public :: restartdir
 
@@ -161,13 +171,17 @@ module control_mod
   real (kind=real_kind), public :: tom_sponge_start=0         ! start of sponge layer, in hPa
 
   integer, public :: hypervis_subcycle=1                      ! number of subcycles for hyper viscsosity timestep
+  integer, public :: horiz_turb_subcycle=1                    ! number of subcycles for SGS horizontal diffusion
   integer, public :: hypervis_subcycle_tom=0                  ! number of subcycles for TOM diffusion
                                                               !   0   apply together with hyperviscosity
                                                               !   >1  apply timesplit from hyperviscosity
   integer, public :: hypervis_subcycle_q=1                    ! number of subcycles for hyper viscsosity timestep on TRACERS
+  integer, public :: horiz_turb_subcycle_q=1                  ! number of subcycles for SGS horizontal diffusion on TRACERS
+                                                              !   <0  use hypervis_subcycle_q
   integer, public :: hypervis_order=0                         ! laplace**hypervis_order.  0=not used  1=regular viscosity, 2=grad**4
 
   real (kind=real_kind), public :: hypervis_scaling=0         ! use tensor hyperviscosity
+  real (kind=real_kind), public :: laplace_scaling=0          ! scaling for tensor viscosity
 
   !three types of hyper viscosity are supported right now:
   ! (1) const hv:    nu * del^2 del^2
@@ -201,7 +215,7 @@ module control_mod
 
   ! Physgrid parameters
   integer, public :: se_fv_phys_remap_alg = 1
-  
+
   ! START: Apr 8, 2025: Added by Arjun
   ! Autoconversion and accretion parameters
     logical, public :: do_predict_nc     = .true.        !prognostic droplet concentration or not?
@@ -219,6 +233,10 @@ module control_mod
     real (kind=real_kind),  public ::         p3_max_mean_rain_size  = 0.005 ! IN  max mean rain size
     real (kind=real_kind),  public ::         p3_embryonic_rain_size = 0.000025 ! IN  embryonic rain size for autoconversion
   ! END: Apr 8, 2025: Added by Arjun
+
+  ! Hommexx-specific parameters
+  integer, public :: internal_diagnostics_level = 0
+
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 !
@@ -238,7 +256,7 @@ module control_mod
   ! kmass = level index with density.  other levels contain test tracers
   integer, public  :: kmass  = -1
   integer, public  :: toy_chemistry = 0            !  1 = toy chemestry is turned on in 2D advection code
-  real (kind=real_kind), public :: g_sw_output            	   = 9.80616D0          ! m s^-2
+  real (kind=real_kind), public :: g_sw_output = 9.80616D0          ! m s^-2
 
   ! parameters for dcmip12 test 2-0: steady state atmosphere with orography
   real(real_kind), public :: dcmip2_0_h0      = 2000.d0        ! height of mountain range        (meters)
@@ -306,7 +324,6 @@ contains
     !   If you want a value to be computed, set it to <0 on input.
 
     use parallel_mod, only: abortmp, parallel_t
-    use kinds, only: iulog
 
     type (parallel_t), intent(in) :: par
     integer, intent(inout) :: &
@@ -658,7 +675,7 @@ contains
 
 subroutine set_planar_defaults()
 
-use physical_constants, only: Lx, Ly, Sx, Sy
+use physical_constants, only: Lx, Ly, Sx, Sy, dd_pi, rearth
  
 !since defaults here depend on test, they cannot be set before ctl_nl is read, unlike some other parameters, bubble_*, etc.        
 !if true, most likely lx,ly,sx,sy weren't set in ctl_nl
@@ -699,7 +716,7 @@ use physical_constants, only: Lx, Ly, Sx, Sy
        Ly = 51.2D0 * 1000.0D0
        Sx = -25.6D0 * 1000.0D0
        Sy = -25.6D0 * 1000.0D0
-    else if (test_case == "planar_rising_bubble" ) then
+    else if (test_case == "planar_rising_bubble" .or. test_case == "planar_rising_bubble_pg2") then
        Lx = 2.0D0 * 10000.0D0
        Ly = 2.0D0 * 10000.0D0
        Sx = -10000.0D0
@@ -720,11 +737,15 @@ use physical_constants, only: Lx, Ly, Sx, Sy
 !       Ly = 5000.0D0 * 1000.0D0
 !       Sx = 0.0D0
 !       Sy = 0.0D0
-
+    else if (test_case(1:16) == 'planar_transport') then
+       Lx = 2*dd_pi*rearth
+       Ly = Lx
+       Sx = -Lx/2
+       Sy = Sx
     endif
     endif !if lx,ly,sx,sy are not set in nl
 
-    if (test_case == "planar_rising_bubble" ) then
+    if (test_case == "planar_rising_bubble" .or. test_case == "planar_rising_bubble_pg2") then
        case_planar_bubble = .TRUE.
        !check which thermo we are running
          print *, 'ONLY ONE SHOULD BE TRUE'

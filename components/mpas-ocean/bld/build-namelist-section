@@ -20,6 +20,7 @@ if ($CONTINUE_RUN eq 'TRUE') {
 } else {
 	add_default($nl, 'config_start_time', 'val'=>"'${RUN_STARTDATE}_${START_TOD}'");
 }
+add_default($nl, 'config_output_reference_time');
 
 ######################
 # Namelist group: io #
@@ -45,6 +46,13 @@ add_default($nl, 'config_proc_decomp_file_prefix');
 
 add_default($nl, 'config_dt');
 add_default($nl, 'config_time_integrator');
+add_default($nl, 'config_number_of_time_levels');
+
+#################################
+# Namelist group: lateral_walls #
+#################################
+
+add_default($nl, 'config_wall_slip_factor');
 
 ########################
 # Namelist group: hmix #
@@ -80,9 +88,14 @@ add_default($nl, 'config_tracer_del4');
 ##############################
 
 add_default($nl, 'config_use_Leith_del2');
-add_default($nl, 'config_Leith_parameter');
+add_default($nl, 'config_use_Leith_del4');
+add_default($nl, 'config_Leith_del2_parameter');
+add_default($nl, 'config_Leith_del4_parameter');
+add_default($nl, 'config_Leith_del2_div_scaler');
+add_default($nl, 'config_Leith_del4_div_scaler');
 add_default($nl, 'config_Leith_dx');
 add_default($nl, 'config_Leith_visc2_max');
+add_default($nl, 'config_Leith_visc4_max');
 
 #########################################
 # Namelist group: Redi_isopycnal_mixing #
@@ -94,9 +107,9 @@ add_default($nl, 'config_Redi_constant_kappa');
 add_default($nl, 'config_Redi_maximum_slope');
 add_default($nl, 'config_Redi_use_slope_taper');
 add_default($nl, 'config_Redi_use_surface_taper');
-add_default($nl, 'config_Redi_N2_based_taper_enable');
-add_default($nl, 'config_Redi_N2_based_taper_min');
-add_default($nl, 'config_Redi_N2_based_taper_limit_term1');
+add_default($nl, 'config_Redi_limit_term1');
+add_default($nl, 'config_Redi_use_quasi_monotone_limiter');
+add_default($nl, 'config_Redi_quasi_monotone_safety_factor');
 add_default($nl, 'config_Redi_min_layers_diag_terms');
 add_default($nl, 'config_Redi_horizontal_taper');
 add_default($nl, 'config_Redi_horizontal_ramp_min');
@@ -111,6 +124,8 @@ add_default($nl, 'config_submesoscale_tau');
 add_default($nl, 'config_submesoscale_Ce');
 add_default($nl, 'config_submesoscale_Lfmin');
 add_default($nl, 'config_submesoscale_ds_max');
+add_default($nl, 'config_submesoscale_ice_aware');
+add_default($nl, 'config_submesoscale_ice_aware_crit_conc');
 
 ############################################
 # Namelist group: GM_eddy_parameterization #
@@ -130,11 +145,24 @@ add_default($nl, 'config_GM_EG_riMin');
 add_default($nl, 'config_GM_EG_kappa_factor');
 add_default($nl, 'config_GM_EG_Rossby_factor');
 add_default($nl, 'config_GM_EG_Rhines_factor');
+add_default($nl, 'config_GM_geometric_alpha');
+add_default($nl, 'config_GM_geometric_eddyDiff');
+add_default($nl, 'config_GM_geometric_dissipation');
+add_default($nl, 'config_GM_geometric_backgroundEddyEnergy');
+add_default($nl, 'config_GM_geometric_maximumEddyEnergy');
 add_default($nl, 'config_GM_horizontal_taper');
 add_default($nl, 'config_GM_horizontal_ramp_min');
 add_default($nl, 'config_GM_horizontal_ramp_max');
 add_default($nl, 'config_GMRedi_Rossby_ramp_min');
 add_default($nl, 'config_GMRedi_Rossby_ramp_max');
+
+##################################################
+# Namelist group: eddy_kinetic_energy_correction #
+##################################################
+
+add_default($nl, 'config_eke_correction_enable');
+add_default($nl, 'config_eke_alpha');
+add_default($nl, 'config_eke_beta');
 
 #########################################
 # Namelist group: eddy_parameterization #
@@ -145,16 +173,6 @@ add_default($nl, 'config_eddyMLD_reference_depth');
 add_default($nl, 'config_eddyMLD_reference_pressure');
 add_default($nl, 'config_eddyMLD_use_old');
 
-####################################
-# Namelist group: Rayleigh_damping #
-####################################
-
-add_default($nl, 'config_Rayleigh_friction');
-add_default($nl, 'config_Rayleigh_damping_coeff');
-add_default($nl, 'config_Rayleigh_damping_depth_variable');
-add_default($nl, 'config_Rayleigh_bottom_friction');
-add_default($nl, 'config_Rayleigh_bottom_damping_coeff');
-
 #########################
 # Namelist group: cvmix #
 #########################
@@ -163,6 +181,9 @@ add_default($nl, 'config_use_cvmix');
 add_default($nl, 'config_cvmix_prandtl_number');
 add_default($nl, 'config_cvmix_background_scheme');
 add_default($nl, 'config_cvmix_background_diffusion');
+add_default($nl, 'config_cvmix_background_diffusion_max_latitude');
+add_default($nl, 'config_cvmix_background_diffusion_passive');
+add_default($nl, 'config_cvmix_background_diffusion_passive_enable');
 add_default($nl, 'config_cvmix_background_viscosity');
 add_default($nl, 'config_cvmix_BryanLewis_bl1');
 add_default($nl, 'config_cvmix_BryanLewis_bl2');
@@ -208,8 +229,9 @@ add_default($nl, 'config_cvmix_kpp_use_active_wave');
 # Namelist group: wave_coupling #
 #################################
 
-add_default($nl, 'config_n_stokes_drift_wavenumber_partitions');
 add_default($nl, 'config_use_active_wave');
+add_default($nl, 'config_momentum_use_active_wave');
+add_default($nl, 'config_n_stokes_drift_wavenumber_partitions');
 
 ########################
 # Namelist group: gotm #
@@ -227,16 +249,40 @@ add_default($nl, 'config_gotm_constant_bottom_drag_coeff');
 
 add_default($nl, 'config_use_variable_drag');
 add_default($nl, 'config_use_bulk_wind_stress');
+add_default($nl, 'config_bulk_wind_stress_interp_isotropic');
 add_default($nl, 'config_use_bulk_thickness_flux');
 add_default($nl, 'config_flux_attenuation_coefficient');
 add_default($nl, 'config_flux_attenuation_coefficient_runoff');
+add_default($nl, 'config_subglacial_runoff_mode');
+add_default($nl, 'config_flux_attenuation_coefficient_subglacial_runoff');
+add_default($nl, 'config_sgr_flux_vertical_location');
+add_default($nl, 'config_use_sgr_opt_kpp');
+add_default($nl, 'config_use_sgr_opt_temp_prescribed');
+add_default($nl, 'config_use_sgr_opt_salt_prescribed');
+add_default($nl, 'config_sgr_temperature_prescribed');
+add_default($nl, 'config_sgr_salinity_prescribed');
+
+##################################
+# Namelist group: precip_scaling #
+##################################
+
+add_default($nl, 'config_use_precip_scaling');
+add_default($nl, 'config_precip_scaling_mode');
+add_default($nl, 'config_precip_scaling_initial_factor');
+add_default($nl, 'config_precip_scaling_constant_factor');
+add_default($nl, 'config_precip_scaling_history_years');
+add_default($nl, 'config_precip_scaling_write_to_logfile');
 
 ############################
 # Namelist group: coupling #
 ############################
 
-add_default($nl, 'config_ssh_grad_relax_timescale');
-add_default($nl, 'config_remove_AIS_coupler_runoff');
+add_default($nl, 'config_remove_ais_river_runoff');
+add_default($nl, 'config_remove_ais_ice_runoff');
+add_default($nl, 'config_scale_dismf_by_removed_ice_runoff');
+add_default($nl, 'config_ais_ice_runoff_history_days');
+add_default($nl, 'config_n_glc_z_levels');
+add_default($nl, 'config_glc_thermal_forcing_coupling_mode');
 
 ######################################
 # Namelist group: shortwaveRadiation #
@@ -252,7 +298,7 @@ add_default($nl, 'config_enable_shortwave_energy_fixer');
 ###########################################
 
 add_default($nl, 'config_use_self_attraction_loading');
-add_default($nl, 'config_self_attraction_loading_smoothing_width');
+add_default($nl, 'config_self_attraction_loading_depth_cutoff');
 add_default($nl, 'config_mpas_to_grid_weights_file');
 add_default($nl, 'config_grid_to_mpas_weights_file');
 add_default($nl, 'config_self_attraction_loading_compute_interval');
@@ -288,14 +334,24 @@ add_default($nl, 'config_use_frazil_ice_formation');
 add_default($nl, 'config_frazil_in_open_ocean');
 add_default($nl, 'config_frazil_under_land_ice');
 add_default($nl, 'config_frazil_heat_of_fusion');
+add_default($nl, 'config_use_frazil_ice_porosity');
 add_default($nl, 'config_frazil_ice_density');
+add_default($nl, 'config_frazil_ice_porosity');
 add_default($nl, 'config_frazil_fractional_thickness_limit');
+add_default($nl, 'config_include_sensible_heat_frazil');
+add_default($nl, 'config_expel_excess_frazil_salt');
 add_default($nl, 'config_specific_heat_sea_water');
 add_default($nl, 'config_frazil_maximum_depth');
 add_default($nl, 'config_frazil_sea_ice_reference_salinity');
-add_default($nl, 'config_frazil_land_ice_reference_salinity');
 add_default($nl, 'config_frazil_maximum_freezing_temperature');
 add_default($nl, 'config_frazil_use_surface_pressure');
+
+############################
+# Namelist group: land_ice #
+############################
+
+add_default($nl, 'config_land_ice_draft_mode');
+add_default($nl, 'config_land_ice_rho_ocean');
 
 ###################################
 # Namelist group: land_ice_fluxes #
@@ -309,11 +365,13 @@ add_default($nl, 'config_land_ice_flux_boundaryLayerThickness');
 add_default($nl, 'config_land_ice_flux_boundaryLayerNeighborWeight');
 add_default($nl, 'config_land_ice_flux_cp_ice');
 add_default($nl, 'config_land_ice_flux_rho_ice');
-add_default($nl, 'config_land_ice_flux_topDragCoeff');
+add_default($nl, 'config_land_ice_flux_explicit_topDragCoeff');
 add_default($nl, 'config_land_ice_flux_ISOMIP_gammaT');
-add_default($nl, 'config_land_ice_flux_rms_tidal_velocity');
 add_default($nl, 'config_land_ice_flux_jenkins_heat_transfer_coefficient');
 add_default($nl, 'config_land_ice_flux_jenkins_salt_transfer_coefficient');
+add_default($nl, 'config_land_ice_flux_tidal_Jourdain_alpha');
+add_default($nl, 'config_land_ice_flux_tidal_Jourdain_A0');
+add_default($nl, 'config_land_ice_flux_tidal_Jourdain_U0');
 
 #############################
 # Namelist group: advection #
@@ -327,20 +385,47 @@ add_default($nl, 'config_horiz_tracer_adv_order');
 add_default($nl, 'config_coef_3rd_order');
 add_default($nl, 'config_flux_limiter');
 add_default($nl, 'config_remap_limiter');
+add_default($nl, 'config_thickness_flux_type');
+add_default($nl, 'config_use_spatially_variable_upwind');
+add_default($nl, 'config_spatially_variable_upwind_hmin');
+add_default($nl, 'config_spatially_variable_upwind_hmax');
 
 ###############################
 # Namelist group: bottom_drag #
 ###############################
 
-add_default($nl, 'config_use_implicit_bottom_drag');
-add_default($nl, 'config_implicit_bottom_drag_coeff');
-add_default($nl, 'config_use_implicit_bottom_roughness');
-add_default($nl, 'config_use_implicit_bottom_drag_variable');
-add_default($nl, 'config_use_implicit_bottom_drag_variable_mannings');
-add_default($nl, 'config_use_explicit_bottom_drag');
+add_default($nl, 'config_bottom_drag_mode');
+add_default($nl, 'config_implicit_bottom_drag_type');
+add_default($nl, 'config_implicit_constant_bottom_drag_coeff');
+add_default($nl, 'config_use_implicit_top_drag');
+add_default($nl, 'config_implicit_top_drag_coeff');
+add_default($nl, 'config_loglaw_bottom_roughness');
+add_default($nl, 'config_loglaw_layer_depth_max');
+add_default($nl, 'config_loglaw_bottom_drag_min');
+add_default($nl, 'config_loglaw_bottom_drag_max');
 add_default($nl, 'config_explicit_bottom_drag_coeff');
 add_default($nl, 'config_use_topographic_wave_drag');
+add_default($nl, 'config_topographic_wave_drag_scheme');
 add_default($nl, 'config_topographic_wave_drag_coeff');
+add_default($nl, 'config_thickness_drag_type');
+add_default($nl, 'config_topographic_wave_drag_cutoff_depth');
+add_default($nl, 'config_topographic_wave_drag_cutoff_width');
+
+####################################
+# Namelist group: Rayleigh_damping #
+####################################
+
+add_default($nl, 'config_Rayleigh_damping_coeff');
+add_default($nl, 'config_Rayleigh_damping_depth_variable');
+add_default($nl, 'config_Rayleigh_bottom_friction');
+add_default($nl, 'config_Rayleigh_bottom_damping_coeff');
+
+###################################
+# Namelist group: vegetation_drag #
+###################################
+
+add_default($nl, 'config_use_vegetation_drag');
+add_default($nl, 'config_vegetation_drag_coefficient');
 
 ###################################
 # Namelist group: ocean_constants #
@@ -460,6 +545,7 @@ add_default($nl, 'config_disable_thick_hadv');
 add_default($nl, 'config_disable_thick_vadv');
 add_default($nl, 'config_disable_thick_sflux');
 add_default($nl, 'config_disable_vel_all_tend');
+add_default($nl, 'config_disable_vel_hadv');
 add_default($nl, 'config_disable_vel_coriolis');
 add_default($nl, 'config_disable_vel_pgrad');
 add_default($nl, 'config_disable_vel_hmix');
@@ -499,6 +585,21 @@ add_default($nl, 'config_transport_tests_flow_id');
 #########################################
 
 add_default($nl, 'config_vert_levels');
+
+#########################################
+# Namelist group: manufactured_solution #
+#########################################
+
+add_default($nl, 'config_use_manufactured_solution');
+add_default($nl, 'config_manufactured_solution_wavelength_x');
+add_default($nl, 'config_manufactured_solution_wavelength_y');
+add_default($nl, 'config_manufactured_solution_amplitude');
+
+#####################################
+# Namelist group: init_mode_subgrid #
+#####################################
+
+add_default($nl, 'config_subgrid_table_levels');
 
 ################################################
 # Namelist group: tracer_forcing_activeTracers #
@@ -548,12 +649,36 @@ add_default($nl, 'config_use_ecosysTracers_idealAge_forcing');
 add_default($nl, 'config_use_ecosysTracers_ttd_forcing');
 add_default($nl, 'config_use_ecosysTracers_surface_value');
 add_default($nl, 'config_use_ecosysTracers_river_inputs_from_coupler');
+add_default($nl, 'config_use_ecosys_frazil_tendencies');
 add_default($nl, 'config_use_ecosysTracers_sea_ice_coupling');
+add_default($nl, 'config_use_ecosysTracers_atm_dust_from_coupler');
 add_default($nl, 'config_ecosysTracers_diagnostic_fields_level1');
 add_default($nl, 'config_ecosysTracers_diagnostic_fields_level2');
 add_default($nl, 'config_ecosysTracers_diagnostic_fields_level3');
 add_default($nl, 'config_ecosysTracers_diagnostic_fields_level4');
 add_default($nl, 'config_ecosysTracers_diagnostic_fields_level5');
+add_default($nl, 'config_use_ecosysTracers_iron_solubility_file');
+
+####################################################
+# Namelist group: tracer_forcing_freshwaterTracers #
+####################################################
+
+add_default($nl, 'config_use_freshwaterTracers');
+add_default($nl, 'config_use_freshwaterTracers_surface_bulk_forcing');
+add_default($nl, 'config_use_freshwaterTracers_surface_restoring');
+add_default($nl, 'config_use_freshwaterTracers_interior_restoring');
+add_default($nl, 'config_use_freshwaterTracers_exponential_decay');
+add_default($nl, 'config_use_freshwaterTracers_idealAge_forcing');
+add_default($nl, 'config_use_freshwaterTracers_ttd_forcing');
+add_default($nl, 'config_use_freshwaterTracers_surface_value');
+add_default($nl, 'config_use_freshwaterTracers_rainFlux');
+add_default($nl, 'config_use_freshwaterTracers_snowFlux');
+add_default($nl, 'config_use_freshwaterTracers_iceRunoffFlux');
+add_default($nl, 'config_use_freshwaterTracers_riverRunoffFlux');
+add_default($nl, 'config_use_freshwaterTracers_subglacialRunoffFlux');
+add_default($nl, 'config_use_freshwaterTracers_seaIceFreshWaterFlux');
+add_default($nl, 'config_use_freshwaterTracers_icebergFreshWaterFlux');
+add_default($nl, 'config_use_freshwaterTracers_landIceFreshwaterFlux');
 
 #############################################
 # Namelist group: tracer_forcing_DMSTracers #

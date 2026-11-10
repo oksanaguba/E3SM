@@ -10,12 +10,12 @@ module restFileMod
   use spmdMod              , only : masterproc, mpicom
   use abortutils           , only : endrun
   use shr_log_mod          , only : errMsg => shr_log_errMsg
-  use clm_time_manager     , only : timemgr_restart_io, get_nstep
+  use elm_time_manager     , only : timemgr_restart_io, get_nstep
   use subgridRestMod       , only : SubgridRest
   use accumulMod           , only : accumulRest
   use histFileMod          , only : hist_restart_ncd
   use elm_varpar           , only : crop_prog
-  use elm_varctl           , only : use_cn, use_c13, use_c14, use_lch4, use_fates, use_betr
+  use elm_varctl           , only : use_cn, use_c13, use_c14, use_lch4, use_fates
   use elm_varctl           , only : use_erosion
   use elm_varctl           , only : create_glacier_mec_landunit, iulog 
   use elm_varcon           , only : c13ratio, c14ratio
@@ -41,17 +41,12 @@ module restFileMod
   use lnd2atmType          , only : lnd2atm_type
   use glc2lndMod           , only : glc2lnd_type
   use lnd2glcMod           , only : lnd2glc_type
-  use BeTRTracerType       , only : BeTRTracer_Type    
-  use TracerStateType      , only : TracerState_type
-  use TracerFluxType       , only : TracerFlux_Type
-  use tracercoefftype      , only : tracercoeff_type
   use ncdio_pio            , only : file_desc_t, ncd_pio_createfile, ncd_pio_openfile, ncd_global
   use ncdio_pio            , only : ncd_pio_closefile, ncd_defdim, ncd_putatt, ncd_enddef, check_dim
   use ncdio_pio            , only : check_att, ncd_getatt
-  use BeTRSimulationELM    , only : betr_simulation_elm_type
   use CropType             , only : crop_type
   use GridcellDataType     , only : grc_wf
-  use TopounitDataType     , only : top_es
+  use TopounitDataType     , only : top_es, top_ws
   use LandunitDataType     , only : lun_es, lun_ws
   use ColumnDataType       , only : col_es, col_ef, col_ws, col_wf
   use ColumnDataType       , only : col_cs, c13_col_cs, c14_col_cs
@@ -105,13 +100,14 @@ contains
        ch4_vars, energyflux_vars, frictionvel_vars, lakestate_vars, &
        photosyns_vars, soilhydrology_vars,                          &
        soilstate_vars, solarabs_vars, surfalb_vars,                 &
-       sedflux_vars, ep_betr, alm_fates, crop_vars,                 &
+       sedflux_vars, alm_fates, crop_vars,                 &
        rdate, noptr)
     !
     ! !DESCRIPTION:
     ! Define/write CLM restart file.
     !
     use WaterBudgetMod, only : WaterBudget_Restart
+    use HeatBudgetMod , only : HeatBudget_Restart
     use CNPBudgetMod  , only : CNPBudget_Restart
     use elm_varctl    , only : do_budgets, use_cn
     !
@@ -134,7 +130,6 @@ contains
     type(soilstate_type)           , intent(inout) :: soilstate_vars
     type(solarabs_type)            , intent(in)    :: solarabs_vars
     type(surfalb_type)             , intent(in)    :: surfalb_vars
-    class(betr_simulation_elm_type), intent(inout):: ep_betr
     type(hlm_fates_interface_type) , intent(inout) :: alm_fates
     type(crop_type)                , intent(inout) :: crop_vars
     character(len=*)               , intent(in), optional :: rdate     ! restart file time stamp for name
@@ -211,6 +206,8 @@ contains
     
     call grc_ws%Restart(bounds, ncid, flag='define')
     
+    call top_ws%Restart (bounds, ncid, flag='define')
+
     call lun_ws%Restart (bounds, ncid, flag='define')
 
     call col_ws%Restart (bounds, ncid, flag='define', &
@@ -280,9 +277,6 @@ contains
              soilstate_inst=soilstate_vars)
     end if
 
-    if (use_betr) then
-       call ep_betr%BeTRRestart(bounds, ncid, flag='define')
-    endif
 
     if (present(rdate)) then 
        call hist_restart_ncd (bounds, ncid, flag='define', rdate=rdate )
@@ -290,6 +284,7 @@ contains
 
     if (do_budgets) then
        call WaterBudget_Restart(bounds, ncid, flag='define')
+       call HeatBudget_Restart(bounds, ncid, flag='define')
        if (use_cn) then
           call CNPBudget_Restart(bounds, ncid, flag='define')
        endif
@@ -345,6 +340,8 @@ contains
 
     call grc_ws%Restart(bounds, ncid, flag='write')
     
+    call top_ws%Restart (bounds, ncid, flag='write')
+
     call lun_ws%Restart (bounds, ncid, flag='write')
 
     call col_ws%Restart (bounds, ncid, flag='write', &
@@ -404,6 +401,8 @@ contains
        call veg_ps%Restart(bounds, ncid, flag='write')
        call veg_pf%Restart(bounds, ncid, flag='write')
        call crop_vars%Restart(bounds, ncid, flag='write')
+
+       call grc_cs%Restart(bounds, ncid, flag='write')
     end if
 
 
@@ -416,14 +415,12 @@ contains
 
     end if
 
-    if (use_betr) then
-       call ep_betr%BeTRRestart(bounds, ncid, flag='write')
-    endif
 
     call hist_restart_ncd (bounds, ncid, flag='write' )
 
     if (do_budgets) then
        call WaterBudget_Restart(bounds, ncid, flag='write')
+       call HeatBudget_Restart(bounds, ncid, flag='write')
        if (use_cn) then
           call CNPBudget_Restart(bounds, ncid, flag='write')
        endif
@@ -455,7 +452,7 @@ contains
        ch4_vars, energyflux_vars, frictionvel_vars, lakestate_vars, &
        photosyns_vars, soilhydrology_vars,                          &
        soilstate_vars, solarabs_vars, surfalb_vars,                 &
-       sedflux_vars, ep_betr,                                       &
+       sedflux_vars,                                       &
        alm_fates, glc2lnd_vars, crop_vars)
     !
     ! !DESCRIPTION:
@@ -470,6 +467,7 @@ contains
     use decompMod        , only : bounds_type
     use reweightMod      , only : reweight_wrapup
     use WaterBudgetMod   , only : WaterBudget_Restart
+    use HeatBudgetMod    , only : HeatBudget_Restart
     use CNPBudgetMod     , only : CNPBudget_Restart
     use elm_varctl       , only : do_budgets, use_cn
     !
@@ -490,7 +488,6 @@ contains
     type(soilstate_type)           , intent(inout) :: soilstate_vars
     type(solarabs_type)            , intent(inout) :: solarabs_vars
     type(surfalb_type)             , intent(inout) :: surfalb_vars
-    class(betr_simulation_elm_type), intent(inout) :: ep_betr
     type(hlm_fates_interface_type) , intent(inout) :: alm_fates
     type(glc2lnd_type)             , intent(inout) :: glc2lnd_vars
     type(crop_type)                , intent(inout) :: crop_vars
@@ -568,6 +565,8 @@ contains
 
     call grc_ws%Restart(bounds, ncid, flag='read')
 
+    call top_ws%Restart (bounds, ncid, flag='read')
+
     call lun_ws%Restart (bounds, ncid, flag='read')
 
     call col_ws%Restart (bounds, ncid, flag='read', &
@@ -627,6 +626,8 @@ contains
        call veg_ps%Restart(bounds, ncid, flag='read')
        call veg_pf%Restart(bounds, ncid, flag='read')
        call crop_vars%Restart(bounds, ncid, flag='read')
+
+       call grc_cs%Restart(bounds, ncid, flag='read')
     end if
 
     if (use_fates) then
@@ -637,14 +638,12 @@ contains
     end if
 
 
-    if (use_betr) then
-       call ep_betr%BeTRRestart(bounds, ncid, flag='read')
-    endif
         
     call hist_restart_ncd (bounds, ncid, flag='read')
 
     if (do_budgets) then
        call WaterBudget_Restart(bounds, ncid, flag='read')
+       call HeatBudget_Restart(bounds, ncid, flag='read')
        if (use_cn) then
           call CNPBudget_Restart(bounds, ncid, flag='read')
        endif
@@ -783,7 +782,7 @@ contains
     ! in write mode, otherwise just close restart file if in read mode
     !
     ! !USES:
-    use clm_time_manager, only : is_last_step
+    use elm_time_manager, only : is_last_step
     !
     ! !ARGUMENTS:
     character(len=*) , intent(in) :: file  ! local output filename
@@ -843,7 +842,7 @@ contains
   !-----------------------------------------------------------------------
   subroutine restFile_open( flag, file, ncid )
 
-    use clm_time_manager, only : get_nstep
+    use elm_time_manager, only : get_nstep
 
     character(len=*),  intent(in) :: flag ! flag to specify read or write
     character(len=*),  intent(in) :: file ! filename
@@ -905,15 +904,16 @@ contains
     ! Read/Write initial data from/to netCDF instantaneous initial data file
     !
     ! !USES:
-    use clm_time_manager     , only : get_nstep
+    use elm_time_manager     , only : get_nstep
     use elm_varctl           , only : caseid, ctitle, version, username, hostname, fsurdat
     use elm_varctl           , only : conventions, source, use_hydrstress
-    use elm_varpar           , only : numrad, nlevlak, nlevsno, nlevgrnd, nlevurb, nlevcan, nlevtrc_full, nmonth, nvegwcs
+    use elm_varpar           , only : numrad, nlevlak, nlevsno, nlevgrnd, nlevurb, nlevcan, nmonth, nvegwcs
     use elm_varpar           , only : cft_lb, cft_ub, maxpatch_glcmec
     use dynSubgridControlMod , only : get_flanduse_timeseries
     use decompMod            , only : get_proc_global
     use elm_varctl           , only : do_budgets
     use WaterBudgetMod       , only : f_size, s_size, p_size
+    use HeatBudgetMod        , only : h_f_size => f_size, h_s_size => s_size, h_g_size => g_size, h_p_size => p_size
     use CNPBudgetMod         , only : c_f_size, c_s_size, n_f_size, n_s_size, p_f_size, p_s_size
     !
     ! !ARGUMENTS:
@@ -944,7 +944,9 @@ contains
     call ncd_defdim(ncid , namel      , numl           ,  dimid)
     call ncd_defdim(ncid , namec      , numc           ,  dimid)
     call ncd_defdim(ncid , namep      , nump           ,  dimid)
-    call ncd_defdim(ncid , nameCohort , numCohort      ,  dimid)
+    if ( use_fates ) then
+       call ncd_defdim(ncid , nameCohort , numCohort      ,  dimid)
+    endif
 
     call ncd_defdim(ncid , 'levgrnd' , nlevgrnd       ,  dimid)
     call ncd_defdim(ncid , 'levurb'  , nlevurb        ,  dimid)
@@ -958,7 +960,6 @@ contains
       call ncd_defdim(ncid , 'vegwcs'  , nvegwcs        ,  dimid)
     end if
     call ncd_defdim(ncid , 'string_length', 64        ,  dimid)
-    call ncd_defdim(ncid , 'levtrc'  , nlevtrc_full   ,  dimid)    
     call ncd_defdim(ncid , 'month'   , nmonth         ,  dimid)
     if (create_glacier_mec_landunit) then
        call ncd_defdim(ncid , 'glc_nec', maxpatch_glcmec, dimid)
@@ -967,6 +968,9 @@ contains
     if (do_budgets) then
        call ncd_defdim(ncid , 'budg_flux' , f_size*p_size,  dimid)
        call ncd_defdim(ncid , 'budg_state', s_size*p_size,  dimid)
+       call ncd_defdim(ncid , 'heat_budg_flux', h_f_size*h_p_size,  dimid)
+       call ncd_defdim(ncid , 'heat_budg_state', h_s_size*h_p_size,  dimid)
+       call ncd_defdim(ncid , 'heat_budg_gflux', h_g_size*h_p_size,  dimid)
        if (use_cn) then
           call ncd_defdim(ncid , 'C_budg_flux' , c_f_size*p_size,  dimid)
           call ncd_defdim(ncid , 'C_budg_state', c_s_size*p_size,  dimid)
@@ -992,7 +996,8 @@ contains
     call ncd_putatt(ncid, NCD_GLOBAL, 'case_title'     , trim(ctitle))
     call ncd_putatt(ncid, NCD_GLOBAL, 'case_id'        , trim(caseid))
     call ncd_putatt(ncid, NCD_GLOBAL, 'surface_dataset', trim(fsurdat))
-    call ncd_putatt(ncid, NCD_GLOBAL, 'flanduse_timeseries', trim(get_flanduse_timeseries()))
+    if (len_trim(get_flanduse_timeseries()) > 0) &
+       call ncd_putatt(ncid, NCD_GLOBAL, 'flanduse_timeseries', trim(get_flanduse_timeseries()))
     call ncd_putatt(ncid, NCD_GLOBAL, 'title', 'ELM Restart information')
     if (create_glacier_mec_landunit) then
        call ncd_putatt(ncid, ncd_global, 'created_glacier_mec_landunits', 'true')
@@ -1013,7 +1018,8 @@ contains
     ! Add global metadata defining landunit types
     !
     ! !USES:
-    use landunit_varcon, only : max_lunit, landunit_names, landunit_name_length
+    use landunit_varcon, only : max_lunit, max_non_poly_lunit, landunit_names, landunit_name_length
+    use elm_varctl,      only : use_polygonal_tundra
     !
     ! !ARGUMENTS:
     type(file_desc_t), intent(inout) :: ncid ! local file id
@@ -1026,10 +1032,17 @@ contains
     character(len=*), parameter :: subname = 'restFile_add_ilun_metadata'
     !-----------------------------------------------------------------------
     
-    do ltype = 1, max_lunit
-       attname = att_prefix // landunit_names(ltype)
-       call ncd_putatt(ncid, ncd_global, attname, ltype)
-    end do
+    if (use_polygonal_tundra) then
+      do ltype = 1, max_lunit
+        attname = att_prefix // landunit_names(ltype)
+        call ncd_putatt(ncid, ncd_global, attname, ltype)
+      end do
+    else
+      do ltype = 1, max_non_poly_lunit
+        attname = att_prefix // landunit_names(ltype)
+        call ncd_putatt(ncid, ncd_global, attname, ltype)
+      end do
+    end if
 
   end subroutine restFile_add_ilun_metadata
 
@@ -1346,7 +1359,7 @@ contains
     ! Make sure year on the restart file is consistent with the current model year
     !
     ! !USES:
-    use clm_time_manager     , only : get_curr_date, get_rest_date
+    use elm_time_manager     , only : get_curr_date, get_rest_date
     use elm_varctl           , only : fname_len
     use dynSubgridControlMod , only : get_flanduse_timeseries
     !

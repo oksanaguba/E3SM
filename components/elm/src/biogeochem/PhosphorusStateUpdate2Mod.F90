@@ -12,8 +12,7 @@ module PhosphorusStateUpdate2Mod
   !use PhosphorusStateType , only : phosphorusstate_type
   !use PhosphorusFLuxType  , only : phosphorusflux_type
   use VegetationType           , only : veg_pp
-  use pftvarcon           , only : npcropmin
-  use tracer_varcon       , only : is_active_betr_bgc
+  use pftvarcon           , only : iscft
   ! bgc interface & pflotran:
   use elm_varctl          , only : use_pflotran, pf_cmode
   use ColumnDataType      , only : col_ps, col_pf
@@ -60,7 +59,6 @@ contains
       !------------------------------------------------------------------
 
       ! column-level phosporus fluxes from gap-phase mortality
-      if (.not. is_active_betr_bgc) then
       do j = 1, nlevdecomp
          do fc = 1,num_soilc
             c = filter_soilc(fc)
@@ -75,7 +73,6 @@ contains
                  col_ps%decomp_ppools_vr(c,j,i_cwd)     + col_pf%gap_mortality_p_to_cwdp(c,j)       * dt
          end do
       end do
-      endif ! if (.not.is_active_betr_bgc))
       !------------------------------------------------------------------
 
       ! patch -level phosporus fluxes from gap-phase mortality
@@ -145,7 +142,7 @@ contains
 
       !------------------------------------------------------------------
       ! if coupled with pflotran, the following updates are NOT needed
-      if ((.not. is_active_betr_bgc) .and. .not.(use_pflotran .and. pf_cmode)) then
+      if (.not.(use_pflotran .and. pf_cmode)) then
       !------------------------------------------------------------------
 
       ! column-level phosporus fluxes from harvest mortality
@@ -182,7 +179,7 @@ contains
          veg_ps%retransp(p)   = veg_ps%retransp(p)   - veg_pf%hrv_retransp_to_litter(p)   * dt
          veg_ps%ppool(p)      = veg_ps%ppool(p)      - veg_pf%hrv_ppool_to_litter(p)      * dt
 
-       if (ivt(p) >= npcropmin) then ! skip 2 generic crops
+       if (iscft(ivt(p))) then ! skip 2 generic crops
            veg_ps%livestemp(p)= veg_ps%livestemp(p)  - veg_pf%hrv_livestemp_to_prod1p(p)  * dt
            veg_ps%leafp(p)    = veg_ps%leafp(p)      - veg_pf%hrv_leafp_to_prod1p(p)      * dt
            veg_ps%grainp(p)   = veg_ps%grainp(p)     - veg_pf%hrv_grainp_to_prod1p(p)     * dt

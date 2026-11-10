@@ -28,7 +28,7 @@ module UrbanFluxesMod
   use ColumnDataType       , only : col_es, col_ef, col_ws
   use VegetationType       , only : veg_pp
   use VegetationDataType   , only : veg_es, veg_ef, veg_ws, veg_wf
-  use clm_time_manager    , only : get_curr_date, get_step_size, get_nstep
+  use elm_time_manager    , only : get_curr_date, get_step_size, get_nstep
 
   use timeinfoMod  , only : nstep_mod, year_curr, mon_curr, day_curr, secs_curr
   use timeinfoMod  , only : dtime_mod
@@ -64,10 +64,10 @@ contains
     use column_varcon       , only : icol_shadewall, icol_road_perv, icol_road_imperv
     use column_varcon       , only : icol_roof, icol_sunwall
     use filterMod           , only : filter
-    use FrictionVelocityMod , only : FrictionVelocity, MoninObukIni, implicit_stress
+    use FrictionVelocityMod , only : FrictionVelocity, MoninObukIni, &
+         implicit_stress, atm_gustiness, force_land_gustiness
     use QSatMod             , only : QSat
     use elm_varpar          , only : maxpatch_urb, nlevurb, nlevgrnd
-    use elm_varctl          , only : use_vsfm
     !
     ! !ARGUMENTS:
     type(bounds_type)      , intent(in)    :: bounds
@@ -117,7 +117,7 @@ contains
     real(r8) :: dqh(bounds%begl:bounds%endl)                         ! diff of humidity between ref. height and surface
     real(r8) :: zldis(bounds%begl:bounds%endl)                       ! reference height "minus" zero displacement height (m)
     real(r8) :: um(bounds%begl:bounds%endl)                          ! wind speed including the stablity effect (m/s)
-    real(r8) :: obu(bounds%begl:bounds%endl)                         ! Monin-Obukhov length (m)
+    real(r8) :: obu(bounds%begl:bounds%endl)                         ! Obukhov length scale (m)
     real(r8) :: taf_numer(bounds%begl:bounds%endl)                   ! numerator of taf equation (K m/s)
     real(r8) :: taf_denom(bounds%begl:bounds%endl)                   ! denominator of taf equation (m/s)
     real(r8) :: qaf_numer(bounds%begl:bounds%endl)                   ! numerator of qaf equation (kg m/kg s)
@@ -162,6 +162,7 @@ contains
     real(r8) :: t_roof_innerl(bounds%begl:bounds%endl)               ! temperature of inner layer of roof (K)
     real(r8) :: lngth_roof                                           ! length of roof (m)
     real(r8) :: wc                                                   ! convective velocity (m/s)
+    real(r8) :: ugust_total(bounds%begl:bounds%endl)                 ! gustiness including convective velocity [m/s]
     real(r8) :: zeta                                                 ! dimensionless height used in Monin-Obukhov theory
     real(r8) :: eflx_sh_grnd_scale(bounds%begp:bounds%endp)          ! scaled sensible heat flux from ground (W/m**2) [+ to atm]
     real(r8) :: qflx_evap_soi_scale(bounds%begp:bounds%endp)         ! scaled soil evaporation (mm H2O/s) (+ = to atm)
@@ -338,13 +339,14 @@ contains
          if (implicit_stress) then
             wind_speed0(l) = max(0.01_r8, hypot(forc_u(t), forc_v(t)))
             wind_speed_adj(l) = wind_speed0(l)
-            ur(l) = max(1.0_r8, wind_speed_adj(l) + ugust(t))
+            ur(l) = max(1.0_r8, sqrt(wind_speed_adj(l)**2 + ugust(t)**2))
 
             prev_tau(l) = tau_est(t)
          else
-            ur(l) = max(1.0_r8,sqrt(forc_u(t)*forc_u(t)+forc_v(t)*forc_v(t)) + ugust(t))
+            ur(l) = max(1.0_r8,sqrt(forc_u(t)*forc_u(t)+forc_v(t)*forc_v(t)+ugust(t)*ugust(t)))
          end if
          tau_diff(l) = 1.e100_r8
+         ugust_total(l) = ugust(t)
 
       end do
 
@@ -362,7 +364,7 @@ contains
          dthv     = dth(l)*(1._r8+0.61_r8*forc_q(t))+0.61_r8*forc_th(t)*dqh(l)
          zldis(l) = forc_hgt_u_patch(lun_pp%pfti(l)) - z_d_town(l)
 
-         ! Initialize Monin-Obukhov length and wind speed including convective velocity
+         ! Initialize Obukhov length scale and wind speed including convective velocity
 
          call MoninObukIni(ur(l), thv_g(l), dthv, zldis(l), z_0_town(l), um(l), obu(l))
 
@@ -411,7 +413,7 @@ contains
             call FrictionVelocity(begl, endl, &
                  num_urbanl, filter_urbanl, &
                  z_d_town(begl:endl), z_0_town(begl:endl), z_0_town(begl:endl), z_0_town(begl:endl), &
-                 obu(begl:endl), iter, ur(begl:endl), um(begl:endl), ustar(begl:endl), &
+                 obu(begl:endl), iter, ur(begl:endl), um(begl:endl), ugust_total(begl:endl), ustar(begl:endl), &
                  temp1(begl:endl), temp2(begl:endl), temp12m(begl:endl), temp22m(begl:endl), fm(begl:endl), &
                  frictionvel_vars, landunit_index=.true.)
          end if
@@ -433,7 +435,7 @@ contains
                call shr_flux_update_stress(wind_speed0(l), wsresp(t), tau_est(t), &
                     tau(l), prev_tau(l), tau_diff(l), prev_tau_diff(l), &
                     wind_speed_adj(l))
-               ur(l) = max(1.0_r8, wind_speed_adj(l) + ugust(t))
+               ur(l) = max(1.0_r8, sqrt(wind_speed_adj(l)**2 + ugust(t)**2))
             end if
 
             ! Canyon top wind
@@ -551,14 +553,6 @@ contains
                ! unscaled latent heat conductance
                wtuq_road_perv_unscl(l) = 1._r8/canyon_resistance(l)
 
-               if (use_vsfm) then
-                  if (qaf(l) < qg(c)) then
-                     if (do_soilevap_beta()) then
-                        wtuq_road_perv(l)       = soilbeta(c)*wtuq_road_perv(l)
-                        wtuq_road_perv_unscl(l) = soilbeta(c)*wtuq_road_perv_unscl(l)
-                     endif
-                  endif
-               endif
             else if (ctype(c) == icol_road_imperv) then
 
                ! scaled sensible heat conductance
@@ -711,8 +705,13 @@ contains
                um(l) = max(ur(l),0.1_r8)
             else                                      !unstable
                zeta = max(-100._r8,min(zeta,-0.01_r8))
-               wc = beta(l)*(-grav*ustar(l)*thvstar*zii(l)/thv_g(l))**0.333_r8
-               um(l) = sqrt(ur(l)*ur(l) + wc*wc)
+               if ((.not. atm_gustiness) .or. force_land_gustiness) then
+                  wc = beta(l)*(-grav*ustar(l)*thvstar*zii(l)/thv_g(l))**0.333_r8
+                  ugust_total(l) = sqrt(ugust(t)**2 + wc**2)
+                  um(l) = sqrt(ur(l)*ur(l) + wc*wc)
+               else
+                  um(l) = max(ur(l),0.1_r8)
+               end if
             end if
 
             obu(l) = zldis(l)/zeta

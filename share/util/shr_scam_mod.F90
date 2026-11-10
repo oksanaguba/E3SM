@@ -589,7 +589,7 @@ end subroutine shr_scam_getCloseLatLonFile
 
 subroutine shr_scam_checkSurface(scmlon, scmlat, scm_multcols, scm_nx, scm_ny, &
      ocn_compid, ocn_mpicom, lnd_present, sno_present, ocn_present, ice_present, &
-     rof_present, flood_present, rofice_present)
+     rof_present, flood_present, rofice_present , iac_present)
 
 ! !USES:
    use shr_dmodel_mod    ! shr data model stuff
@@ -613,6 +613,7 @@ subroutine shr_scam_checkSurface(scmlon, scmlat, scm_multcols, scm_nx, scm_ny, &
    logical,            optional, intent(inout) :: rof_present  ! land point with rof
    logical,            optional, intent(inout) :: flood_present  ! rof doing flood
    logical,            optional, intent(inout) :: rofice_present ! land point with rof
+   logical,            optional, intent(inout) :: iac_present ! iac model 
 
 !EOP
 
@@ -647,11 +648,13 @@ subroutine shr_scam_checkSurface(scmlon, scmlat, scm_multcols, scm_nx, scm_ny, &
    real(r8)               :: sst_constant_value 
    character(len=CL)      :: restfilm = 'unset'
    character(len=CL)      :: restfils = 'unset'
+   real(r8)               :: RSO_fixed_MLD
+   real(r8)               :: RSO_relax_tau
    integer(IN)   :: nfrac
    logical :: force_prognostic_true = .false.
    namelist /dom_inparm/ sstcyc, nrevsn, rest_pfile, bndtvs, focndomain
    namelist / docn_nml / decomp, sst_constant_value, force_prognostic_true, &
-        restfilm, restfils
+        restfilm, restfils, RSO_fixed_MLD, RSO_relax_tau
 
 !-------------------------------------------------------------------------------
 ! Notes:
@@ -712,7 +715,7 @@ subroutine shr_scam_checkSurface(scmlon, scmlat, scm_multcols, scm_nx, scm_ny, &
       end do
       close( unitn )
       call shr_file_freeUnit(unitn)
-      call shr_strdata_readnml(SCAMSDAT,'docn_in')
+      call shr_strdata_readnml(SCAMSDAT,'docn_in',mpicom=ocn_mpicom)
       call shr_dmodel_readgrid(SCAMSDAT%grid,SCAMSDAT%gsmap,SCAMSDAT%nxg,SCAMSDAT%nyg,SCAMSDAT%nzg, &
            SCAMSDAT%domainfile, ocn_compid, ocn_mpicom, '2d1d', readfrac=.true., &
            scmmode=.true.,scm_multcols=scm_multcols,scmlon=scmlon,scmlat=scmlat, &
@@ -741,6 +744,9 @@ subroutine shr_scam_checkSurface(scmlon, scmlat, scm_multcols, scm_nx, scm_ny, &
    if (present(rof_present))    rof_present   = .false.
    if (present(flood_present))  flood_present = .false.
    if (present(rofice_present)) rofice_present = .false.
+
+   ! Always turn iac off
+   if (present(iac_present)) iac_present = .false.
 
 end subroutine shr_scam_checkSurface
 

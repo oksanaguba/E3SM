@@ -105,7 +105,10 @@ contains
     ! Local Variables
     ! ========================
 
-    integer :: k,nf
+    integer :: k
+#if (defined COLUMN_OPENMP)
+    integer :: nf
+#endif
     real (kind=real_kind) :: facp(np,np), facm(np,np)
 
     ! ===========================================================
@@ -441,7 +444,6 @@ end subroutine preq_hydrostatic
   subroutine preq_hydrostatic_v2(phi,phis,integrand)
     use kinds, only : real_kind
     use dimensions_mod, only : np, nlev
-    use physical_constants, only : rgas
 !    use hybvcoord_mod, only : hvcoord_t
     implicit none
 
@@ -454,7 +456,6 @@ end subroutine preq_hydrostatic
 
     !---------------------------Local workspace-----------------------------
     integer i,j,k                         ! longitude, level indices
-    real(kind=real_kind) Hkk,Hkl          ! diagonal term of energy conversion matrix
     real(kind=real_kind), dimension(np,np,nlev) :: phii       ! Geopotential at interfaces
     !-----------------------------------------------------------------------
 

@@ -2,7 +2,7 @@
   nthreads          = -1                        ! use OMP_NUM_THREADS
   partmethod        = 4                         ! mesh parition method: 4 = space filling curve
   topology          = "cube"                    ! mesh type: cubed sphere
-  test_case         = "dcmip2012_test1_1_conv"  ! test identifier
+  test_case         = "dcmip2012_test1_3a_conv" ! test identifier
   prescribed_wind   = 1
   mesh_file         = 'mountain_10_x2.g'
   qsize             = 4                         ! num tracer fields
@@ -18,6 +18,7 @@
   smooth = 0
   nu                = 1.585e13
   nu_s              = 1.585e13
+  nu_p              = 1                         ! unused; silence hommexx error
   se_ftype          = -1
   limiter_option    = 9
   hypervis_order    = 2                         ! 2 = hyperviscosity
@@ -35,6 +36,7 @@
   vert_remap_q_alg   = 10
   semi_lagrange_hv_q = 1
   nu_q = 0
+  internal_diagnostics_level = 2
 /
 &vert_nl
   vanalytic         = 1

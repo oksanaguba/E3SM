@@ -17,7 +17,7 @@
           An abbreviation of the fortran declaration for the variable.
       Valid declarations are:
 
-          char*n  
+          char*n
           integer
           logical
           real
@@ -31,7 +31,7 @@
      input_pathname
           Only include this attribute to indicate that the variable
           contains the pathname of an input dataset that resides in the
-          CESM inputdata directory tree.  
+          CESM inputdata directory tree.
 
       The recognized values are "abs" to indicate that an absolute
           pathname is required, or "rel:var_name" to indicate that the
@@ -108,6 +108,14 @@ Default: Defined in namelist_defaults.xml
 Selection of the type of calendar that should be used in the simulation.
 
 Valid values: 'gregorian', 'noleap'
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_output_reference_time" type="char*1024"
+	category="time_management" group="time_management">
+Reference time used in the units attribute of Time in output files.
+
+Valid values: 'YYYY-MM-DD_HH:MM:SS'
 Default: Defined in namelist_defaults.xml
 </entry>
 
@@ -194,9 +202,28 @@ Default: Defined in namelist_defaults.xml
 
 <entry id="config_time_integrator" type="char*1024"
 	category="time_integration" group="time_integration">
-Time integration method.
+Time integration method. These options are only supported in standalone, not E3SM: 'LTS', 'FB_LTS'.
 
-Valid values: 'split_explicit', 'RK4', 'unsplit_explicit', 'split_implicit'
+Valid values: 'split_explicit', 'RK4', 'unsplit_explicit', 'split_implicit', 'split_explicit_ab2', 'LTS', 'FB_LTS'
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_number_of_time_levels" type="integer"
+	category="time_integration" group="time_integration">
+The number of time levels in the time-stepping scheme. This is used for array allocation.
+
+Valid values: Any integer greater than or equal to 2.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+
+<!-- lateral_walls -->
+
+<entry id="config_wall_slip_factor" type="real"
+	category="lateral_walls" group="lateral_walls">
+Lateral wall slip boundary condition: no-slip=0.0, free-slip=1.0, with partial-slip lying in-between. This factor multiplies relative vorticity computed at vertices positioned on lateral boundaries.
+
+Valid values: Any real number between 0.0 and 1.0
 Default: Defined in namelist_defaults.xml
 </entry>
 
@@ -229,7 +256,7 @@ Default: Defined in namelist_defaults.xml
 
 <entry id="config_hmix_ref_cell_width" type="real"
 	category="hmix" group="hmix">
-Reference cell width. If config_hmix_use_ref_cell_width = .true., then hmix coefficients are set to be nu_{2h} = config_mom_del2*(cellWidth / config_hmix_use_ref_cell_width) and nu_{4h} = config_mom_del4*(cellWidth / config_hmix_use_ref_cell_width)^3 where cellWidth is the effective cell width computed as 2*sqrt(areaCell/pi). See Hoch et al 2020 JAMES eq 1,2. This relation applies within a simulation, but also generally among multiple simulations, so the parameters config_mom_del2, config_mom_del4, and config_hmix_use_ref_cell_width can generally remain at their standard values, and just be adjusted for fine tuning.
+Reference cell width. If config_hmix_use_ref_cell_width = .true., then hmix coefficients are set to be $nu_{2h}$ = config_mom_del2*(cellWidth / config_hmix_use_ref_cell_width) and $nu_{4h}$ = config_mom_del4*(cellWidth / config_hmix_use_ref_cell_width)$^3$ where cellWidth is the effective cell width computed as 2*sqrt(areaCell/pi). See Hoch et al 2020 JAMES eq 1,2. This relation applies within a simulation, but also generally among multiple simulations, so the parameters config_mom_del2, config_mom_del4, and config_hmix_use_ref_cell_width can generally remain at their standard values, and just be adjusted for fine tuning.
 
 Valid values: Any positive real number, but typically a resolution number such as 30km.
 Default: Defined in namelist_defaults.xml
@@ -291,7 +318,7 @@ Default: Defined in namelist_defaults.xml
 
 <entry id="config_mom_del4" type="real"
 	category="hmix_del4" group="hmix_del4">
-Coefficient for horizontal biharmonic operator on momentum.  If config_hmix_use_ref_cell_width = .true. then $\nu_{4h}$ = config_mom_del4*(cellWidth / config_hmix_use_ref_cell_width)^3. If config_hmix_use_ref_cell_width = .false. then it is referenced to the smallest cell.
+Coefficient for horizontal biharmonic operator on momentum.  If config_hmix_use_ref_cell_width = .true. then $\nu_{4h}$ = config_mom_del4*(cellWidth / config_hmix_use_ref_cell_width)$^3$. If config_hmix_use_ref_cell_width = .false. then it is referenced to the smallest cell.
 
 Valid values: any positive real
 Default: Defined in namelist_defaults.xml
@@ -315,7 +342,7 @@ Default: Defined in namelist_defaults.xml
 
 <entry id="config_tracer_del4" type="real"
 	category="hmix_del4" group="hmix_del4">
-Coefficient for horizontal biharmonic operator on tracers.  If config_hmix_use_ref_cell_width = .true. then $\nu_{4h}$ = config_tracer_del4*(cellWidth / config_hmix_use_ref_cell_width)^3. If config_hmix_use_ref_cell_width = .false. then it is referenced to the smallest cell.
+Coefficient for horizontal biharmonic operator on tracers.  If config_hmix_use_ref_cell_width = .true. then $\nu_{4h}$ = config_tracer_del4*(cellWidth / config_hmix_use_ref_cell_width)$^3$. If config_hmix_use_ref_cell_width = .false. then it is referenced to the smallest cell.
 
 Valid values: any positive real
 Default: Defined in namelist_defaults.xml
@@ -326,15 +353,47 @@ Default: Defined in namelist_defaults.xml
 
 <entry id="config_use_Leith_del2" type="logical"
 	category="hmix_Leith" group="hmix_Leith">
-If true, the Leith enstrophy-cascade closure is turned on
+If true, the modified del2 Leith enstrophy-cascade closure is turned on
 
 Valid values: .true. or .false.
 Default: Defined in namelist_defaults.xml
 </entry>
 
-<entry id="config_Leith_parameter" type="real"
+<entry id="config_use_Leith_del4" type="logical"
 	category="hmix_Leith" group="hmix_Leith">
-Non-dimensional Leith closure parameter
+If true, the modified del4 Leith enstrophy-cascade closure is turned on
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_Leith_del2_parameter" type="real"
+	category="hmix_Leith" group="hmix_Leith">
+Non-dimensional Leith del2 closure parameter
+
+Valid values: any positive real
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_Leith_del4_parameter" type="real"
+	category="hmix_Leith" group="hmix_Leith">
+Non-dimensional Leith del4 closure parameter
+
+Valid values: any positive real
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_Leith_del2_div_scaler" type="real"
+	category="hmix_Leith" group="hmix_Leith">
+Non-dimensional Leith del2 closure divergence scaler
+
+Valid values: any positive real
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_Leith_del4_div_scaler" type="real"
+	category="hmix_Leith" group="hmix_Leith">
+Non-dimensional Leith del4 closure divergence scaler
 
 Valid values: any positive real
 Default: Defined in namelist_defaults.xml
@@ -349,6 +408,14 @@ Default: Defined in namelist_defaults.xml
 </entry>
 
 <entry id="config_Leith_visc2_max" type="real"
+	category="hmix_Leith" group="hmix_Leith">
+Upper bound on the allowable value of Leith-computed viscosity
+
+Valid values: any positive real
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_Leith_visc4_max" type="real"
 	category="hmix_Leith" group="hmix_Leith">
 Upper bound on the allowable value of Leith-computed viscosity
 
@@ -407,27 +474,27 @@ Valid values: .true. or .false.
 Default: Defined in namelist_defaults.xml
 </entry>
 
-<entry id="config_Redi_N2_based_taper_enable" type="logical"
-	category="Redi_isopycnal_mixing" group="Redi_isopycnal_mixing">
-If true apply the N2 limiting of Danabasoglu and Marshall 2007
-
-Valid values: .true. or .false.
-Default: Defined in namelist_defaults.xml
-</entry>
-
-<entry id="config_Redi_N2_based_taper_min" type="real"
-	category="Redi_isopycnal_mixing" group="Redi_isopycnal_mixing">
-minimum taper value for the N2 limiting of Danabasoglu and Marshall 2007
-
-Valid values: greater than zero and less than 1
-Default: Defined in namelist_defaults.xml
-</entry>
-
-<entry id="config_Redi_N2_based_taper_limit_term1" type="logical"
+<entry id="config_Redi_limit_term1" type="logical"
 	category="Redi_isopycnal_mixing" group="Redi_isopycnal_mixing">
 If true, the N2 limiting is applied to the horizontal diffusion term
 
 Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_Redi_use_quasi_monotone_limiter" type="logical"
+	category="Redi_isopycnal_mixing" group="Redi_isopycnal_mixing">
+If true, fluxes are reduced to prevent tracers from violating monotonicity. Cross-term fluxes are scaled toward zero to prevent tracers from under/overshooting the min/max values in adjacent cells and layers
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_Redi_quasi_monotone_safety_factor" type="real"
+	category="Redi_isopycnal_mixing" group="Redi_isopycnal_mixing">
+A safety factor applied to flux scaling when monotonicity is violated. Smaller values scale fluxes toward zero more aggressively.
+
+Valid values: A value between 0 and 1
 Default: Defined in namelist_defaults.xml
 </entry>
 
@@ -506,6 +573,22 @@ Valid values: around 1 degree
 Default: Defined in namelist_defaults.xml
 </entry>
 
+<entry id="config_submesoscale_ice_aware" type="logical"
+	category="submesoscale_eddy_parameterization" group="submesoscale_eddy_parameterization">
+flag to enable the ice-aware MLE for submesoscale eddies
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_submesoscale_ice_aware_crit_conc" type="real"
+	category="submesoscale_eddy_parameterization" group="submesoscale_eddy_parameterization">
+Critical sea-ice concentration (fraction) for the ice-aware MLE. Where the sea-ice concentration averaged to an edge is at or below this value, the MLE efficiency decreases smoothly as concentration increases. Above this value, the efficiency is held at its fully ice-covered value of about 0.26.
+
+Valid values: between 0 and 1
+Default: Defined in namelist_defaults.xml
+</entry>
+
 
 <!-- GM_eddy_parameterization -->
 
@@ -521,7 +604,7 @@ Default: Defined in namelist_defaults.xml
 	category="GM_eddy_parameterization" group="GM_eddy_parameterization">
 Control what method used to compute GM $\kappa$. Both 'constant' and 'N2_dependent' use the method in Ferrari et al. 2010 (https://doi.org/10.1016/j.ocemod.2010.01.004). 'constant' uses a constant kappa in eqn 16a, while 'N2_dependent' varies kappa in the vertical according to Danabasoglu and Marshall 2007 (https://doi.org/10.1016/j.ocemod.2007.03.006). 'Visbeck' implements a horizontally varying diffusivity of Visbeck et al 1997. EdenGreatbatch implements a simplified form of the EKE scheme in Eden and Greatbatch (2008) Ocean modeling
 
-Valid values: 'constant', 'N2_dependent', 'Visbeck', 'EdenGreatbatch'
+Valid values: 'constant', 'N2_dependent', 'Visbeck', 'EdenGreatbatch', 'geometric'
 Default: Defined in namelist_defaults.xml
 </entry>
 
@@ -621,6 +704,46 @@ Valid values: small positive values less than equal to one
 Default: Defined in namelist_defaults.xml
 </entry>
 
+<entry id="config_GM_geometric_alpha" type="real"
+	category="GM_eddy_parameterization" group="GM_eddy_parameterization">
+Configured GEOMETRIC efficiency
+
+Valid values: MISSING POSSIBLE VALUES
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_GM_geometric_eddyDiff" type="real"
+	category="GM_eddy_parameterization" group="GM_eddy_parameterization">
+Eddy diffusivity for the depth-integrated parameterized eddy energy
+
+Valid values: MISSING POSSIBLE VALUES
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_GM_geometric_dissipation" type="real"
+	category="GM_eddy_parameterization" group="GM_eddy_parameterization">
+Number of days to dissipate the depth-integrated parameterized eddy energy
+
+Valid values: MISSING POSSIBLE VALUES
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_GM_geometric_backgroundEddyEnergy" type="real"
+	category="GM_eddy_parameterization" group="GM_eddy_parameterization">
+Background total depth-integrated parameterized eddy energy
+
+Valid values: MISSING POSSIBLE VALUES
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_GM_geometric_maximumEddyEnergy" type="real"
+	category="GM_eddy_parameterization" group="GM_eddy_parameterization">
+Maximum total depth-integrated parameterized eddy energy
+
+Valid values: MISSING POSSIBLE VALUES
+Default: Defined in namelist_defaults.xml
+</entry>
+
 <entry id="config_GM_horizontal_taper" type="char*1024"
 	category="GM_eddy_parameterization" group="GM_eddy_parameterization">
 Control how the GM Bolus value varies as a function of horizontal resolution. 'none' is constant, 'ramp' is strictly based on resolution, 'RossbyRadius' follows Hallberg (2013) - https://doi.org/10.1016/j.ocemod.2013.08.007
@@ -662,6 +785,33 @@ Default: Defined in namelist_defaults.xml
 </entry>
 
 
+<!-- eddy_kinetic_energy_correction -->
+
+<entry id="config_eke_correction_enable" type="logical"
+	category="eddy_kinetic_energy_correction" group="eddy_kinetic_energy_correction">
+flag to enable the eddy kinetic energy corrections.  This parameterization is based on the work of Renault et al 2019 - https://doi.org/10.1029/2019MS001715 -- NOTE: this should only be used at for RRS6to18 resolution or finer
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_eke_alpha" type="real"
+	category="eddy_kinetic_energy_correction" group="eddy_kinetic_energy_correction">
+'alpha' coefficent for computations of St in equation (10) of Renault et al (2019)
+
+Valid values: small negative values not too far from the default
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_eke_beta" type="real"
+	category="eddy_kinetic_energy_correction" group="eddy_kinetic_energy_correction">
+'beta' coefficent for computation of St in equation (10) of Renault et al (2019)
+
+Valid values: small positive numbers not far from the default
+Default: Defined in namelist_defaults.xml
+</entry>
+
+
 <!-- eddy_parameterization -->
 
 <entry id="config_eddyMLD_dens_threshold" type="real"
@@ -697,49 +847,6 @@ Default: Defined in namelist_defaults.xml
 </entry>
 
 
-<!-- Rayleigh_damping -->
-
-<entry id="config_Rayleigh_friction" type="logical"
-	category="Rayleigh_damping" group="Rayleigh_damping">
-If true, Rayleigh friction is included in the momentum equation at every depth level.
-
-Valid values: .true. or .false.
-Default: Defined in namelist_defaults.xml
-</entry>
-
-<entry id="config_Rayleigh_damping_coeff" type="real"
-	category="Rayleigh_damping" group="Rayleigh_damping">
-Inverse-time coefficient for the Rayleigh damping term, $c_R$, applied at every depth level.
-
-Valid values: Any positive real value.
-Default: Defined in namelist_defaults.xml
-</entry>
-
-<entry id="config_Rayleigh_damping_depth_variable" type="logical"
-	category="Rayleigh_damping" group="Rayleigh_damping">
-If true applies r h^-1 instead of just r.
-
-Valid values: .true. or .false.
-Default: Defined in namelist_defaults.xml
-</entry>
-
-<entry id="config_Rayleigh_bottom_friction" type="logical"
-	category="Rayleigh_damping" group="Rayleigh_damping">
-If true, Rayleigh friction is only applied to the bottom
-
-Valid values: .true. or .false.
-Default: Defined in namelist_defaults.xml
-</entry>
-
-<entry id="config_Rayleigh_bottom_damping_coeff" type="real"
-	category="Rayleigh_damping" group="Rayleigh_damping">
-Inverse-time coefficient for the Rayleigh damping term, $c_R$, only applied at the bottom.
-
-Valid values: Any positive real value.
-Default: Defined in namelist_defaults.xml
-</entry>
-
-
 <!-- cvmix -->
 
 <entry id="config_use_cvmix" type="logical"
@@ -760,7 +867,7 @@ Default: Defined in namelist_defaults.xml
 
 <entry id="config_cvmix_background_scheme" type="char*1024"
 	category="cvmix" group="cvmix">
-Scheme for background diffusivity, 'constant' for constant with depth and space, 'BryanLewis' for vertically variable, 'none' for no background diffusivity
+Scheme for background diffusivity, 'constant' for constant with depth and space, 'latitude-dependent' for latitude dependence and constant in depth, 'BryanLewis' for vertically variable, 'none' for no background diffusivity
 
 Valid values: 'constant', 'BryanLewis', and 'none'
 Default: Defined in namelist_defaults.xml
@@ -768,9 +875,33 @@ Default: Defined in namelist_defaults.xml
 
 <entry id="config_cvmix_background_diffusion" type="real"
 	category="cvmix" group="cvmix">
-Background vertical diffusion applied to tracer quantities
+Background vertical diffusion applied to tracer quantities. For 'latitude-dependent' this is the maximum value
 
 Valid values: Any positive real value.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_cvmix_background_diffusion_max_latitude" type="real"
+	category="cvmix" group="cvmix">
+For 'latitude-dependent' this is the maximum latitude at which background diffusivity is non-zero
+
+Valid values: Any real value between -90 and 90.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_cvmix_background_diffusion_passive" type="real"
+	category="cvmix" group="cvmix">
+Background vertical diffusion applied to passive tracer quantities
+
+Valid values: Any positive real value.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_cvmix_background_diffusion_passive_enable" type="logical"
+	category="cvmix" group="cvmix">
+flag to enable using a different background vertical diffusion for passive tracers
+
+Valid values: .true. or .false.
 Default: Defined in namelist_defaults.xml
 </entry>
 
@@ -1070,14 +1201,6 @@ Valid values: .true. or .false.
 Default: Defined in namelist_defaults.xml
 </entry>
 
-<entry id="config_cvmix_kpp_use_active_wave" type="logical"
-	category="cvmix" group="cvmix">
-Flag for use of active WAVEWATCH III coupling to calculate the Langmuir number and enhancement factor
-
-Valid values: .true. or .false.
-Default: Defined in namelist_defaults.xml
-</entry>
-
 <entry id="config_cvmix_kpp_langmuir_mixing_opt" type="char*1024"
 	category="cvmix" group="cvmix">
 Option of Langmuir enhanced mixing parameterization
@@ -1094,22 +1217,38 @@ Valid values: NONE, LWF16, LF17, RWHGK16
 Default: Defined in namelist_defaults.xml
 </entry>
 
+<entry id="config_cvmix_kpp_use_active_wave" type="logical"
+	category="cvmix" group="cvmix">
+Flag for Langmuir enchancement factor using prognostic waves. Requires config_use_active_wave = .true.
 
-<!-- wave coupling -->
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+
+<!-- wave_coupling -->
 
 <entry id="config_use_active_wave" type="logical"
 	category="wave_coupling" group="wave_coupling">
-Flag for using prognostic waves
+Flag for using prognostic waves. Controls the allocation of wave arrays and computation of Stokes drift profiles.
 
-Valid values: 
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_momentum_use_active_wave" type="logical"
+	category="wave_coupling" group="wave_coupling">
+Flag for correcting momentum coupling in ocean due to waves. Requires config_use_active_wave = .true.
+
+Valid values: .true. or .false.
 Default: Defined in namelist_defaults.xml
 </entry>
 
 <entry id="config_n_stokes_drift_wavenumber_partitions" type="integer"
 	category="wave_coupling" group="wave_coupling">
-Number of wavenumbers used to reconstruct Stokes drift profile
+Number of wavenumber partitions to be used in reconstructing wave-induced Stokes drift profile
 
-Valid values: 3, 4, and 6
+Valid values: 3,4,6
 Default: Defined in namelist_defaults.xml
 </entry>
 
@@ -1175,6 +1314,14 @@ Valid values: .true. or .false.
 Default: Defined in namelist_defaults.xml
 </entry>
 
+<entry id="config_bulk_wind_stress_interp_isotropic" type="logical"
+	category="forcing" group="forcing">
+Controls if windstress is interpolated to edges from 4 adjacent cells rather than just 2.
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
 <entry id="config_use_bulk_thickness_flux" type="logical"
 	category="forcing" group="forcing">
 Controls if a bulk thickness flux will be computed for surface forcing.
@@ -1199,22 +1346,169 @@ Valid values: Any positive real number.
 Default: Defined in namelist_defaults.xml
 </entry>
 
+<entry id="config_subglacial_runoff_mode" type="char*1024"
+	category="forcing" group="forcing">
+Selects the mode in which subglacial runoff fluxes are implemented.
 
-<!-- coupling -->
+Valid values: 'off', 'data'
+Default: Defined in namelist_defaults.xml
+</entry>
 
-<entry id="config_ssh_grad_relax_timescale" type="real"
-	category="coupling" group="coupling">
-Timescale for relaxation of the ssh gradient for coupling. A value of 0.0 (default) removes any relaxation and gives instantaneous response.
+<entry id="config_flux_attenuation_coefficient_subglacial_runoff" type="real"
+	category="forcing" group="forcing">
+The length scale of exponential decay of subglacial runoff, used when config_sgr_flux_vertical_location is 'top' or 'bottom'. Fluxes are multiplied by $e^{z/\gamma}$, where this coefficient is $\gamma$.
 
 Valid values: Any positive real number.
 Default: Defined in namelist_defaults.xml
 </entry>
 
-<entry id="config_remove_AIS_coupler_runoff" type="logical"
-	category="coupling" group="coupling">
-If true, solid and liquid runoff from the Antarctic Ice Sheet (below 60S latitude) coming from the coupled is zeroed in the coupler import routines.  To be used with data iceberg fluxes coming from the sea ice model.
+<entry id="config_sgr_flux_vertical_location" type="char*1024"
+	category="forcing" group="forcing">
+Selects the vertical location where subglacial runoff is fluxed.
+
+Valid values: 'top','uniform', 'bottom'
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_sgr_opt_kpp" type="logical"
+	category="forcing" group="forcing">
+If true, include subglacial runoff (sgr) contribution in kpp calculation.
 
 Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_sgr_opt_temp_prescribed" type="logical"
+	category="forcing" group="forcing">
+If true, subglacial runoff temperature is set to config_sgr_temperature_prescribed. If false, the temperature is set to local freezing point.
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_sgr_opt_salt_prescribed" type="logical"
+	category="forcing" group="forcing">
+If true, subglacial runoff salinity is set to config_sgr_salinity_prescribed. If false, the salinity is set to 0 PSU.
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_sgr_temperature_prescribed" type="real"
+	category="forcing" group="forcing">
+Prescribed subglacial runoff temperature value, applied when config_use_sgr_opt_temp_prescribed = .true.
+
+Valid values: Any real number.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_sgr_salinity_prescribed" type="real"
+	category="forcing" group="forcing">
+Prescribed subglacial runoff salinity value, applied when config_use_sgr_opt_salt_prescribed = .true.
+
+Valid values: Any positive real number
+Default: Defined in namelist_defaults.xml
+</entry>
+
+
+<!-- precip_scaling -->
+
+<entry id="config_use_precip_scaling" type="logical"
+	category="precip_scaling" group="precip_scaling">
+If true, precipitation fluxes will be scalled to ensure freshwater balance in FOSI runs referring to forced ocean-sea ice simulation where ocean model is driven by a data atmosphere with prescribed precipitation (rain + snow) fluxes.
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_precip_scaling_mode" type="char*1024"
+	category="precip_scaling" group="precip_scaling">
+Option for scaling precipitation fluxes to ensure freshwater balance in FOSI runs. config_precip_scaling_mode='constant' uses a prescribed constant factor applied to precipitation fluxes. config_precip_scaling_mode='time-dependent' enables the dynamical caclulation of scaling factors using annual and global mean precipitation (rain + snow) and sea surface height changes over one-year or multi-year period.
+
+Valid values: 'off', 'constant' or 'time-dependent'
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_precip_scaling_initial_factor" type="real"
+	category="precip_scaling" group="precip_scaling">
+Initial guess scaling factor on precipitation fluxes in FOSI runs when config_precip_scaling_mode = 'time-dependent'.
+
+Valid values: Non-negative number. A default value of 1.0 indicates no scaling, but values greater than 1.0 can be used to scale up precipitation fluxes in order to achieve freshwater balance in FOSI runs.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_precip_scaling_constant_factor" type="real"
+	category="precip_scaling" group="precip_scaling">
+Prescribed constant scaling factor on precipitation fluxes in FOSI runs when config_precip_scaling_mode = 'constant'.
+
+Valid values: Non-negative number between 0 and 1.0. Default value of 1.0 means no scaling, but values greater than 1.0 can be used to scale up precipitation fluxes in order to achieve freshwater balance in FOSI runs.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_precip_scaling_history_years" type="integer"
+	category="precip_scaling" group="precip_scaling">
+The number of years over which scaling factor on precipitation fluxes is computed in FOSI runs. Default value is 1 year.
+
+Valid values: Positive integer greater than or equal to 1.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_precip_scaling_write_to_logfile" type="logical"
+	category="precip_scaling" group="precip_scaling">
+Logical flag indicating whether information for precipitation flux scaling in FOSI runs will be written to the log file.
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+
+<!-- coupling -->
+
+<entry id="config_remove_ais_river_runoff" type="logical"
+	category="coupling" group="coupling">
+If true, liquid runoff from the Antarctic Ice Sheet (below 60S latitude) coming from the coupled is zeroed in the coupler import routines.  To be used with data iceberg fluxes coming from the sea ice model.
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_remove_ais_ice_runoff" type="logical"
+	category="coupling" group="coupling">
+If true, solid runoff from the Antarctic Ice Sheet (below 60S latitude) coming from the coupled is zeroed in the coupler import routines.  To be used with data iceberg fluxes coming from the sea ice model.
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_scale_dismf_by_removed_ice_runoff" type="logical"
+	category="coupling" group="coupling">
+Whether to scale data ice-shelf melt fluxes by the running mean of removed ice runoff.
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_ais_ice_runoff_history_days" type="integer"
+	category="coupling" group="coupling">
+The number of days over for which the history of removed AIS runoff is stored. The default is 731 days (2 years + 1 day).
+
+Valid values: Any positive integer
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_n_glc_z_levels" type="integer"
+	category="coupling" group="coupling">
+The number of z-levels to use for passing ocean properties to GLC for indirect ice-sheet/ocean coupling. This option is only intended to be used for ocean thermal forcing coupling in E3SM, in which case E3SM will set this option, define the values of ismip6shelfMelt_zOcean through the driver, and pass thermal forcing from the ocean model.  Note that the default value of zero will result in this dimension not being defined (unless overridden by the value in an input file).
+
+Valid values: Any positive integer or zero
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_glc_thermal_forcing_coupling_mode" type="char*1024"
+	category="coupling" group="coupling">
+If and how MPAS-Ocean sends thermal forcing to GLC (MALI) in E3SM.  This is used for ocean coupling with a melt parameterization for grounded marine ice-cliffs in MALI.  This is primarily relevant to the Greenland Ice Sheet, but also relevant to the Antarctic Ice Sheet. 'none' means no coupling of thermal forcing. '3d' means thermal forcing is passed at multiple z-levels.
+
+Valid values: 'off', '3d'
 Default: Defined in namelist_defaults.xml
 </entry>
 
@@ -1223,7 +1517,7 @@ Default: Defined in namelist_defaults.xml
 
 <entry id="config_sw_absorption_type" type="char*1024"
 	category="shortwaveRadiation" group="shortwaveRadiation">
-Name of shortwave absorption type used in simulation. 
+Name of shortwave absorption type used in simulation.
 
 Valid values: 'jerlov' or 'ohlmann00' or 'none'
 Default: Defined in namelist_defaults.xml
@@ -1264,9 +1558,9 @@ Valid values: .true. or .false.
 Default: Defined in namelist_defaults.xml
 </entry>
 
-<entry id="config_self_attraction_loading_smoothing_width" type="real"
+<entry id="config_self_attraction_loading_depth_cutoff" type="real"
 	category="self_attraction_loading" group="self_attraction_loading">
-Defines region over which ssh is smoothed to zero at coasts for SAL calculation.
+Defines depths over which ssh is smoothed to zero for SAL calculation.
 
 Valid values: Any positive real number.
 Default: Defined in namelist_defaults.xml
@@ -1478,6 +1772,14 @@ Valid values: Any positive real number.
 Default: Defined in namelist_defaults.xml
 </entry>
 
+<entry id="config_use_frazil_ice_porosity" type="logical"
+	category="frazil_ice" group="frazil_ice">
+If true, use an internal porosity to set internal frazil salinity and that of specified passive tracers.
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
 <entry id="config_frazil_ice_density" type="real"
 	category="frazil_ice" group="frazil_ice">
 Assumed density of frazil. NOTE: test and make consistent with E3SM.
@@ -1486,11 +1788,35 @@ Valid values: Any positive real number.
 Default: Defined in namelist_defaults.xml
 </entry>
 
+<entry id="config_frazil_ice_porosity" type="real"
+	category="frazil_ice" group="frazil_ice">
+If frazil porosity is used, sets the porosity of internal ocean frazil ice.
+
+Valid values: Positive real number from 0 to 1
+Default: Defined in namelist_defaults.xml
+</entry>
+
 <entry id="config_frazil_fractional_thickness_limit" type="real"
 	category="frazil_ice" group="frazil_ice">
 maximum fraction of layer thickness than can be used or created at an instant by frazil.
 
 Valid values: Any positive real number between 0 and 1.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_include_sensible_heat_frazil" type="logical"
+	category="frazil_ice" group="frazil_ice">
+Include both sensible and latent heat in the frazil energy. Otherwise, include only latent heat.
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_expel_excess_frazil_salt" type="logical"
+	category="frazil_ice" group="frazil_ice">
+If true, release frazil salt in the upper ocean layer in excess of the fixed salinity coupling assumption. False if using variable sea ice salinity coupling.
+
+Valid values: .true. or .false.
 Default: Defined in namelist_defaults.xml
 </entry>
 
@@ -1512,17 +1838,9 @@ Default: Defined in namelist_defaults.xml
 
 <entry id="config_frazil_sea_ice_reference_salinity" type="real"
 	category="frazil_ice" group="frazil_ice">
-assumed salinity of frazil ice in the open ocean.
+assumed salinity of frazil ice in the open ocean. Land ice frazil salinity is always 0.
 
 Valid values: Any positive real number.
-Default: Defined in namelist_defaults.xml
-</entry>
-
-<entry id="config_frazil_land_ice_reference_salinity" type="real"
-	category="frazil_ice" group="frazil_ice">
-assumed salinity of frazil ice under land ice.
-
-Valid values: Any non-negative real number.
 Default: Defined in namelist_defaults.xml
 </entry>
 
@@ -1543,13 +1861,32 @@ Default: Defined in namelist_defaults.xml
 </entry>
 
 
+<!-- land_ice -->
+
+<entry id="config_land_ice_draft_mode" type="char*1024"
+	category="land_ice" group="land_ice">
+Selects the mode in which land-ice draft is computed.
+
+Valid values: 'data', 'pressure-dependent'
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_land_ice_rho_ocean" type="real"
+	category="land_ice" group="land_ice">
+ocean density used to calculate landIceDraft at floatation (assumed constant and uniform). Should be consistent with MALI's config_ocean_density when used to determine grounding line location. This is an alternative to the coupler variable effectiveDensityInLandIce which is not currently used.
+
+Valid values: Any positive real number
+Default: Defined in namelist_defaults.xml
+</entry>
+
+
 <!-- land_ice_fluxes -->
 
 <entry id="config_land_ice_flux_mode" type="char*1024"
 	category="land_ice_fluxes" group="land_ice_fluxes">
 Selects the mode in which land-ice fluxes are computed.
 
-Valid values: 'off','pressure_only','standalone','coupled'
+Valid values: 'off','pressure_only', 'data', 'standalone','coupled'
 Default: Defined in namelist_defaults.xml
 </entry>
 
@@ -1609,9 +1946,9 @@ Valid values: Any positive real number
 Default: Defined in namelist_defaults.xml
 </entry>
 
-<entry id="config_land_ice_flux_topDragCoeff" type="real"
+<entry id="config_land_ice_flux_explicit_topDragCoeff" type="real"
 	category="land_ice_fluxes" group="land_ice_fluxes">
-The top drag coefficient.
+The top drag coefficient if config_use_implicit_top_drag_coeff is false.
 
 Valid values: Any positive real number
 Default: Defined in namelist_defaults.xml
@@ -1622,14 +1959,6 @@ Default: Defined in namelist_defaults.xml
 The constant heat transport velocity through the boundary layer under land ice used in the ISOMIP test cases.
 
 Valid values: Any positive real number
-Default: Defined in namelist_defaults.xml
-</entry>
-
-<entry id="config_land_ice_flux_rms_tidal_velocity" type="real"
-	category="land_ice_fluxes" group="land_ice_fluxes">
-Parameterization of tidal velocity used in computing the sub-ice-shelf friction velocity
-
-Valid values: Any non-negative real number
 Default: Defined in namelist_defaults.xml
 </entry>
 
@@ -1646,6 +1975,30 @@ Default: Defined in namelist_defaults.xml
 constant nondimensional salt transfer coefficient across the ice-ocean boundary layer
 
 Valid values: Any positive real number
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_land_ice_flux_tidal_Jourdain_alpha" type="real"
+	category="land_ice_fluxes" group="land_ice_fluxes">
+alpha from parameterization of tidal velocity by Jourdain et al., 2019 - Equation 9, alpha = 0.777 when TMIX compset on
+
+Valid values: Any non-negative real number
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_land_ice_flux_tidal_Jourdain_A0" type="real"
+	category="land_ice_fluxes" group="land_ice_fluxes">
+A0 from parameterization of tidal velocity by Jourdain et al., 2019 - Equation 9, A0 = 0.656 when TMIX compset on
+
+Valid values: Any non-negative real number
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_land_ice_flux_tidal_Jourdain_U0" type="real"
+	category="land_ice_fluxes" group="land_ice_fluxes">
+U0 from parameterization of tidal velocity by Jourdain et al., 2019 - Equation 9, U0 = 0.003 m/s when TMIX compset on
+
+Valid values: Any non-negative real number
 Default: Defined in namelist_defaults.xml
 </entry>
 
@@ -1716,18 +2069,58 @@ Valid values: 'none','monotonic','weno'
 Default: Defined in namelist_defaults.xml
 </entry>
 
+<entry id="config_thickness_flux_type" type="char*1024"
+	category="advection" group="advection">
+If 'upwind', use upwind to evaluate the edge-value for layerThickness, i.e., layerThickEdgeFlux.  The standard MPAS-O approach is 'centered'. For 'constant', uses constant thickness in time from restingThickness, for linear test problems. Note that these two flags are set together for linearized test cases: config_thickness_flux_type = 'constant' linearizes the thickness equation, and config_disable_vel_hadv = .true. linearizes the momentum equation if there is no assumed mean background velocity.
 
-<!-- bottom_drag -->
+Valid values: 'upwind', 'centered', 'constant'
+Default: Defined in namelist_defaults.xml
+</entry>
 
-<entry id="config_use_implicit_bottom_drag" type="logical"
-	category="bottom_drag" group="bottom_drag">
-If true, implicit bottom drag is used on the momentum equation.
+<entry id="config_use_spatially_variable_upwind" type="logical"
+	category="advection" group="advection">
+If true, use upwindFactor to scale layerThickEdgeFlux by centered and upwind values.
 
 Valid values: .true. or .false.
 Default: Defined in namelist_defaults.xml
 </entry>
 
-<entry id="config_implicit_bottom_drag_coeff" type="real"
+<entry id="config_spatially_variable_upwind_hmin" type="real"
+	category="advection" group="advection">
+Column thickness above which we start weighting upwind with centered advection.
+
+Valid values: Any positive real
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_spatially_variable_upwind_hmax" type="real"
+	category="advection" group="advection">
+Column thickness above which advection is no longer upwinded.
+
+Valid values: Any positive real
+Default: Defined in namelist_defaults.xml
+</entry>
+
+
+<!-- bottom_drag -->
+
+<entry id="config_bottom_drag_mode" type="char*1024"
+	category="bottom_drag" group="bottom_drag">
+Formulation of the bottom drag.
+
+Valid values: 'implicit','explicit'
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_implicit_bottom_drag_type" type="char*1024"
+	category="bottom_drag" group="bottom_drag">
+Type of implicit bottom drag used.
+
+Valid values: 'constant','constant_and_rayleigh','loglaw','spatially-variable','mannings'
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_implicit_constant_bottom_drag_coeff" type="real"
 	category="bottom_drag" group="bottom_drag">
 Dimensionless bottom drag coefficient, $c_{drag}$.
 
@@ -1735,41 +2128,57 @@ Valid values: any positive real, typically 1.0e-3
 Default: Defined in namelist_defaults.xml
 </entry>
 
-<entry id="config_use_implicit_bottom_roughness" type="logical"
+<entry id="config_use_implicit_top_drag" type="logical"
 	category="bottom_drag" group="bottom_drag">
-If true, depends on bottom roughness z0
+If true, implicit top drag is used on the momentum equation.
 
 Valid values: .true. or .false.
 Default: Defined in namelist_defaults.xml
 </entry>
 
-<entry id="config_use_implicit_bottom_drag_variable" type="logical"
+<entry id="config_implicit_top_drag_coeff" type="real"
 	category="bottom_drag" group="bottom_drag">
-If true, spatially-variable implicit bottom drag is used on the momentum equation.
+Dimensionless top drag coefficient, $c_{drag}$.
 
-Valid values: .true. or .false.
+Valid values: any positive real, typically 1.0e-3
 Default: Defined in namelist_defaults.xml
 </entry>
 
-<entry id="config_use_implicit_bottom_drag_variable_mannings" type="logical"
+<entry id="config_loglaw_bottom_roughness" type="real"
 	category="bottom_drag" group="bottom_drag">
-If true, uses Mannings' n values for the computation of Cd=g*n^2*h^{-1/3}.
+Bottom roughness, $z_0$, in meters.
 
-Valid values: .true. or .false.
+Valid values: any positive real, typically 1.0e-3
 Default: Defined in namelist_defaults.xml
 </entry>
 
-<entry id="config_use_explicit_bottom_drag" type="logical"
+<entry id="config_loglaw_layer_depth_max" type="real"
 	category="bottom_drag" group="bottom_drag">
-If true, explicit bottom drag is used on the momentum equation.
+Maximum distance above the seafloor at which log-law drag is applied.
 
-Valid values: .true. or .false.
+Valid values: any positive real, typically 10m
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_loglaw_bottom_drag_min" type="real"
+	category="bottom_drag" group="bottom_drag">
+Dimensionless bottom drag minimum used in log-law parameterization.
+
+Valid values: any positive real, typically 2.5e-3
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_loglaw_bottom_drag_max" type="real"
+	category="bottom_drag" group="bottom_drag">
+Dimensionless bottom drag maximum used in log-law parameterization.
+
+Valid values: any positive real, typically 1.0e-1
 Default: Defined in namelist_defaults.xml
 </entry>
 
 <entry id="config_explicit_bottom_drag_coeff" type="real"
 	category="bottom_drag" group="bottom_drag">
-Dimensionless bottom drag coefficient, $c_{drag}$.
+Dimensionless explicit bottom drag coefficient, $c_{drag}$.
 
 Valid values: any positive real, typically 1.0e-3
 Default: Defined in namelist_defaults.xml
@@ -1783,11 +2192,97 @@ Valid values: .true. or .false.
 Default: Defined in namelist_defaults.xml
 </entry>
 
+<entry id="config_topographic_wave_drag_scheme" type="char*1024"
+	category="bottom_drag" group="bottom_drag">
+Which of the following three wave drag schemes to use: JSL: Jayne and St. Laurent; ZAE: Zaron and Egbert; or LGF: Local generation formula
+
+Valid values: JSL or ZAE or LGF
+Default: Defined in namelist_defaults.xml
+</entry>
+
 <entry id="config_topographic_wave_drag_coeff" type="real"
 	category="bottom_drag" group="bottom_drag">
 Dimensionless topographic wave drag coefficient, $c_{topo}$.
 
-Valid values: any positive real, typically 5.0e-4
+Valid values: any positive real
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_thickness_drag_type" type="char*1024"
+	category="bottom_drag" group="bottom_drag">
+The type of layerThickness averaging to use on the drag term. The standard MPAS-O approach is 'centered'.
+
+Valid values: 'harmonic-mean', 'centered'
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_topographic_wave_drag_cutoff_depth" type="real"
+	category="bottom_drag" group="bottom_drag">
+Specifies minimum depth at which topographic wave drag is applied
+
+Valid values: any positive real
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_topographic_wave_drag_cutoff_width" type="real"
+	category="bottom_drag" group="bottom_drag">
+Width over which the topographic wave drag is progressively turned off
+
+Valid values: any positive real
+Default: Defined in namelist_defaults.xml
+</entry>
+
+
+<!-- Rayleigh_damping -->
+
+<entry id="config_Rayleigh_damping_coeff" type="real"
+	category="Rayleigh_damping" group="Rayleigh_damping">
+Inverse-time coefficient for the Rayleigh damping term, $c_R$, applied at every depth level.
+
+Valid values: Any positive real value.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_Rayleigh_damping_depth_variable" type="logical"
+	category="Rayleigh_damping" group="Rayleigh_damping">
+If true applies r h$^-1$ instead of just r.
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_Rayleigh_bottom_friction" type="logical"
+	category="Rayleigh_damping" group="Rayleigh_damping">
+If true, Rayleigh friction is only applied to the bottom
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_Rayleigh_bottom_damping_coeff" type="real"
+	category="Rayleigh_damping" group="Rayleigh_damping">
+Inverse-time coefficient for the Rayleigh damping term, $c_R$, only applied at the bottom.
+
+Valid values: Any positive real value.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+
+<!-- vegetation_drag -->
+
+<entry id="config_use_vegetation_drag" type="logical"
+	category="vegetation_drag" group="vegetation_drag">
+Controls if vegetation_drag is used to compute Manning's roughness coefficient.
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_vegetation_drag_coefficient" type="real"
+	category="vegetation_drag" group="vegetation_drag">
+Vegetation drag coefficient
+
+Valid values: O(1)
 Default: Defined in namelist_defaults.xml
 </entry>
 
@@ -1979,7 +2474,7 @@ Default: Defined in namelist_defaults.xml
 
 <entry id="config_n_ts_iter" type="integer"
 	category="split_timestep_share" group="split_timestep_share">
-number of large iterations over stages 1-3
+number of large iterations over stages 1-3; For the split_explicit_ab2 time integrator, this value only affects the first time step when it is not a restart run. For restart runs, this value has no effect on the split_explicit_ab2 time integrator.
 
 Valid values: any positive integer, but typically 1, 2, or 3
 Default: Defined in namelist_defaults.xml
@@ -2336,9 +2831,17 @@ Valid values: .true. or .false.
 Default: Defined in namelist_defaults.xml
 </entry>
 
+<entry id="config_disable_vel_hadv" type="logical"
+	category="debug" group="debug">
+Disables tendencies on the velocity field from the horizontal momentum advection. Note that these two flags are set together for linearized test cases: config_thickness_flux_type = 'constant' linearizes the thickness equation, and config_disable_vel_hadv = .true. linearizes the momentum equation if there is no assumed mean background velocity.
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
 <entry id="config_disable_vel_coriolis" type="logical"
 	category="debug" group="debug">
-Disables tendencies on the velocity field from the Coriolis force and momentum advection.
+Disables tendencies on the velocity field from the Coriolis force.
 
 Valid values: .true. or .false.
 Default: Defined in namelist_defaults.xml
@@ -2538,6 +3041,52 @@ Default: Defined in namelist_defaults.xml
 </entry>
 
 
+<!-- manufactured_solution -->
+
+<entry id="config_use_manufactured_solution" type="logical"
+	category="manufactured_solution" group="manufactured_solution">
+This flag includes additional thickness and velocity tendencies necessary for testing with a manufactured solution.
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_manufactured_solution_wavelength_x" type="real"
+	category="manufactured_solution" group="manufactured_solution">
+Wavelength of manufactured solution in the x direction
+
+Valid values: Any positive real number
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_manufactured_solution_wavelength_y" type="real"
+	category="manufactured_solution" group="manufactured_solution">
+Wavelength of manufactured solution in the y direction
+
+Valid values: Any positive real number
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_manufactured_solution_amplitude" type="real"
+	category="manufactured_solution" group="manufactured_solution">
+Amplitude of the manufactured solution
+
+Valid values: Any positive real number
+Default: Defined in namelist_defaults.xml
+</entry>
+
+
+<!-- init_mode_subgrid -->
+
+<entry id="config_subgrid_table_levels" type="integer"
+	category="init_mode_subgrid" group="init_mode_subgrid">
+Number of levels in subgrid lookup tables
+
+Valid values: Any positive non-zero integer. A value of -1 causes this to be overwritten with the configurations subgrid table levels definition.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+
 <!-- tracer_forcing_activeTracers -->
 
 <entry id="config_use_activeTracers" type="logical"
@@ -2608,7 +3157,7 @@ Default: Defined in namelist_defaults.xml
 	category="tracer_forcing_activeTracers" group="tracer_forcing_activeTracers">
 Time interval to compute salinity restoring tendency.
 
-Valid values: Any valid time stamp or 'dt'
+Valid values: Any valid time stamp e.g. format '0000-00-01_00:00:00' or 'dt'
 Default: Defined in namelist_defaults.xml
 </entry>
 
@@ -2630,7 +3179,7 @@ Default: Defined in namelist_defaults.xml
 
 <entry id="config_salinity_restoring_under_sea_ice" type="logical"
 	category="tracer_forcing_activeTracers" group="tracer_forcing_activeTracers">
-Flag to enable salinity restoring under sea ice.  The default setting is false, where salinity restoring tapers from full restoring in the open ocean (iceFraction=0.0) to zero restoring below full sea ice coverage (iceFraction=1.0); below partial sea ice coverage, restoring is in proportion to iceFraction.  If true, full salinity restoring is used everywhere, regardless of iceFraction value
+Flag to enable salinity restoring under sea ice.  The default setting is true, meaning that full salinity restoring is used everywhere, regardless of iceFraction value, except under ice shelves. If false, the salinity restoring tapers from full restoring in the open ocean (iceFraction=0.0) to zero restoring below full sea ice coverage (iceFraction=1.0); below partial sea ice coverage, restoring is in proportion to iceFraction.
 
 Valid values: .true. or .false.
 Default: Defined in namelist_defaults.xml
@@ -2818,9 +3367,25 @@ Valid values: .true. or .false.
 Default: Defined in namelist_defaults.xml
 </entry>
 
+<entry id="config_use_ecosys_frazil_tendencies" type="logical"
+	category="tracer_forcing_ecosysTracers" group="tracer_forcing_ecosysTracers">
+if true, use ecosys tendencies from internal ocean frazil formation
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
 <entry id="config_use_ecosysTracers_sea_ice_coupling" type="logical"
 	category="tracer_forcing_ecosysTracers" group="tracer_forcing_ecosysTracers">
 if true, couple ecosys fields with sea ice
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_ecosysTracers_atm_dust_from_coupler" type="logical"
+	category="tracer_forcing_ecosysTracers" group="tracer_forcing_ecosysTracers">
+if true, get atmospheric dust inputs from the coupler, else from ecosys monthly forcing file
 
 Valid values: .true. or .false.
 Default: Defined in namelist_defaults.xml
@@ -2861,6 +3426,145 @@ Default: Defined in namelist_defaults.xml
 <entry id="config_ecosysTracers_diagnostic_fields_level5" type="logical"
 	category="tracer_forcing_ecosysTracers" group="tracer_forcing_ecosysTracers">
 if true, make variables in ecosysDiagFieldsLevel5 available for output
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_ecosysTracers_iron_solubility_file" type="logical"
+	category="tracer_forcing_ecosysTracers" group="tracer_forcing_ecosysTracers">
+if true, read in Fe solubility from the ecosys forcing file
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+
+<!-- tracer_forcing_freshwaterTracers -->
+
+<entry id="config_use_freshwaterTracers" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, the 'freshwaterTracers' category is enabled for the run
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_surface_bulk_forcing" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, surface bulk forcing from coupler is added to surfaceTracerFlux in 'freshwaterTracers' category. True by default because the main function of this tracer group is tracking freshwater fluxes
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_surface_restoring" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, surface restoring source is applied to tracers in 'freshwaterTracers' category
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_interior_restoring" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, interior restoring source is applied to tracers in 'freshwaterTracers' category
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_exponential_decay" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, exponential decay source is applied to tracers in 'freshwaterTracers' category
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_idealAge_forcing" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, idealAge forcing source is applied to tracers in 'freshwaterTracers' category
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_ttd_forcing" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, transit time distribution forcing source is applied to tracers in 'freshwaterTracers' category
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_surface_value" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, surface value is computed for 'freshwaterTracers' category
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_rainFlux" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, the 'freshwaterTracers' category is enabled for the run
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_snowFlux" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, the 'freshwaterTracers' category is enabled for the run
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_iceRunoffFlux" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, the 'freshwaterTracers' category is enabled for the run
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_riverRunoffFlux" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, the 'freshwaterTracers' category is enabled for the run
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_subglacialRunoffFlux" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, the 'freshwaterTracers' category is enabled for the run
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_seaIceFreshWaterFlux" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, the 'freshwaterTracers' category is enabled for the run
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_icebergFreshWaterFlux" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, the 'freshwaterTracers' category is enabled for the run
+
+Valid values: .true. or .false.
+Default: Defined in namelist_defaults.xml
+</entry>
+
+<entry id="config_use_freshwaterTracers_landIceFreshwaterFlux" type="logical"
+	category="tracer_forcing_freshwaterTracers" group="tracer_forcing_freshwaterTracers">
+if true, the 'freshwaterTracers' category is enabled for the run
 
 Valid values: .true. or .false.
 Default: Defined in namelist_defaults.xml

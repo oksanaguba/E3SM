@@ -43,6 +43,7 @@ module planar_mod
   public  :: PlaneEdgeCount
   public  :: PlaneElemCount
   public  :: convert_gbl_index_plane
+  public  :: plane_Dmap
 
   ! ===============================
   ! Private methods
@@ -50,7 +51,6 @@ module planar_mod
   private :: coordinates_atomic
   private :: metric_atomic
   private :: coriolis_init_atomic
-  private :: Dmap
 
 contains
 
@@ -75,7 +75,7 @@ contains
 
     type (GridVertex_t),allocatable        :: GridElem(:,:)
     integer,allocatable       :: Mesh(:,:)
-    integer                   :: i,j,k,number,EdgeWgtP,CornerWgt,ierr,ielem,ll,loc
+    integer                   :: i,j,number,EdgeWgtP,CornerWgt,ierr,ielem,ll,loc
 
     if (ne_x==0 .or. ne_y ==0) call abortmp('Error in PlaneTopology: ne_x or ne_y is zero')
 
@@ -306,11 +306,15 @@ call initgridedge(GridEdge,GridVertex)
     elem%vec_sphere2cart(:,:,1,2) = 0.0_real_kind
     elem%vec_sphere2cart(:,:,2,2) = 1.0_real_kind
     elem%vec_sphere2cart(:,:,3,2) = 0.0_real_kind
+    ! z direction = vertical direction
+    elem%vec_sphere2cart(:,:,1,3) = 0.0_real_kind
+    elem%vec_sphere2cart(:,:,2,3) = 0.0_real_kind
+    elem%vec_sphere2cart(:,:,3,3) = 1.0_real_kind
 
   end subroutine coordinates_atomic
 
 
-  subroutine Dmap(D, a,b, corners3D, ref_map, cartp, facenum)
+  subroutine plane_Dmap(D, a,b, corners3D, ref_map, cartp, facenum)
     real (kind=real_kind), intent(out)  :: D(2,2)
     real (kind=real_kind), intent(in)     :: a,b
     type (cartesian3D_t)   :: corners3D(4)  !x,y,z coords of element corners
@@ -328,7 +332,7 @@ call initgridedge(GridEdge,GridVertex)
     D(2,1) = 0.0D0
     D(2,2) = dy/2.0d0
 
-  end subroutine Dmap
+  end subroutine plane_Dmap
 
   ! =========================================
   ! metric_atomic:
@@ -368,18 +372,14 @@ call initgridedge(GridEdge,GridVertex)
     real(kind=real_kind) :: alpha
     real (kind=longdouble_kind)      :: gll_points(np)
     ! Local variables
-    integer ii
-    integer i,j,nn
-    integer iptr
+    integer i,j
 
-    real (kind=real_kind) :: r         ! distance from origin for point on cube tangent to unit sphere
 
-    real (kind=real_kind) :: const, norm
+    real (kind=real_kind) :: norm
     real (kind=real_kind) :: detD      ! determinant of vector field mapping matrix.
-    real (kind=real_kind) :: tmpD(2,2)
-    real (kind=real_kind) :: M(2,2),E(2,2),eig(2),DE(2,2),DEL(2,2),V(2,2), nu1, nu2, lamStar1, lamStar2
+    real (kind=real_kind) :: M(2,2),E(2,2),eig(2),DE(2,2),DEL(2,2),V(2,2), lamStar1, lamStar2
     integer :: imaxM(2)
-    real (kind=real_kind) :: l1, l2, sc,min_svd,max_svd,max_normDinv
+    real (kind=real_kind) :: l1, l2,min_svd,max_svd,max_normDinv
 
     ! ==============================================
     ! Initialize differential mapping operator
@@ -395,7 +395,7 @@ call initgridedge(GridEdge,GridVertex)
     do j=1,np
        do i=1,np
 
-          call Dmap(elem%D(i,j,:,:),1.0D0,1.0D0,elem%corners3D,cubed_sphere_map)
+          call plane_Dmap(elem%D(i,j,:,:),1.0D0,1.0D0,elem%corners3D,cubed_sphere_map)
 
           ! Numerical metric tensor based on analytic D: met = D^T times D
           ! (D maps between physical plane and reference element)
@@ -490,8 +490,8 @@ call initgridedge(GridEdge,GridVertex)
           E(2,2)= E(1,1)
 
 !normalize columns
-	  E(:,1)=E(:,1)/sqrt(sum(E(:,1)*E(:,1)));
-	  E(:,2)=E(:,2)/sqrt(sum(E(:,2)*E(:,2)));
+          E(:,1)=E(:,1)/sqrt(sum(E(:,1)*E(:,1)));
+          E(:,2)=E(:,2)/sqrt(sum(E(:,2)*E(:,2)));
 
 
 ! OBTAINING TENSOR FOR HV: follows same approach as in cube_mod, with spherical-specific scaling removed
@@ -502,8 +502,8 @@ call initgridedge(GridEdge,GridVertex)
           DE(2,1)=sum(elem%D(i,j,2,:)*E(:,1))
           DE(2,2)=sum(elem%D(i,j,2,:)*E(:,2))
 
-	  lamStar1=1/(eig(1)**(hypervis_scaling/4.0d0))
-	  lamStar2=1/(eig(2)**(hypervis_scaling/4.0d0))
+          lamStar1=1/(eig(1)**(hypervis_scaling/4.0d0))
+          lamStar2=1/(eig(2)**(hypervis_scaling/4.0d0))
 
 !matrix (DE) * Lam^* * Lam , tensor HV when V is applied at each Laplace calculation
 !          DEL(1:2,1) = lamStar1*eig(1)*DE(1:2,1)
@@ -520,7 +520,7 @@ call initgridedge(GridEdge,GridVertex)
           V(2,1)=sum(DEL(2,:)*DE(1,:))
           V(2,2)=sum(DEL(2,:)*DE(2,:))
 
-	  elem%tensorVisc(i,j,:,:)=V(:,:)
+          elem%tensorVisc(i,j,:,:)=V(:,:)
 
        end do
     end do
@@ -599,7 +599,7 @@ call initgridedge(GridEdge,GridVertex)
 
     type (element_t) :: elem
     ! Local variables
-    integer  i,ie,je,nn
+    integer  ie,je
     real (kind=real_kind)  :: startx, starty
 
     if (ne_x ==0 .or. ne_y == 0) call abortmp('Error in set_corner_coordinates: ne_x or ne_y is zero')

@@ -100,7 +100,10 @@ attributes to express the dependency.
 <cfltm>0.70</cfltm>
 <wdthcg>1.50</wdthcg>
 <wdthth>1.50</wdthth>
- 
+
+<!-- SIC4 -->
+<ic4method>1</ic4method>
+
 <!-- UNST -->
  
 <ugobcauto>.true.</ugobcauto>
@@ -158,8 +161,8 @@ attributes to express the dependency.
  
 <!-- UOST -->
  
-<uostfilelocal>obstructions_local.glo_unst.in</uostfilelocal>
-<uostfileshadow>obstructions_shadow.glo_unst.in</uostfileshadow>
+<uostfilelocal>obstructions_local.rtd.in</uostfilelocal>
+<uostfileshadow>obstructions_shadow.rtd.in</uostfileshadow>
 <uostfactorlocal>1.00</uostfactorlocal>
 <uostfactorshadow>1.00</uostfactorshadow>
  
@@ -203,6 +206,7 @@ attributes to express the dependency.
 <noleap>.false.</noleap>
 <trckcmpr>.true.</trckcmpr>
 <btbet>1.20</btbet>
+<icnumerics>.false.</icnumerics>
 
 <!-- rotd -->
 

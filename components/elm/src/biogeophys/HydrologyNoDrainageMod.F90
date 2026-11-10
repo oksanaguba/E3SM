@@ -7,13 +7,14 @@ Module HydrologyNoDrainageMod
   use shr_kind_mod      , only : r8 => shr_kind_r8
   use shr_log_mod       , only : errMsg => shr_log_errMsg
   use decompMod         , only : bounds_type
-  use elm_varctl        , only : iulog, use_vichydro, use_extrasnowlayers
+  use elm_varctl        , only : iulog, use_vichydro, use_extrasnowlayers, use_firn_percolation_and_compaction
   use elm_varcon        , only : e_ice, denh2o, denice, rpi, spval
   use atm2lndType       , only : atm2lnd_type
+  use ocn2lndType       , only : ocn2lnd_type
   use lnd2atmType       , only : lnd2atm_type
   use AerosolType       , only : aerosol_type
   use EnergyFluxType    , only : energyflux_type
-  use CanopyStateType  , only  : canopystate_type
+  use CanopyStateType   , only  : canopystate_type
   use SoilHydrologyType , only : soilhydrology_type
   use SoilStateType     , only : soilstate_type
   use LandunitType      , only : lun_pp
@@ -21,7 +22,7 @@ Module HydrologyNoDrainageMod
   use ColumnDataType    , only : col_es, col_ws, col_wf
   use VegetationType    , only : veg_pp
   use TopounitDataType  , only : top_as, top_af ! Atmospheric state and flux variables
-  use elm_instMod       , only : alm_fates , ep_betr
+  use elm_instMod       , only : alm_fates
 
 
   use timeinfoMod
@@ -44,7 +45,7 @@ contains
        num_urbanc, filter_urbanc, &
        num_snowc, filter_snowc, &
        num_nosnowc, filter_nosnowc, canopystate_vars, &
-       atm2lnd_vars, lnd2atm_vars, soilstate_vars,    &
+       atm2lnd_vars, ocn2lnd_vars, lnd2atm_vars, soilstate_vars, &
        energyflux_vars, soilhydrology_vars, aerosol_vars)
     ! !DESCRIPTION:
     ! This is the main subroutine to execute the calculation of soil/snow
@@ -67,14 +68,13 @@ contains
     use landunit_varcon      , only : istice, istwet, istsoil, istice_mec, istcrop, istdlak
     use column_varcon        , only : icol_roof, icol_road_imperv, icol_road_perv, icol_sunwall
     use column_varcon        , only : icol_shadewall
-    use elm_varctl           , only : use_cn, use_betr, use_fates, use_pflotran, pf_hmode
+    use elm_varctl           , only : use_cn, use_fates, use_pflotran, pf_hmode, use_fan
     use elm_varpar           , only : nlevgrnd, nlevsno, nlevsoi, nlevurb
     use SnowHydrologyMod     , only : SnowCompaction, CombineSnowLayers, DivideSnowLayers, DivideExtraSnowLayers, SnowCapping
     use SnowHydrologyMod     , only : SnowWater, BuildSnowFilter 
     use SoilHydrologyMod     , only : ELMVICMap, SurfaceRunoff, Infiltration, WaterTable
     use SoilWaterMovementMod , only : SoilWater
     use SoilWaterRetentionCurveMod, only : soil_water_retention_curve_type
-    use elm_varctl           , only : use_vsfm
     use SoilHydrologyMod     , only : DrainageVSFM
     use SoilWaterMovementMod , only : Compute_EffecRootFrac_And_VertTranSink
     !
@@ -93,6 +93,7 @@ contains
     integer                  , intent(inout) :: num_nosnowc          ! number of column non-snow points
     integer                  , intent(inout) :: filter_nosnowc(:)    ! column filter for non-snow points
     type(atm2lnd_type)       , intent(in)    :: atm2lnd_vars
+    type(ocn2lnd_type)       , intent(in)    :: ocn2lnd_vars
     type(lnd2atm_type)       , intent(in)    :: lnd2atm_vars
     type(soilstate_type)     , intent(inout) :: soilstate_vars
     type(energyflux_type)    , intent(in)    :: energyflux_vars
@@ -110,6 +111,7 @@ contains
     real(r8) :: rwat(bounds%begc:bounds%endc) ! soil water wgted by depth to maximum depth of 0.5 m
     real(r8) :: swat(bounds%begc:bounds%endc) ! same as rwat but at saturation
     real(r8) :: rz(bounds%begc:bounds%endc)   ! thickness of soil layers contributing to rwat (m)
+    real(r8) :: h2osoi_liq_saved(bounds%begc:bounds%endc) ! h2osoi_liq_col in topmost layer before calling SoilWater
     real(r8) :: tsw                           ! volumetric soil water to 0.5 m
     real(r8) :: stsw                          ! volumetric soil water to 0.5 m at saturation
     real(r8) :: fracl                         ! fraction of soil layer contributing to 10cm total soil water
@@ -193,15 +195,16 @@ contains
       !------------------------------------------------------------------------------------
       if (use_pflotran .and. pf_hmode) then
 
-        call Infiltration(bounds, num_hydrononsoic, filter_hydrononsoic, &
-             num_urbanc, filter_urbanc, atm2lnd_vars, lnd2atm_vars,      &
+        call Infiltration(bounds, num_hydrononsoic, filter_hydrononsoic,          &
+             num_urbanc, filter_urbanc, atm2lnd_vars, ocn2lnd_vars, lnd2atm_vars, &
              energyflux_vars, soilhydrology_vars, soilstate_vars, dtime)
 
       else
       !------------------------------------------------------------------------------------
 
-        call Infiltration(bounds, num_hydrologyc, filter_hydrologyc, num_urbanc, filter_urbanc, &
-             atm2lnd_vars, lnd2atm_vars, energyflux_vars, soilhydrology_vars, soilstate_vars, dtime)
+        call Infiltration(bounds, num_hydrologyc, filter_hydrologyc,              &
+             num_urbanc, filter_urbanc, atm2lnd_vars, ocn2lnd_vars, lnd2atm_vars, &
+             energyflux_vars, soilhydrology_vars, soilstate_vars, dtime)
 
       !------------------------------------------------------------------------------------
       end if
@@ -209,21 +212,16 @@ contains
 
       !!TODO:  need to fix the waterstate_vars dependence here.
 #ifndef _OPENACC
-      if (use_betr) then
-        call ep_betr%BeTRSetBiophysForcing(bounds, col_pp, veg_pp, 1, nlevsoi, waterstate_vars=col_ws)
-        call ep_betr%PreDiagSoilColWaterFlux(num_hydrologyc, filter_hydrologyc)
-      endif
 #endif
-
-      if (use_vsfm) then
-         call DrainageVSFM(bounds, num_hydrologyc, filter_hydrologyc, &
-              num_urbanc, filter_urbanc,&
-              soilhydrology_vars, soilstate_vars, dtime)
-      endif
 
       call Compute_EffecRootFrac_And_VertTranSink(bounds, num_hydrologyc, &
            filter_hydrologyc, soilstate_vars, canopystate_vars, energyflux_vars)
 
+      if ( use_fan ) then 
+         ! save the h2osoi_liq in top layer before evaluating the soilwater movement
+         call store_tsl_moisture(filter_hydrologyc, num_hydrologyc) 
+      end if
+ 
 #ifndef _OPENACC
       ! If FATES plant hydraulics is turned on, over-ride default transpiration sink calculation
       if( use_fates ) call alm_fates%ComputeRootSoilFlux(bounds, num_hydrologyc, filter_hydrologyc, &
@@ -246,15 +244,12 @@ contains
       end if
       !------------------------------------------------------------------------------------
 
+      if ( use_fan ) then 
+         ! use the saved value to calculate the tendency
+         call eval_tsl_moist_tend(filter_hydrologyc, num_hydrologyc)
+      end if
+ 
 #ifndef _OPENACC
-       if (use_betr) then
-          call ep_betr%BeTRSetBiophysForcing(bounds, col_pp, veg_pp, 1, nlevsoi, waterstate_vars=col_ws, &
-             waterflux_vars=col_wf, soilhydrology_vars = soilhydrology_vars)
-
-          call ep_betr%DiagAdvWaterFlux(num_hydrologyc, filter_hydrologyc)
-
-          call ep_betr%RetrieveBiogeoFlux(bounds, 1, nlevsoi, waterflux_vars=col_wf)
-       endif
 #endif
 
       if (use_vichydro) then
@@ -282,14 +277,9 @@ contains
 
 
 #ifndef _OPENACC
-      if (use_betr) then
-         !apply dew and sublimation fluxes, this is a temporary work aroud for tracking water isotope
-         !Jinyun Tang, Feb 4, 2015
-         call ep_betr%CalcDewSubFlux(bounds, col_pp, num_hydrologyc, filter_hydrologyc)
-      endif           
 #endif
       
-      if (use_extrasnowlayers) then
+      if (use_firn_percolation_and_compaction) then
          call SnowCapping(bounds, num_nolakec, filter_nolakec, num_snowc, filter_snowc, &
                           aerosol_vars)
       end if
@@ -437,7 +427,7 @@ contains
             t_soi_10cm(c) = t_soi_10cm(c)/0.1_r8
             tsoi17(c) =  tsoi17(c)/0.17_r8         ! F. Li and S. Levis
          end if
-         if (lun_pp%itype(l)==istsoil .or. lun_pp%itype(l)==istcrop) then
+         if (col_pp%is_soil(c) .or. col_pp%is_crop(c)) then
             t_grnd_r(c) = t_soisno(c,snl(c)+1)
          end if
 
@@ -571,6 +561,47 @@ contains
 
     end associate
 
+contains
+
+    ! Subroutines for storing the time derivative of top most soil layer
+    ! moisture. This is used for diagnosing the downwards moisture flux within FAN.
+
+    subroutine store_tsl_moisture(filter, num_fc)
+      ! Store the soil water within topmost layer before evaluating soil
+      ! moisture
+      ! transport.
+      integer, intent(in) :: filter(:)
+      integer, intent(in) :: num_fc
+
+      integer :: fc, c
+
+      do fc = 1, num_fc
+         c = filter(fc)
+         h2osoi_liq_saved(c) = col_ws%h2osoi_liq(c,1)
+      end do
+
+    end subroutine store_tsl_moisture
+
+    subroutine eval_tsl_moist_tend(filter, num_fc)
+      ! Evaluate the time derivative of soil liquid water due to percolation as
+      ! required in FAN.
+      integer, intent(in) :: filter(:)
+      integer, intent(in) :: num_fc
+
+      integer :: fc, c
+
+      associate(h2osoi_tend_tsl => col_ws%h2osoi_tend_tsl_col, &
+           h2osoi_liq => col_ws%h2osoi_liq)
+
+      do fc = 1, num_fc
+         c = filter(fc)
+         h2osoi_tend_tsl(c) = (h2osoi_liq(c,1) - h2osoi_liq_saved(c)) / dtime
+      end do
+
+      end associate
+
+    end subroutine eval_tsl_moist_tend
+ 
   end subroutine HydrologyNoDrainage
 
 end Module HydrologyNoDrainageMod

@@ -9,6 +9,7 @@
 
 #include "Types.hpp"
 #include "kokkos_utils.hpp"
+#include "utilities/Hash.hpp"
 
 namespace Homme {
 
@@ -19,6 +20,8 @@ struct RefStates {
   ExecViewManaged<Scalar * [NP][NP][NUM_LEV_P]> phi_i_ref;
   ExecViewManaged<Scalar * [NP][NP][NUM_LEV  ]> theta_ref;
   ExecViewManaged<Scalar * [NP][NP][NUM_LEV  ]> dp_ref;
+  ExecViewManaged<Scalar     [NUM_LEV         ]> nu_scale_top;
+  int                                            nu_scale_top_ilev_pack_lim;
 
   RefStates () :
     m_num_elems(0)
@@ -27,8 +30,6 @@ struct RefStates {
   {}
 
   void init (const int num_elems);
-  void compute (const bool hydrostatic,const HybridVCoord& hvcoord,
-                const ExecViewUnmanaged<Real *[NP][NP]>& phis);
 
   int num_elems () const { return m_num_elems; }
 private:
@@ -64,10 +65,10 @@ public:
   void randomize(const int seed);
   void randomize(const int seed, const Real max_pressure);
   void randomize(const int seed, const Real max_pressure, const Real ps0, const Real hyai0);
-
   void randomize(const int seed, const Real max_pressure, const Real ps0, const Real hyai0,
                  const ExecViewUnmanaged<const Real*[NP][NP]>& phis);
-
+  void randomize(const int seed, const HybridVCoord& hvcoord);
+  
   KOKKOS_INLINE_FUNCTION
   int num_elems() const { return m_num_elems; }
 
@@ -76,9 +77,17 @@ public:
                               CF90Ptr& state_vtheta_dp, CF90Ptr& state_phinh_i,
                               CF90Ptr& state_dp3d,      CF90Ptr& state_ps_v);
 
-  // Push the results from the exec space views to the F90 pointers
+  // Push the results from the exec space views to the F90 pointers, all time levels.
   void push_to_f90_pointers(F90Ptr& state_v, F90Ptr& state_w_i, F90Ptr& state_vtheta_dp,
                             F90Ptr& state_phinh_i, F90Ptr& state_dp) const;
+
+  // As above, but copy only time level tl; the other time levels of the F90
+  // arrays are left untouched. Used on the per-step CAM path, where nothing on
+  // the Fortran side reads the others after a step.
+  void push_to_f90_pointers(F90Ptr& state_v, F90Ptr& state_w_i, F90Ptr& state_vtheta_dp,
+                            F90Ptr& state_phinh_i, F90Ptr& state_dp, const int tl) const;
+
+  HashType hash(const int time_level) const;
 
 private:
   int m_num_elems;

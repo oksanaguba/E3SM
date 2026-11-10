@@ -40,15 +40,33 @@ module ice_comp_mct
    use mpas_bootstrapping
    use mpas_dmpar
    use mpas_log
+#ifdef HAVE_MOAB
+   use mpas_moabmesh
+   use seq_comm_mct, only: MPSIID
+   use iMOAB, only: iMOAB_DefineTagStorage, iMOAB_SetDoubleTagStorage, iMOAB_GetDoubleTagStorage
+   use shr_kind_mod    , only: cxx => SHR_KIND_CXX
+   use seq_comm_mct,      only: num_moab_exports
+#endif
 
    use iso_c_binding, only : c_char, c_loc, c_ptr, c_int
    use mpas_c_interfacing, only : mpas_f_to_c_string, mpas_c_to_f_string
 
    ! MPASSI modules
    use seaice_analysis_driver
-   use seaice_column, only: seaice_column_reinitialize_fluxes, &
-                            seaice_column_coupling_prep
-   use seaice_constants
+   use seaice_icepack, only: seaice_icepack_reinitialize_fluxes, &
+                             seaice_icepack_coupling_prep
+   use seaice_constants, only: coupleAlarmID, &
+                               seaiceFreshWaterFreezingPoint, &
+                               seaiceDensityIce, &
+                               seaiceDensitySnow, &
+                               seaiceDensitySeaWater, &
+                               seaiceGravity, &
+                               seaiceLatentHeatMelting, &
+                               seaiceReferenceSalinity, &
+                               seaiceFrazilSalinityReduction, &
+                               seaiceFrazilIcePorosity, &
+                               pii
+
    use seaice_core
    use seaice_core_interface
    use seaice_forcing
@@ -56,10 +74,7 @@ module ice_comp_mct
    use seaice_mesh, only: seaice_latlon_vector_rotation_backward
    use seaice_time_integration
    use seaice_error, only: seaice_check_critical_error
-
-   use ice_constants_colpkg, only: Tffresh, ice_ref_salinity, p001
-
-   use ice_colpkg, only: colpkg_sea_freezing_temperature
+   use icepack_intfc, only: icepack_sea_freezing_temperature
 
 !
 ! !PUBLIC MEMBER FUNCTIONS:
@@ -83,6 +98,13 @@ module ice_comp_mct
   private :: ice_SetGSMap_mct
   private :: ice_domain_mct
 !
+#ifdef HAVE_MOAB
+  integer , private :: mblsize, totalmbls,totalmblr
+  real (kind=RKIND) , allocatable, private :: i2x_im(:,:)
+  real (kind=RKIND) , allocatable, private :: i2x_im2(:,:)
+  real (kind=RKIND) , allocatable, private :: x2i_im(:,:)
+  real (kind=RKIND) , allocatable, private :: x2i_im2(:,:)
+#endif
 ! !PRIVATE MODULE VARIABLES
 
    integer, private :: my_task
@@ -166,7 +188,9 @@ contains
     type (MPAS_TimeInterval_Type) :: alarmTimeStep
     type (block_type), pointer :: block
 
-    type (MPAS_Pool_Type), pointer :: shortwave
+    type (MPAS_Pool_Type), pointer :: &
+         shortwave, &
+         berg_forcing
 
     logical :: exists
     logical :: verbose_taskmap_output                ! true then use verbose task-to-node mapping format
@@ -204,13 +228,19 @@ contains
     character(len=strKIND) :: curdate
     character(len=strKIND) :: curtime
     character(len=strKIND) :: history
-
-    logical, pointer :: tempLogicalConfig
+#ifdef HAVE_MOAB
+    integer :: ierrmb, numco, tagtype, tagindex, ent_type
+    character(CXX) :: tagname
+#endif
+    logical, pointer :: &
+         tempLogicalConfig, &
+         config_scale_dib_by_removed_ice_runoff
     character(len=StrKIND), pointer :: tempCharConfig
     real (kind=RKIND), pointer :: tempRealConfig
 
     real(kind=RKIND), pointer :: &
-         dayOfNextShortwaveCalculation ! needed for CESM like coupled simulations
+         dayOfNextShortwaveCalculation, & ! needed for CESM like coupled simulations
+         runningMeanRemovedIceRunoff ! the area integrated, running mean of removed ice runoff from the ocean
 
     interface
        subroutine xml_stream_parser(xmlname, mgr_p, comm, ierr) bind(c)
@@ -351,6 +381,7 @@ contains
     ! Setup function pointers for MPASSI core and domain types
     call seaice_setup_core(corelist)
     call seaice_setup_domain(domain)
+    domain % domainID = 0
 
     ! ===========
     ! Initialize log manager
@@ -380,8 +411,8 @@ contains
     ! Process namelist and streams files
     ! ----------
     ! Override the names of the stream and namelist files
-    domain % namelist_filename = 'mpassi_in'
-    domain % streams_filename = 'streams.seaice'
+    domain % namelist_filename = 'mpassi_in' // trim(inst_suffix)
+    domain % streams_filename = 'streams.seaice' // trim(inst_suffix)
 
     ! Setup namelist variables, and read the namelist
     ierr = domain % core % setup_namelist(domain % configs, domain % namelist_filename, domain % dminfo)
@@ -450,8 +481,6 @@ contains
         tempLogicalConfig = .true.
         call mpas_pool_get_config(domain % configs, "config_do_restart_snow_grain_radius", tempLogicalConfig)
         tempLogicalConfig = .true.
-        call mpas_pool_get_config(domain % configs, "config_do_restart_zsalinity", tempLogicalConfig)
-        tempLogicalConfig = .true.
         call mpas_pool_get_config(domain % configs, "config_do_restart_bgc", tempLogicalConfig)
         tempLogicalConfig = .true.
 
@@ -465,6 +494,9 @@ contains
         tempCharConfig = "0001-00-00_00:00:00"
 
     end if
+
+    call MPAS_pool_get_config(domain % configs, "config_scale_dib_by_removed_ice_runoff", &
+                              config_scale_dib_by_removed_ice_runoff)
 
     ! Setup MPASSI simulation clock
     ierr = domain % core % setup_clock(domain % clock, domain % configs)
@@ -511,6 +543,10 @@ contains
        mesh_iotype = MPAS_IO_NETCDF
     else if (trim(iotype) == 'netcdf4') then
        mesh_iotype = MPAS_IO_NETCDF4
+    else if (trim(iotype) == 'adios') then
+       mesh_iotype = MPAS_IO_ADIOS
+    else if (trim(iotype) == 'adiosc') then
+       mesh_iotype = MPAS_IO_ADIOSC
     else
        mesh_iotype = MPAS_IO_PNETCDF
     end if
@@ -541,15 +577,15 @@ contains
     ! add E3SM stream attributes to MPAS output files
     call seq_infodata_GetData(infodata, case_name=caseid, model_version=model_version, username=username, hostname=hostname)
     institution = &
-         'LLNL (Lawrence Livermore National Laboratory, Livermore, CA 94550, USA); &
-         &ANL (Argonne National Laboratory, Argonne, IL 60439, USA); &
-         &BNL (Brookhaven National Laboratory, Upton, NY 11973, USA); &
-         &LANL (Los Alamos National Laboratory, Los Alamos, NM 87545, USA); &
-         &LBNL (Lawrence Berkeley National Laboratory, Berkeley, CA 94720, USA); &
-         &ORNL (Oak Ridge National Laboratory, Oak Ridge, TN 37831, USA); &
-         &PNNL (Pacific Northwest National Laboratory, Richland, WA 99352, USA); &
-         &SNL (Sandia National Laboratories, Albuquerque, NM 87185, USA). &
-         &Mailing address: LLNL Climate Program, c/o David C. Bader, &
+         'LLNL (Lawrence Livermore National Laboratory); &
+         &ANL (Argonne National Laboratory); &
+         &BNL (Brookhaven National Laboratory); &
+         &LANL (Los Alamos National Laboratory); &
+         &LBNL (Lawrence Berkeley National Laboratory); &
+         &ORNL (Oak Ridge National Laboratory); &
+         &PNNL (Pacific Northwest National Laboratory); &
+         &SNL (Sandia National Laboratories). &
+         &Mailing address: LLNL Climate Program, c/o Peter M. Caldwell, &
          &Principal Investigator, L-103, 7000 East Avenue, Livermore, CA 94550, USA'
     call datetime(curdate, curtime)
     history = 'created on ' // trim(curdate) // ' ' // trim(curtime)
@@ -562,7 +598,9 @@ contains
     call MPAS_stream_mgr_add_att(domain % streamManager, 'source', 'E3SM Sea Ice Model')
     call MPAS_stream_mgr_add_att(domain % streamManager, 'institution',trim(institution))
     call MPAS_stream_mgr_add_att(domain % streamManager, 'institution_id', 'E3SM-Project')
-    call MPAS_stream_mgr_add_att(domain % streamManager, 'contact', 'e3sm-data-support@listserv.llnl.gov')
+    call MPAS_stream_mgr_add_att(domain % streamManager, 'contact', 'e3sm-data-support@llnl.gov')
+    call MPAS_stream_mgr_add_att(domain % streamManager, 'license', &
+        'http://spdx.org/licenses/CC-BY-4.0 (CC-BY-4.0)')
     call MPAS_stream_mgr_add_att(domain % streamManager, 'username', trim(username))
     call MPAS_stream_mgr_add_att(domain % streamManager, 'hostname', trim(hostname))
 
@@ -597,6 +635,15 @@ contains
     ! Determine coupling type
     call seq_infodata_GetData(infodata, cpl_seq_option=cpl_seq_option)
 
+    if (config_scale_dib_by_removed_ice_runoff) then
+       ! independent of space so should be no need to loop over blocks
+       block => domain % blocklist
+       call MPAS_pool_get_subpool(block % structs, "berg_forcing", berg_forcing)
+       call MPAS_pool_get_array(berg_forcing, "runningMeanRemovedIceRunoff", &
+                                runningMeanRemovedIceRunoff)
+       call seq_infodata_GetData(infodata, rmean_rmv_ice_runoff=runningMeanRemovedIceRunoff )
+    end if
+
     ! Determine time of next atmospheric shortwave calculation
     block => domain % blocklist
     do while (associated(block))
@@ -617,7 +664,10 @@ contains
     if ( ierr /= 0 ) then
        call mpas_log_write('Core init failed for core ' // trim(domain % core % coreName), MPAS_LOG_CRIT)
     end if
-
+#ifdef HAVE_MOAB
+    call init_moab_mpas(domain, ICEID, MPSIID) ! should return MPSIID ..
+    call mpas_log_write('initialized MOAB MPAS sea-ice instance... ')
+#endif
 !-----------------------------------------------------------------------
 !
 !   initialize time-stamp information
@@ -679,6 +729,54 @@ contains
 
     nsend = mct_avect_nRattr(i2x_i)
     nrecv = mct_avect_nRattr(x2i_i)
+#ifdef HAVE_MOAB
+   ! initialize moab tag fields array
+    mblsize = lsize
+    totalmbls = mblsize * nsend ! size of the double array
+    totalmblr = mblsize * nrecv ! size of the double array
+    allocate (i2x_im(lsize, nsend) )
+    allocate (x2i_im(lsize, nrecv) )
+    i2x_im = 0._r8
+    x2i_im = 0._r8
+    allocate (i2x_im2(nsend, lsize) )
+    i2x_im2 = 0._r8
+    allocate (x2i_im2(nrecv, lsize) )
+    x2i_im2 = 0._r8
+    ! define tags according to the seq_flds_i2x_fields
+    ! also zero them out
+    tagtype = 1  ! dense, double
+    numco = 1 !  one value per cell / entity
+    ent_type = 1 ! cells
+    tagname = trim(seq_flds_i2x_fields)//C_NULL_CHAR
+    ierrmb = iMOAB_DefineTagStorage(MPSIID, tagname, tagtype, numco,  tagindex )
+    if ( ierrmb == 1 ) then
+      call mpas_log_write('cannot define tags for MOAB i2x fields ' // trim(seq_flds_i2x_fields), MPAS_LOG_ERR)
+    endif
+    ierrmb = iMOAB_SetDoubleTagStorage ( MPSIID, tagname, totalmbls , ent_type, i2x_im(1,1) )
+    if ( ierrmb /= 0 ) then
+       call mpas_log_write('cannot set tags for MOAB i2x fields to zero' // trim(seq_flds_i2x_fields), MPAS_LOG_ERR)
+    endif
+    tagname = trim(seq_flds_x2i_fields)//C_NULL_CHAR
+    ierrmb = iMOAB_DefineTagStorage(MPSIID, tagname, tagtype, numco,  tagindex )
+    if ( ierrmb == 1 ) then
+      call mpas_log_write('cannot define tags for MOAB i2x fields ' // trim(seq_flds_x2i_fields), MPAS_LOG_ERR)
+    endif
+    ierrmb = iMOAB_SetDoubleTagStorage ( MPSIID, tagname, totalmblr , ent_type, x2i_im(1,1) )
+    if ( ierrmb /= 0 ) then
+       call mpas_log_write('cannot set tags for MOAB x2i fields to zero' // trim(seq_flds_x2i_fields), MPAS_LOG_ERR)
+    endif
+
+    ! add domain tags
+    tagname=trim(seq_flds_dom_fields)//C_NULL_CHAR
+    tagtype = 1
+    ierrmb = iMOAB_DefineTagStorage(MPSIID, tagname, tagtype, numco,  tagindex )
+    if ( ierrmb /= 0 ) then
+       call mpas_log_write('Fail to set define dom fields ',  MPAS_LOG_ERR)
+    endif
+
+    call ice_domain_moab(MPSIID)
+#endif
+
 
 !-----------------------------------------------------------------------
 !
@@ -736,8 +834,19 @@ contains
     call mpas_reset_clock_alarm(domain % clock, coupleAlarmID, ierr=ierr)
 
     ! Coupling prep
-    call seaice_column_coupling_prep(domain)
+    call MPAS_pool_get_config(domain % configs, "config_column_physics_type", tempCharConfig)
+    call MPAS_pool_get_config(domain % configs, "config_use_floe_size_distribution", tempLogicalConfig)
 
+    if (trim(tempCharConfig) == "icepack") then
+      call seaice_icepack_coupling_prep(domain)
+      if (tempLogicalConfig) then
+        call MPAS_pool_get_config(domain % configs, "config_use_column_waves", tempLogicalConfig)
+        if (.not.tempLogicalConfig) then
+          call mpas_log_write('FloeSizeDistribution requires column wave breaking.', MPAS_LOG_ERR)
+          call mpas_log_write('Either a) turn FSD off or b) include wave component (either dwav or ww3)', MPAS_LOG_CRIT)
+        endif
+      endif
+    endif ! config_column_physics_type
 
 !-----------------------------------------------------------------------
 !
@@ -745,7 +854,19 @@ contains
 !
 !-----------------------------------------------------------------------
 
-    call ice_export_mct(i2x_i, errorCode)
+#ifdef HAVE_MOAB
+    i2x_im2 = 0.0_RKIND
+    call ice_export_mct(i2x_im2, errorCode)
+    i2x_im = transpose(i2x_im2)
+    tagname = trim(seq_flds_i2x_fields)//C_NULL_CHAR
+    ent_type = 1 ! cells
+    ierrmb = iMOAB_SetDoubleTagStorage(MPSIID, tagname, totalmbls, ent_type, i2x_im)
+    if (ierrmb /= 0) then
+       call mpas_log_write('Fail to set i2x MOAB fields ', MPAS_LOG_ERR)
+    endif
+#else
+    call ice_export_mct(i2x_i%rAttr, errorCode)
+#endif
     if (errorCode /= 0) then
        call mpas_log_write('Error in ice_export_mct', MPAS_LOG_CRIT)
     endif
@@ -758,12 +879,22 @@ contains
 !
 !   get intial state from driver
 !
-!-----------------------------------------------------------------------
-
-    call ice_import_mct(x2i_i, errorCode)
+#ifdef HAVE_MOAB
+    tagname = trim(seq_flds_x2i_fields)//C_NULL_CHAR
+    ent_type = 1 ! cells
+    ierrmb = iMOAB_GetDoubleTagStorage(MPSIID, tagname, totalmblr, ent_type, x2i_im)
+    if (ierrmb /= 0) then
+       call mpas_log_write('Fail to get MOAB fields ', MPAS_LOG_ERR)
+    endif
+    x2i_im2 = transpose(x2i_im)
+    call ice_import_mct(x2i_im2, errorCode)
+#else
+    call ice_import_mct(x2i_i%rAttr, errorCode)
+#endif
     if (errorCode /= 0) then
        call mpas_log_write('Error in ice_import_mct', MPAS_LOG_CRIT)
     endif
+
 
     currTime = mpas_get_clock_time(domain % clock, MPAS_NOW, ierr)
     call mpas_get_time(curr_time=currTime, dateTimeString=timeStamp, ierr=ierr)
@@ -1034,7 +1165,8 @@ contains
 ! Variable related to MPASSI
       type (block_type), pointer :: block
       type (MPAS_Pool_type), pointer :: &
-            shortwave
+            shortwave, &
+            berg_forcing
 
       real (kind=RKIND) :: current_wallclock_time
       type (MPAS_Time_Type) :: currTime
@@ -1042,11 +1174,22 @@ contains
       type (MPAS_timeInterval_type) :: timeStep
       integer :: ierr, streamDirection, iam
       logical :: streamActive, debugOn
-      logical, pointer :: config_write_output_on_startup
+      logical, pointer :: &
+            config_write_output_on_startup, &
+            config_scale_dib_by_removed_ice_runoff
       logical, save :: first=.true.
-      character (len=StrKIND), pointer :: config_restart_timestamp_name
+      character (len=StrKIND), pointer :: &
+            config_restart_timestamp_name, &
+            config_column_physics_type
       real(kind=RKIND), pointer :: &
-            dayOfNextShortwaveCalculation ! needed for CESM like coupled simulations
+            dayOfNextShortwaveCalculation, & ! needed for CESM like coupled simulations
+            runningMeanRemovedIceRunoff ! the area integrated, running mean of removed ice runoff from the ocean
+
+#ifdef HAVE_MOAB
+      integer :: ent_type, errorCode
+      character(CXX) :: tagname
+#endif
+
 
       iam = domain % dminfo % my_proc_id
 
@@ -1059,7 +1202,10 @@ contains
       mpas_log_info => domain % logInfo
       if (debugOn) call mpas_log_write("=== Beginning ice_run_mct ===")
 
-      call mpas_pool_get_config(domain % configs, 'config_restart_timestamp_name', config_restart_timestamp_name)
+      call MPAS_pool_get_config(domain % configs, 'config_restart_timestamp_name', config_restart_timestamp_name)
+      call MPAS_pool_get_config(domain % configs, "config_column_physics_type", config_column_physics_type)
+      call MPAS_pool_get_config(domain % configs, "config_scale_dib_by_removed_ice_runoff", &
+                                config_scale_dib_by_removed_ice_runoff)
 
       ! Setup log information.
       call shr_file_getLogUnit (shrlogunit)
@@ -1067,13 +1213,35 @@ contains
       call shr_file_setLogUnit (iceLogUnit)
 
       ! reinitialize fluxes
-      call seaice_column_reinitialize_fluxes(domain)
+!      if (trim(config_column_physics_type) == "icepack") then
+         call seaice_icepack_reinitialize_fluxes(domain)
+!      endif ! config_column_physics_type
 
       ! Import state from coupler
-      call ice_import_mct(x2i_i, ierr)
+#ifdef HAVE_MOAB
+      tagname = trim(seq_flds_x2i_fields)//C_NULL_CHAR
+      ent_type = 1 ! cells
+      ierr = iMOAB_GetDoubleTagStorage(MPSIID, tagname, totalmblr, ent_type, x2i_im)
+      if (ierr /= 0) then
+         call mpas_log_write('Fail to get MOAB fields ', MPAS_LOG_ERR)
+      endif
+      x2i_im2 = transpose(x2i_im)
+      call ice_import_mct(x2i_im2, errorCode)
+#else
+      call ice_import_mct(x2i_i%rAttr, ierr)
+#endif
 
       ! Post coupling calls
       block => domain % blocklist
+
+      if (config_scale_dib_by_removed_ice_runoff) then
+         ! independent of space so should be no need to loop over blocks
+         call MPAS_pool_get_subpool(block % structs, "berg_forcing", berg_forcing)
+         call MPAS_pool_get_array(berg_forcing, "runningMeanRemovedIceRunoff", &
+                                  runningMeanRemovedIceRunoff)
+         call seq_infodata_GetData(infodata, rmean_rmv_ice_runoff=runningMeanRemovedIceRunoff )
+      end if
+
       do while (associated(block))
 
          ! Determine time of next atmospheric shortwave calculation
@@ -1198,7 +1366,19 @@ contains
 
       ! Export state to coupler
       if (debugOn) call mpas_log_write('Exporting state', masterOnly=.true.)
-      call ice_export_mct(i2x_i, ierr)
+#ifdef HAVE_MOAB
+      i2x_im2 = 0.0_RKIND
+      call ice_export_mct(i2x_im2, errorCode)
+      i2x_im = transpose(i2x_im2)
+      tagname = trim(seq_flds_i2x_fields)//C_NULL_CHAR
+      ent_type = 1 ! cells
+      ierr = iMOAB_SetDoubleTagStorage(MPSIID, tagname, totalmbls, ent_type, i2x_im)
+      if (ierr /= 0) then
+         call mpas_log_write('Fail to set i2x MOAB fields ', MPAS_LOG_ERR)
+      endif
+#else
+      call ice_export_mct(i2x_i%rAttr, ierr)
+#endif
       if (debugOn) call mpas_log_write('Finished exporting state', masterOnly=.true.)
 
       ! Check if clocks are in sync
@@ -1393,6 +1573,13 @@ contains
 
     call mpas_framework_finalize(domain % dminfo, domain, io_system)
 
+#ifdef HAVE_MOAB
+   ! deallocate moab fields array
+    deallocate (i2x_im)
+    deallocate (i2x_im2)
+    deallocate (x2i_im)
+    deallocate (x2i_im2)
+#endif
     ! Reset I/O logs
     call shr_file_setLogUnit (shrlogunit)
     call shr_file_setLogLevel(shrloglev)
@@ -1661,6 +1848,173 @@ contains
 
   end subroutine ice_domain_mct!}}}
 
+#ifdef HAVE_MOAB
+!***********************************************************************
+!BOP
+! !IROUTINE: ice_domain_moab
+! !INTERFACE:
+
+ subroutine ice_domain_moab( mbid )!{{{
+
+  use iso_c_binding, only : C_NULL_CHAR
+  use iMOAB, only: iMOAB_GetMeshInfo
+! !DESCRIPTION:
+!  This routine sets up the MOAB domain-related info for MPASSI
+!
+! !REVISION HISTORY:
+!  2025-01-23: initial version is copy from ice_domain_mct
+!
+! !INPUT/OUTPUT PARAMETERS:
+
+    integer        , intent(in)    :: mbid
+
+!EOP
+!BOC
+!-----------------------------------------------------------------------
+!
+!  local variables
+!
+!-----------------------------------------------------------------------
+    real(kind=RKIND), pointer :: data(:)
+    real(kind=RKIND) :: r2d
+
+    integer :: i, n, ier, ierr
+    character(CXX)           :: tagname
+
+    type (block_type), pointer :: block_ptr
+
+    type (mpas_pool_type), pointer :: meshPool, oceanCouplingPool
+
+    integer, pointer :: nCellsSolve
+
+    real (kind=RKIND), dimension(:), pointer :: lonCell, latCell, areaCell
+
+    integer, dimension(:), pointer :: landIceMask
+
+    real (kind=RKIND), pointer :: sphere_radius
+
+    integer nvert(3), nvise(3), nbl(3), nsurf(3), nvisBC(3)
+    integer arrsize, ent_type
+
+    r2d = 180.0/pii
+
+!-------------------------------------------------------------------
+!
+! Determine local grid size
+!
+!-------------------------------------------------------------------
+    ierr  = iMOAB_GetMeshInfo ( mbid, nvert, nvise, nbl, nsurf, nvisBC )
+
+    arrsize = nvise(1)
+
+    allocate(data(arrsize))
+
+
+!-------------------------------------------------------------------
+!
+! Fill in correct values for domain tags
+!
+!-------------------------------------------------------------------
+
+    n = 0
+    block_ptr => domain % blocklist
+    do while(associated(block_ptr))
+       call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+
+       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve)
+
+       call mpas_pool_get_array(meshPool, 'lonCell', lonCell)
+
+       do i = 1, nCellsSolve
+          n = n + 1
+          data(n) = lonCell(i) * r2d
+       end do
+
+       block_ptr => block_ptr % next
+    end do
+    tagname = "lon"//C_NULL_CHAR
+    ent_type=1
+    ierr = iMOAB_SetDoubleTagStorage ( mbid, tagname, arrSize , ent_type, data)
+
+    n = 0
+    block_ptr => domain % blocklist
+    do while(associated(block_ptr))
+       call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+
+       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve)
+
+       call mpas_pool_get_array(meshPool, 'latCell', latCell)
+
+       do i = 1, nCellsSolve
+          n = n + 1
+          data(n) = latCell(i) * r2d
+       end do
+       block_ptr => block_ptr % next
+    end do
+    tagname = "lat"//C_NULL_CHAR
+    ent_type=1
+    ierr = iMOAB_SetDoubleTagStorage ( mbid, tagname, arrSize , ent_type, data)
+
+    n = 0
+    block_ptr => domain % blocklist
+    do while(associated(block_ptr))
+       call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+
+       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve)
+
+       call mpas_pool_get_array(meshPool, 'areaCell', areaCell)
+
+       call mpas_pool_get_config(meshPool, 'sphere_radius', sphere_radius)
+       do i = 1, nCellsSolve
+          n = n + 1
+          data(n) = areaCell(i) / (sphere_radius * sphere_radius)
+       end do
+       block_ptr => block_ptr % next
+    end do
+    tagname = "area"//C_NULL_CHAR
+    ent_type=1
+    ierr = iMOAB_SetDoubleTagStorage ( mbid, tagname, arrSize , ent_type, data)
+
+    ! Build mask and frac based on landIceMask
+    block_ptr => domain % blocklist
+    do while (associated(block_ptr))
+       call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+
+       call mpas_pool_get_subpool(block_ptr % structs, 'ocean_coupling',oceanCouplingPool)
+
+       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve)
+
+       call mpas_pool_get_array(oceanCouplingPool, 'landIceMask',landIceMask)
+
+       if ( associated(landIceMask) ) then
+          do i = 1, nCellsSolve
+             if ( landIceMask(i) == 1 ) then
+                 data(i) = 0.0_RKIND
+             else
+                 data(i) = 1.0_RKIND
+             end if
+          end do
+       else
+          do i = 1, nCellsSolve
+             data(i) = 1.0_RKIND
+          end do
+       end if
+
+       block_ptr => block_ptr % next
+    end do
+    tagname = "mask"//C_NULL_CHAR
+    ent_type=1
+    ierr = iMOAB_SetDoubleTagStorage ( mbid, tagname, arrSize , ent_type, data)
+    tagname = "frac"//C_NULL_CHAR
+    ent_type=1
+    ierr = iMOAB_SetDoubleTagStorage ( mbid, tagname, arrSize , ent_type, data)
+
+    deallocate(data)
+
+!-----------------------------------------------------------------------
+!EOC
+  end subroutine ice_domain_moab !}}}
+#endif
 
 !***********************************************************************
 !BOP
@@ -1683,7 +2037,6 @@ contains
 !    o  u        -- bottom atm level zon wind
 !    o  v        -- bottom atm level mer wind
 !    o  tbot     -- bottom atm level temp
-!    o  pbot     -- bottom atm level pressure
 !    o  ptem     -- bottom atm level pot temp
 !    o  shum     -- bottom atm level spec hum
 !    o  dens     -- bottom atm level air den
@@ -1698,7 +2051,9 @@ contains
 !    o  swvdf    -- sw: vis diffuse downward
 !    o  swnet    -- sw: net
 !    o  q        -- ocn frazil heat flux(+) / melt potential(-)
-!    o  frazil   -- ocn frazil mass flux
+!    o  frazilm  -- ocn frazil mass flux
+!    o  frazils  -- ocn frazil salt flux
+!    o  frazilh  -- ocn frazil energy flux (+)
 !    o  bcphidry -- Black Carbon hydrophilic dry deposition flux
 !    o  bcphodry -- Black Carbon hydrophobic dry deposition flux
 !    o  bcphiwet -- Black Carbon hydrophilic wet deposition flux
@@ -1741,6 +2096,8 @@ contains
 !    o  zaer4    --
 !    o  zaer5    --
 !    o  zaer6    --
+!    o  Hs       -- significant wave height
+!    o  wavespec -- wave spectrum 
 !
 !-----------------------------------------------------------------------
 !
@@ -1749,7 +2106,7 @@ contains
 
 ! !INPUT/OUTPUT PARAMETERS:
 
-    type(mct_aVect), intent(inout) :: x2i_i
+    real(kind=RKIND), intent(inout) :: x2i_i(:,:)
 
 ! !OUTPUT PARAMETERS:
 
@@ -1769,10 +2126,9 @@ contains
       message
 
    integer ::  &
-      i,n
+      i,n,iFreq
 
    real (kind=RKIND) :: &
-      frazilMassFlux, &
       frazilMassFluxRev
 
    type (block_type), pointer :: block_ptr
@@ -1783,19 +2139,26 @@ contains
       aerosols,       &
       atmosCoupling,  &
       oceanCoupling,  &
+      waveCoupling,   &
       biogeochemistry
 
-   integer, pointer :: nCellsSolve
+   integer, pointer :: &
+      nCellsSolve, & 
+      nFrequencies
 
    logical, pointer :: &
       config_use_aerosols,              &
       config_use_modal_aerosols,        &
       config_use_zaerosols,             &
-      config_use_column_biogeochemistry
+      config_use_column_biogeochemistry, &
+      config_couple_biogeochemistry_fields,&
+      config_use_column_waves
 
    character(len=strKIND), pointer ::   &
+      config_column_physics_type,       &
       config_thermodynamics_type,       &
-      config_ocean_surface_type
+      config_ocean_surface_type,        &
+      config_frazil_coupling_type
 
    type (field1DReal), pointer ::       &
       seaSurfaceTemperatureField,       &
@@ -1803,6 +2166,9 @@ contains
       seaFreezingTemperatureField,      &
       freezingMeltingPotentialField,    &
       frazilMassAdjustField,            &
+      frazilMassFluxField,              &
+      frazilSaltFluxField,              &
+      frazilHeatFluxField,              &
       uOceanVelocityField,              &
       vOceanVelocityField,              &
       seaSurfaceTiltUField,             &
@@ -1826,7 +2192,8 @@ contains
       oceanAmmoniumConcField,           &
       oceanDMSConcField,                &
       oceanDMSPConcField,               &
-      oceanHumicsConcField
+      oceanHumicsConcField,             &
+      significantWaveHeightField
 
    type (field2DReal), pointer ::       &
       oceanAlgaeConcField,              &
@@ -1838,13 +2205,19 @@ contains
       oceanZAerosolConcField,           &
       atmosAerosolFluxField,            &
       atmosBlackCarbonFluxField,        &
-      atmosDustFluxField
+      atmosDustFluxField,               &
+      atmosWetDustFluxField,            &
+      atmosDryDustFluxField,            &
+      waveSpectraField
 
    real (kind=RKIND), dimension(:), pointer :: &
       seaSurfaceTemperature,       &
       seaSurfaceSalinity,          &
       seaFreezingTemperature,      &
       freezingMeltingPotential,    &
+      frazilMassFlux,              &
+      frazilSaltFlux,              &
+      frazilHeatFlux,              &
       frazilMassAdjust,            &
       uOceanVelocity,              &
       vOceanVelocity,              &
@@ -1872,7 +2245,8 @@ contains
       oceanHumicsConc,             &
       carbonToNitrogenRatioAlgae,  &
       carbonToNitrogenRatioDON,    &
-      DOCPoolFractions
+      DOCPoolFractions,            &
+      significantWaveHeight
 
    real (kind=RKIND), dimension(:,:), pointer :: &
       oceanAlgaeConc,              &
@@ -1884,7 +2258,10 @@ contains
       oceanZAerosolConc,           &
       atmosAerosolFlux,            &
       atmosBlackCarbonFlux,        &
-      atmosDustFlux
+      atmosDustFlux,               &
+      atmosWetDustFlux,            &
+      atmosDryDustFlux,            &
+      waveSpectra
 
 !-----------------------------------------------------------------------
 !
@@ -1904,22 +2281,31 @@ contains
    do while(associated(block_ptr))
 
       configs => block_ptr % configs
+      call mpas_pool_get_config(configs, "config_column_physics_type", config_column_physics_type)
       call mpas_pool_get_config(configs, "config_thermodynamics_type", config_thermodynamics_type)
       call mpas_pool_get_config(configs, "config_ocean_surface_type", config_ocean_surface_type)
       call mpas_pool_get_config(configs, "config_use_aerosols", config_use_aerosols)
       call mpas_pool_get_config(configs, "config_use_modal_aerosols", config_use_modal_aerosols)
       call mpas_pool_get_config(configs, "config_use_column_biogeochemistry", config_use_column_biogeochemistry)
+      call mpas_pool_get_config(configs, "config_couple_biogeochemistry_fields", config_couple_biogeochemistry_fields)
+      call mpas_pool_get_config(configs, "config_use_zaerosols", config_use_zaerosols)
+      call mpas_pool_get_config(configs, "config_use_column_waves", config_use_column_waves)
+      call mpas_pool_get_config(configs, "config_frazil_coupling_type", config_frazil_coupling_type)
 
       call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
       call mpas_pool_get_subpool(block_ptr % structs, 'ocean_coupling', oceanCoupling)
       call mpas_pool_get_subpool(block_ptr % structs, 'atmos_coupling', atmosCoupling)
-
+      
+      call mpas_pool_get_dimension(block_ptr % dimensions, "nFrequencies", nFrequencies)
       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve)
 
       call mpas_pool_get_array(oceanCoupling, 'seaSurfaceTemperature', seaSurfaceTemperature)
       call mpas_pool_get_array(oceanCoupling, 'seaSurfaceSalinity', seaSurfaceSalinity)
       call mpas_pool_get_array(oceanCoupling, 'seaFreezingTemperature', seaFreezingTemperature)
       call mpas_pool_get_array(oceanCoupling, 'freezingMeltingPotential', freezingMeltingPotential)
+      call mpas_pool_get_array(oceanCoupling, 'frazilMassFlux', frazilMassFlux)
+      call mpas_pool_get_array(oceanCoupling, 'frazilSaltFlux', frazilSaltFlux)
+      call mpas_pool_get_array(oceanCoupling, 'frazilHeatFlux', frazilHeatFlux)
       call mpas_pool_get_array(oceanCoupling, 'frazilMassAdjust', frazilMassAdjust)
       call mpas_pool_get_array(oceanCoupling, 'uOceanVelocity', uOceanVelocity)
       call mpas_pool_get_array(oceanCoupling, 'vOceanVelocity', vOceanVelocity)
@@ -1941,15 +2327,26 @@ contains
       call mpas_pool_get_array(atmosCoupling, 'uAirVelocity', uAirVelocity)
       call mpas_pool_get_array(atmosCoupling, 'vAirVelocity', vAirVelocity)
 
+      if (config_use_column_waves) then
+         call mpas_pool_get_subpool(block_ptr % structs, 'wave_coupling', waveCoupling)
+         call mpas_pool_get_array(waveCoupling, 'significantWaveHeight', significantWaveHeight)
+         call mpas_pool_get_array(waveCoupling, 'waveSpectra', waveSpectra)
+      endif
+
       if (config_use_aerosols) then
          call mpas_pool_get_subpool(block_ptr % structs, 'aerosols', aerosols)
 
          call mpas_pool_get_array(aerosols, "atmosAerosolFlux", atmosAerosolFlux)
       endif
 
-      if (config_use_column_biogeochemistry) then
-         call mpas_pool_get_config(configs, "config_use_zaerosols", config_use_zaerosols)
-         call mpas_pool_get_subpool(block_ptr % structs, 'biogeochemistry', biogeochemistry)
+      call mpas_pool_get_subpool(block_ptr % structs, 'biogeochemistry', biogeochemistry)
+      if (config_use_zaerosols) then
+         call mpas_pool_get_array(biogeochemistry, 'atmosBlackCarbonFlux', atmosBlackCarbonFlux)
+         call mpas_pool_get_array(biogeochemistry, 'atmosDustFlux', atmosDustFlux)
+         call mpas_pool_get_array(biogeochemistry, "atmosWetDustFlux", atmosWetDustFlux)
+         call mpas_pool_get_array(biogeochemistry, "atmosDryDustFlux", atmosDryDustFlux)
+      endif
+      if (config_use_column_biogeochemistry .and. config_couple_biogeochemistry_fields) then
 
          call mpas_pool_get_array(biogeochemistry, 'oceanAlgaeConc', oceanAlgaeConc)
          call mpas_pool_get_array(biogeochemistry, 'oceanDOCConc', oceanDOCConc)
@@ -1963,38 +2360,52 @@ contains
          call mpas_pool_get_array(biogeochemistry, 'oceanHumicsConc', oceanHumicsConc)
          call mpas_pool_get_array(biogeochemistry, 'oceanParticulateIronConc', oceanParticulateIronConc)
          call mpas_pool_get_array(biogeochemistry, 'oceanDissolvedIronConc', oceanDissolvedIronConc)
-         call mpas_pool_get_array(biogeochemistry, 'oceanZAerosolConc', oceanZAerosolConc)
          call mpas_pool_get_array(biogeochemistry, 'carbonToNitrogenRatioAlgae', carbonToNitrogenRatioAlgae)
          call mpas_pool_get_array(biogeochemistry, 'carbonToNitrogenRatioDON', carbonToNitrogenRatioDON)
          call mpas_pool_get_array(biogeochemistry, 'DOCPoolFractions', DOCPoolFractions)
 
-         if (config_use_zaerosols) then
-            call mpas_pool_get_array(biogeochemistry, "atmosBlackCarbonFlux", atmosBlackCarbonFlux)
-            call mpas_pool_get_array(biogeochemistry, "atmosDustFlux", atmosDustFlux)
-         endif
       endif
 
       do i = 1, nCellsSolve
         n = n + 1
-        seaSurfaceTemperature(i)       = x2i_i % rAttr(index_x2i_So_t, n)
-        seaSurfaceSalinity(i)          = x2i_i % rAttr(index_x2i_So_s, n)
+        seaSurfaceTemperature(i)       = x2i_i(index_x2i_So_t, n)
+        seaSurfaceSalinity(i)          = x2i_i(index_x2i_So_s, n)
 
-        seaFreezingTemperature(i) = colpkg_sea_freezing_temperature(seaSurfaceSalinity(i))
+!        if (trim(config_column_physics_type) == "icepack") then
+           seaFreezingTemperature(i) = icepack_sea_freezing_temperature(seaSurfaceSalinity(i))
+!        endif ! config_column_physics_type
 
-        uOceanVelocity(i)              = x2i_i % rAttr(index_x2i_So_u, n)
-        vOceanVelocity(i)              = x2i_i % rAttr(index_x2i_So_v, n)
-        seaSurfaceTiltU(i)             = x2i_i % rAttr(index_x2i_So_dhdx, n)
-        seaSurfaceTiltV(i)             = x2i_i % rAttr(index_x2i_So_dhdy, n)
+        uOceanVelocity(i)              = x2i_i(index_x2i_So_u, n)
+        vOceanVelocity(i)              = x2i_i(index_x2i_So_v, n)
+        seaSurfaceTiltU(i)             = x2i_i(index_x2i_So_dhdx, n)
+        seaSurfaceTiltV(i)             = x2i_i(index_x2i_So_dhdy, n)
+
+        if (wav_ice_coup == 'twoway') then
+           if (config_use_column_waves) then
+              significantWaveHeight(i)     = x2i_i(index_x2i_Sw_Hs, n)
+              do iFreq = 1,nFrequencies
+                 waveSpectra(iFreq,i)      = x2i_i(index_x2i_Sw_wavespec(iFreq), n)
+              enddo
+           endif
+        endif
 
         if (trim(config_ocean_surface_type) == "free") then ! free surface (MPAS-O)
 
            ! freezingMeltingPotential(i) is the ocean energy associated with frazil formation
            ! when it is positive and frazilMassFlux is positive. Conversely, freezingMeltingPotential(i)
            ! is negative when there is the melting potential in which case frazilMassFlux is zero.
+           if (x2i_i(index_x2i_Fioo_q, n) < 0.0_RKIND) then
+              freezingMeltingPotential(i) = x2i_i(index_x2i_Fioo_q, n)
+           else
+              freezingMeltingPotential(i) = x2i_i(index_x2i_Fioo_frazilh, n)
+           end if
 
-           freezingMeltingPotential(i) = x2i_i % rAttr(index_x2i_Fioo_q, n)
+           frazilMassFlux(i)           = x2i_i(index_x2i_Fioo_frazilm, n)
 
-           frazilMassFlux              = x2i_i % rAttr(index_x2i_Fioo_frazil, n)
+           if (trim(config_frazil_coupling_type) == "omega-fluxes") then
+              frazilSaltFlux(i)           = x2i_i(index_x2i_Fioo_frazils, n)
+              frazilHeatFlux(i)           = x2i_i(index_x2i_Fioo_frazilh, n)
+              frazilMassAdjust(i)         = 0.0_RKIND
 
            ! Now determine the sea ice mass associated with the frazil heat flux given when
            ! freezingMeltingPotential(i) is positive. This produces a revised mass flux, given
@@ -2003,120 +2414,151 @@ contains
            ! coupling step as a freshwater and salt flux. This step is required to balance mass
            ! and heat with the ocean.
 
-           call frazil_mass(freezingMeltingPotential(i), frazilMassFluxRev, seaSurfaceSalinity(i), &
-                                   config_thermodynamics_type)
+           else
+              call frazil_mass(freezingMeltingPotential(i), frazilMassFluxRev, seaSurfaceSalinity(i))
 
-           frazilMassAdjust(i) = frazilMassFlux-frazilMassFluxRev
+              frazilMassAdjust(i) = frazilMassFlux(i)-frazilMassFluxRev
+              frazilSaltFlux(i) = 0.0_RKIND
+              frazilHeatFlux(i) = 0.0_RKIND
+
+           endif
 
         else ! non-free surface (SOM)
+           freezingMeltingPotential(i) = x2i_i(index_x2i_Fioo_q, n)
 
-           freezingMeltingPotential(i) = x2i_i % rAttr(index_x2i_Fioo_q, n)
+           frazilMassFlux(i)           = 0.0_RKIND
+           frazilSaltFlux(i)           = 0.0_RKIND
+           frazilHeatFlux(i)           = 0.0_RKIND
+           frazilMassAdjust(i)         = 0.0_RKIND
 
         endif
 
-        airLevelHeight(i)              = x2i_i % rAttr(index_x2i_Sa_z, n)
-        airPotentialTemperature(i)     = x2i_i % rAttr(index_x2i_Sa_ptem, n)
-        airTemperature(i)              = x2i_i % rAttr(index_x2i_Sa_tbot, n)
-        airSpecificHumidity(i)         = x2i_i % rAttr(index_x2i_Sa_shum, n)
-        airDensity(i)                  = x2i_i % rAttr(index_x2i_Sa_dens, n)
-        shortwaveVisibleDirectDown(i)  = x2i_i % rAttr(index_x2i_Faxa_swvdr, n)
-        shortwaveVisibleDiffuseDown(i) = x2i_i % rAttr(index_x2i_Faxa_swvdf, n)
-        shortwaveIRDirectDown(i)       = x2i_i % rAttr(index_x2i_Faxa_swndr, n)
-        shortwaveIRDiffuseDown(i)      = x2i_i % rAttr(index_x2i_Faxa_swndf, n)
-        longwaveDown(i)                = x2i_i % rAttr(index_x2i_Faxa_lwdn, n)
-        rainfallRate(i)                = x2i_i % rAttr(index_x2i_Faxa_rain, n)
-        snowfallRate(i)                = x2i_i % rAttr(index_x2i_Faxa_snow, n)
-        uAirVelocity(i)                = x2i_i % rAttr(index_x2i_Sa_u, n)
-        vAirVelocity(i)                = x2i_i % rAttr(index_x2i_Sa_v, n)
+        airLevelHeight(i)              = x2i_i(index_x2i_Sa_z, n)
+        airPotentialTemperature(i)     = x2i_i(index_x2i_Sa_ptem, n)
+        airTemperature(i)              = x2i_i(index_x2i_Sa_tbot, n)
+        airSpecificHumidity(i)         = x2i_i(index_x2i_Sa_shum, n)
+        airDensity(i)                  = x2i_i(index_x2i_Sa_dens, n)
+        shortwaveVisibleDirectDown(i)  = x2i_i(index_x2i_Faxa_swvdr, n)
+        shortwaveVisibleDiffuseDown(i) = x2i_i(index_x2i_Faxa_swvdf, n)
+        shortwaveIRDirectDown(i)       = x2i_i(index_x2i_Faxa_swndr, n)
+        shortwaveIRDiffuseDown(i)      = x2i_i(index_x2i_Faxa_swndf, n)
+        longwaveDown(i)                = x2i_i(index_x2i_Faxa_lwdn, n)
+        rainfallRate(i)                = x2i_i(index_x2i_Faxa_rain, n)
+        snowfallRate(i)                = x2i_i(index_x2i_Faxa_snow, n)
+        uAirVelocity(i)                = x2i_i(index_x2i_Sa_u, n)
+        vAirVelocity(i)                = x2i_i(index_x2i_Sa_v, n)
 
         ! set aerosols, if configured
         if (config_use_aerosols) then
            if (config_use_modal_aerosols) then
-              atmosAerosolFlux(1,i) = x2i_i % rAttr(index_x2i_Faxa_bcphodry, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_bcphidry, n)
-              atmosAerosolFlux(2,i) = x2i_i % rAttr(index_x2i_Faxa_bcphiwet, n)
+              atmosAerosolFlux(1,i) = x2i_i(index_x2i_Faxa_bcphodry, n) &
+                                    + x2i_i(index_x2i_Faxa_bcphidry, n)
+              atmosAerosolFlux(2,i) = x2i_i(index_x2i_Faxa_bcphiwet, n)
               ! combine all the dust into one category
-              atmosAerosolFlux(3,i) = x2i_i % rAttr(index_x2i_Faxa_dstwet1, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstwet2, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstwet3, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstwet4, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstdry1, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstdry2, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstdry3, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstdry4, n)
+              atmosAerosolFlux(3,i) = x2i_i(index_x2i_Faxa_dstwet1, n) &
+                                    + x2i_i(index_x2i_Faxa_dstwet2, n) &
+                                    + x2i_i(index_x2i_Faxa_dstwet3, n) &
+                                    + x2i_i(index_x2i_Faxa_dstwet4, n) &
+                                    + x2i_i(index_x2i_Faxa_dstdry1, n) &
+                                    + x2i_i(index_x2i_Faxa_dstdry2, n) &
+                                    + x2i_i(index_x2i_Faxa_dstdry3, n) &
+                                    + x2i_i(index_x2i_Faxa_dstdry4, n)
            else
-              atmosAerosolFlux(1,i) = x2i_i % rAttr(index_x2i_Faxa_bcphodry, n)
-              atmosAerosolFlux(2,i) = x2i_i % rAttr(index_x2i_Faxa_bcphidry, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_bcphiwet, n)
+              atmosAerosolFlux(1,i) = x2i_i(index_x2i_Faxa_bcphodry, n)
+              atmosAerosolFlux(2,i) = x2i_i(index_x2i_Faxa_bcphidry, n) &
+                                    + x2i_i(index_x2i_Faxa_bcphiwet, n)
               ! combine all the dust into one category
-              atmosAerosolFlux(3,i) = x2i_i % rAttr(index_x2i_Faxa_dstwet1, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstwet2, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstwet3, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstwet4, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstdry1, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstdry2, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstdry3, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstdry4, n)
+              atmosAerosolFlux(3,i) = x2i_i(index_x2i_Faxa_dstwet1, n) &
+                                    + x2i_i(index_x2i_Faxa_dstwet2, n) &
+                                    + x2i_i(index_x2i_Faxa_dstwet3, n) &
+                                    + x2i_i(index_x2i_Faxa_dstwet4, n) &
+                                    + x2i_i(index_x2i_Faxa_dstdry1, n) &
+                                    + x2i_i(index_x2i_Faxa_dstdry2, n) &
+                                    + x2i_i(index_x2i_Faxa_dstdry3, n) &
+                                    + x2i_i(index_x2i_Faxa_dstdry4, n)
            endif
         endif
 
-        ! import biogeochemistry fields, if configured
-        if (config_use_column_biogeochemistry) then
-           oceanAlgaeConc(1,i)           = x2i_i % rAttr(index_x2i_So_algae1, n)
-           oceanAlgaeConc(2,i)           = x2i_i % rAttr(index_x2i_So_algae2, n)
-           oceanAlgaeConc(3,i)           = 0.0_RKIND !x2i_i % rAttr(index_x2i_So_algae3, n)
-           oceanDOCConc(1,i)             = x2i_i % rAttr(index_x2i_So_doc1, n) * DOCPoolFractions(1)
-           oceanDOCConc(2,i)             = x2i_i % rAttr(index_x2i_So_doc2, n) * DOCPoolFractions(2)
-           oceanDOCConc(3,i)             = 0.0_RKIND
-           oceanDICConc(1,i)             = x2i_i % rAttr(index_x2i_So_dic1, n)
-           oceanDONConc(1,i)             = x2i_i % rAttr(index_x2i_So_doc3, n) * DOCPoolFractions(3) &
-              /carbonToNitrogenRatioDON(1)
-           oceanNitrateConc(i)           = x2i_i % rAttr(index_x2i_So_no3, n)
-           oceanSilicateConc(i)          = x2i_i % rAttr(index_x2i_So_sio3, n)
-           oceanAmmoniumConc(i)          = x2i_i % rAttr(index_x2i_So_nh4, n)
-           oceanDMSConc(i)               = x2i_i % rAttr(index_x2i_So_dms, n)
-           oceanDMSPConc(i)              = x2i_i % rAttr(index_x2i_So_dmsp, n)
-           oceanHumicsConc(i)            = x2i_i % rAttr(index_x2i_So_docr, n)
-           oceanParticulateIronConc(1,i) = x2i_i % rAttr(index_x2i_So_fep1, n)
-           oceanParticulateIronConc(2,i) = x2i_i % rAttr(index_x2i_So_fep2, n)
-           oceanDissolvedIronConc(1,i)   = x2i_i % rAttr(index_x2i_So_fed1, n)
-           oceanDissolvedIronConc(2,i)   = x2i_i % rAttr(index_x2i_So_fed2, n)
-           oceanZAerosolConc(1,i)        = 0.0_RKIND !x2i_i % rAttr(index_x2i_So_zaer1, n)
-           oceanZAerosolConc(2,i)        = 0.0_RKIND !x2i_i % rAttr(index_x2i_So_zaer2, n)
-           oceanZAerosolConc(3,i)        = 0.0_RKIND !x2i_i % rAttr(index_x2i_So_zaer3, n)
-           oceanZAerosolConc(4,i)        = 0.0_RKIND !x2i_i % rAttr(index_x2i_So_zaer4, n)
-           oceanZAerosolConc(5,i)        = 0.0_RKIND !x2i_i % rAttr(index_x2i_So_zaer5, n)
-           oceanZAerosolConc(6,i)        = 0.0_RKIND !x2i_i % rAttr(index_x2i_So_zaer6, n)
-           ! set aerosols, if configured
-           if (config_use_zaerosols) then
-              if (config_use_modal_aerosols) then
-                 atmosBlackCarbonFlux(1,i) = x2i_i % rAttr(index_x2i_Faxa_bcphodry, n) &
-                                           + x2i_i % rAttr(index_x2i_Faxa_bcphidry, n)
-                 atmosBlackCarbonFlux(2,i) = x2i_i % rAttr(index_x2i_Faxa_bcphiwet, n)
-                 ! combine wet and dry dust
-                 atmosDustFlux(1,i) = x2i_i % rAttr(index_x2i_Faxa_dstwet1, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstdry1, n)
-                 atmosDustFlux(2,i) = x2i_i % rAttr(index_x2i_Faxa_dstwet2, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstdry2, n)
-                 atmosDustFlux(3,i) = x2i_i % rAttr(index_x2i_Faxa_dstwet3, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstdry3, n)
-                 atmosDustFlux(4,i) = x2i_i % rAttr(index_x2i_Faxa_dstwet4, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstdry4, n)
-              else
-                 atmosBlackCarbonFlux(1,i) = x2i_i % rAttr(index_x2i_Faxa_bcphodry, n)
-                 atmosBlackCarbonFlux(2,i) = x2i_i % rAttr(index_x2i_Faxa_bcphidry, n) &
-                                           + x2i_i % rAttr(index_x2i_Faxa_bcphiwet, n)
-                 ! combine wet and dry dust
-                 atmosDustFlux(1,i) = x2i_i % rAttr(index_x2i_Faxa_dstwet1, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstdry1, n)
-                 atmosDustFlux(2,i) = x2i_i % rAttr(index_x2i_Faxa_dstwet2, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstdry2, n)
-                 atmosDustFlux(3,i) = x2i_i % rAttr(index_x2i_Faxa_dstwet3, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstdry3, n)
-                 atmosDustFlux(4,i) = x2i_i % rAttr(index_x2i_Faxa_dstwet4, n) &
-                                    + x2i_i % rAttr(index_x2i_Faxa_dstdry4, n)
-              endif
+        ! set aerosols, if configured
+        if (config_use_zaerosols .or. config_use_column_biogeochemistry) then
+           call mpas_pool_get_array(biogeochemistry, 'oceanZAerosolConc', oceanZAerosolConc)
+           oceanZAerosolConc(1,i)        = 0.0_RKIND !x2i_i(index_x2i_So_zaer1, n)
+           oceanZAerosolConc(2,i)        = 0.0_RKIND !x2i_i(index_x2i_So_zaer2, n)
+           oceanZAerosolConc(3,i)        = 0.0_RKIND !x2i_i(index_x2i_So_zaer3, n)
+           oceanZAerosolConc(4,i)        = 0.0_RKIND !x2i_i(index_x2i_So_zaer4, n)
+           oceanZAerosolConc(5,i)        = 0.0_RKIND !x2i_i(index_x2i_So_zaer5, n)
+           oceanZAerosolConc(6,i)        = 0.0_RKIND !x2i_i(index_x2i_So_zaer6, n)
+        end if
+        if (config_use_zaerosols) then
+           if (config_use_modal_aerosols) then
+              atmosBlackCarbonFlux(1,i) = x2i_i(index_x2i_Faxa_bcphodry, n) &
+                                        + x2i_i(index_x2i_Faxa_bcphidry, n)
+              atmosBlackCarbonFlux(2,i) = x2i_i(index_x2i_Faxa_bcphiwet, n)
+              !combine wet and dry dust
+              atmosDustFlux(1,i) = x2i_i(index_x2i_Faxa_dstwet1, n) &
+                                 + x2i_i(index_x2i_Faxa_dstdry1, n)
+              atmosDustFlux(2,i) = x2i_i(index_x2i_Faxa_dstwet2, n) &
+                                 + x2i_i(index_x2i_Faxa_dstdry2, n)
+              atmosDustFlux(3,i) = x2i_i(index_x2i_Faxa_dstwet3, n) &
+                                 + x2i_i(index_x2i_Faxa_dstdry3, n)
+              atmosDustFlux(4,i) = x2i_i(index_x2i_Faxa_dstwet4, n) &
+                                 + x2i_i(index_x2i_Faxa_dstdry4, n)
+
+              atmosWetDustFlux(1,i) = x2i_i(index_x2i_Faxa_dstwet1, n)
+              atmosWetDustFlux(2,i) = x2i_i(index_x2i_Faxa_dstwet2, n)
+              atmosWetDustFlux(3,i) = x2i_i(index_x2i_Faxa_dstwet3, n)
+              atmosWetDustFlux(4,i) = x2i_i(index_x2i_Faxa_dstwet4, n)
+
+              atmosDryDustFlux(1,i) = x2i_i(index_x2i_Faxa_dstdry1, n)
+              atmosDryDustFlux(2,i) = x2i_i(index_x2i_Faxa_dstdry2, n)
+              atmosDryDustFlux(3,i) = x2i_i(index_x2i_Faxa_dstdry3, n)
+              atmosDryDustFlux(4,i) = x2i_i(index_x2i_Faxa_dstdry4, n)
+           else
+              atmosBlackCarbonFlux(1,i) = x2i_i(index_x2i_Faxa_bcphodry, n)
+              atmosBlackCarbonFlux(2,i) = x2i_i(index_x2i_Faxa_bcphidry, n) &
+                                        + x2i_i(index_x2i_Faxa_bcphiwet, n)
+              ! combine wet and dry dust
+              atmosDustFlux(1,i) = x2i_i(index_x2i_Faxa_dstwet1, n) &
+                                 + x2i_i(index_x2i_Faxa_dstdry1, n)
+              atmosDustFlux(2,i) = x2i_i(index_x2i_Faxa_dstwet2, n) &
+                                 + x2i_i(index_x2i_Faxa_dstdry2, n)
+              atmosDustFlux(3,i) = x2i_i(index_x2i_Faxa_dstwet3, n) &
+                                 + x2i_i(index_x2i_Faxa_dstdry3, n)
+              atmosDustFlux(4,i) = x2i_i(index_x2i_Faxa_dstwet4, n) &
+                                 + x2i_i(index_x2i_Faxa_dstdry4, n)
+
+              atmosDryDustFlux(1,i) = x2i_i(index_x2i_Faxa_dstdry1, n)
+              atmosDryDustFlux(2,i) = x2i_i(index_x2i_Faxa_dstdry2, n)
+              atmosDryDustFlux(3,i) = x2i_i(index_x2i_Faxa_dstdry3, n)
+              atmosDryDustFlux(4,i) = x2i_i(index_x2i_Faxa_dstdry4, n)
+
+              atmosWetDustFlux(1,i) = x2i_i(index_x2i_Faxa_dstwet1, n)
+              atmosWetDustFlux(2,i) = x2i_i(index_x2i_Faxa_dstwet2, n)
+              atmosWetDustFlux(3,i) = x2i_i(index_x2i_Faxa_dstwet3, n)
+              atmosWetDustFlux(4,i) = x2i_i(index_x2i_Faxa_dstwet4, n)
            endif
+        endif
+        ! import biogeochemistry fields, if configured
+        if (config_use_column_biogeochemistry .and. config_couple_biogeochemistry_fields) then
+           oceanAlgaeConc(1,i)           = x2i_i(index_x2i_So_algae1, n)
+           oceanAlgaeConc(2,i)           = x2i_i(index_x2i_So_algae2, n)
+           oceanAlgaeConc(3,i)           = 0.0_RKIND !x2i_i(index_x2i_So_algae3, n)
+           oceanDOCConc(1,i)             = x2i_i(index_x2i_So_doc1, n) * DOCPoolFractions(1)
+           oceanDOCConc(2,i)             = x2i_i(index_x2i_So_doc2, n) * DOCPoolFractions(2)
+           oceanDOCConc(3,i)             = 0.0_RKIND
+           oceanDICConc(1,i)             = x2i_i(index_x2i_So_dic1, n)
+           oceanDONConc(1,i)             = x2i_i(index_x2i_So_doc3, n) * DOCPoolFractions(3) &
+              /carbonToNitrogenRatioDON(1)
+           oceanNitrateConc(i)           = x2i_i(index_x2i_So_no3, n)
+           oceanSilicateConc(i)          = x2i_i(index_x2i_So_sio3, n)
+           oceanAmmoniumConc(i)          = x2i_i(index_x2i_So_nh4, n)
+           oceanDMSConc(i)               = x2i_i(index_x2i_So_dms, n)
+           oceanDMSPConc(i)              = x2i_i(index_x2i_So_dmsp, n)
+           oceanHumicsConc(i)            = x2i_i(index_x2i_So_docr, n)
+           oceanParticulateIronConc(1,i) = x2i_i(index_x2i_So_fep1, n)
+           oceanParticulateIronConc(2,i) = x2i_i(index_x2i_So_fep2, n)
+           oceanDissolvedIronConc(1,i)   = x2i_i(index_x2i_So_fed1, n)
+           oceanDissolvedIronConc(2,i)   = x2i_i(index_x2i_So_fed2, n)
         endif
       end do
 
@@ -2129,7 +2571,7 @@ contains
 
         seaSurfaceTemperature(i)  = seaSurfaceTemperature(i) - seaiceFreshWaterFreezingPoint
 
-        if (config_use_column_biogeochemistry) then
+        if (config_use_column_biogeochemistry .and. config_couple_biogeochemistry_fields) then
            ! convert from mmol C/m^3 to mmol N/m^3
            oceanAlgaeConc(1,i)           = oceanAlgaeConc(1,i) / carbonToNitrogenRatioAlgae(1)
            oceanAlgaeConc(2,i)           = oceanAlgaeConc(2,i) / carbonToNitrogenRatioAlgae(2)
@@ -2153,10 +2595,19 @@ contains
    call mpas_pool_get_field(oceanCoupling, 'seaFreezingTemperature', seaFreezingTemperatureField)
    call mpas_pool_get_field(oceanCoupling, 'freezingMeltingPotential', freezingMeltingPotentialField)
    call mpas_pool_get_field(oceanCoupling, 'frazilMassAdjust', frazilMassAdjustField)
+   call mpas_pool_get_field(oceanCoupling, 'frazilMassFlux', frazilMassFluxField)
+   call mpas_pool_get_field(oceanCoupling, 'frazilSaltFlux', frazilSaltFluxField)
+   call mpas_pool_get_field(oceanCoupling, 'frazilHeatFlux', frazilHeatFluxField)
    call mpas_pool_get_field(oceanCoupling, 'uOceanVelocity', uOceanVelocityField)
    call mpas_pool_get_field(oceanCoupling, 'vOceanVelocity', vOceanVelocityField)
    call mpas_pool_get_field(oceanCoupling, 'seaSurfaceTiltU', seaSurfaceTiltUField)
    call mpas_pool_get_field(oceanCoupling, 'seaSurfaceTiltV', seaSurfaceTiltVField)
+
+   if (config_use_column_waves) then
+     call mpas_pool_get_subpool(domain % blocklist % structs, 'wave_coupling', waveCoupling)
+     call mpas_pool_get_field(waveCoupling, 'significantWaveHeight', significantWaveHeightField)
+     call mpas_pool_get_field(waveCoupling, 'waveSpectra', waveSpectraField)
+   endif
 
    call mpas_pool_get_field(atmosCoupling, 'airLevelHeight', airLevelHeightField)
    call mpas_pool_get_field(atmosCoupling, 'airPotentialTemperature', airPotentialTemperatureField)
@@ -2179,7 +2630,16 @@ contains
       call mpas_pool_get_field(aerosols, "atmosAerosolFlux", atmosAerosolFluxField)
    endif
 
-   if (config_use_column_biogeochemistry) then
+   if (config_use_zaerosols .or. config_use_column_biogeochemistry) &
+      call mpas_pool_get_field(biogeochemistry, 'oceanZAerosolConc', oceanZAerosolConcField)
+
+   if (config_use_zaerosols) then
+      call mpas_pool_get_field(biogeochemistry, "atmosBlackCarbonFlux", atmosBlackCarbonFluxField)
+      call mpas_pool_get_field(biogeochemistry, "atmosDustFlux", atmosDustFluxField)
+      call mpas_pool_get_field(biogeochemistry, "atmosWetDustFlux", atmosWetDustFluxField)
+      call mpas_pool_get_field(biogeochemistry, "atmosDryDustFlux", atmosDryDustFluxField)
+   endif
+   if (config_use_column_biogeochemistry .and. config_couple_biogeochemistry_fields) then
       call mpas_pool_get_subpool(domain % blocklist % structs, 'biogeochemistry', biogeochemistry)
 
       call mpas_pool_get_field(biogeochemistry, 'oceanAlgaeConc', oceanAlgaeConcField)
@@ -2194,11 +2654,6 @@ contains
       call mpas_pool_get_field(biogeochemistry, 'oceanHumicsConc', oceanHumicsConcField)
       call mpas_pool_get_field(biogeochemistry, 'oceanParticulateIronConc', oceanParticulateIronConcField)
       call mpas_pool_get_field(biogeochemistry, 'oceanDissolvedIronConc', oceanDissolvedIronConcField)
-      call mpas_pool_get_field(biogeochemistry, 'oceanZAerosolConc', oceanZAerosolConcField)
-      if (config_use_zaerosols) then
-         call mpas_pool_get_field(biogeochemistry, "atmosBlackCarbonFlux", atmosBlackCarbonFluxField)
-         call mpas_pool_get_field(biogeochemistry, "atmosDustFlux", atmosDustFluxField)
-      endif
    endif
 
    call mpas_dmpar_exch_halo_field(seaSurfaceTemperatureField)
@@ -2206,10 +2661,18 @@ contains
    call mpas_dmpar_exch_halo_field(seaFreezingTemperatureField)
    call mpas_dmpar_exch_halo_field(freezingMeltingPotentialField)
    call mpas_dmpar_exch_halo_field(frazilMassAdjustField)
+   call mpas_dmpar_exch_halo_field(frazilMassFluxField)
+   call mpas_dmpar_exch_halo_field(frazilSaltFluxField)
+   call mpas_dmpar_exch_halo_field(frazilHeatFluxField)
    call mpas_dmpar_exch_halo_field(uOceanVelocityField)
    call mpas_dmpar_exch_halo_field(vOceanVelocityField)
    call mpas_dmpar_exch_halo_field(seaSurfaceTiltUField)
    call mpas_dmpar_exch_halo_field(seaSurfaceTiltVField)
+
+   if (config_use_column_waves) then
+      call mpas_dmpar_exch_halo_field(significantWaveHeightField)
+      call mpas_dmpar_exch_halo_field(waveSpectraField)
+   endif
 
    call mpas_dmpar_exch_halo_field(airLevelHeightField)
    call mpas_dmpar_exch_halo_field(airPotentialTemperatureField)
@@ -2229,8 +2692,16 @@ contains
    if (config_use_aerosols) then
       call mpas_dmpar_exch_halo_field(atmosAerosolFluxField)
    endif
+   if (config_use_zaerosols .or. config_use_column_biogeochemistry) &
+      call mpas_dmpar_exch_halo_field(oceanZAerosolConcField)
 
-   if (config_use_column_biogeochemistry) then
+   if (config_use_zaerosols) then
+      call mpas_dmpar_exch_halo_field(atmosBlackCarbonFluxField)
+      call mpas_dmpar_exch_halo_field(atmosDustFluxField)
+      call mpas_dmpar_exch_halo_field(atmosDryDustFluxField)
+      call mpas_dmpar_exch_halo_field(atmosWetDustFluxField)
+   endif
+   if (config_use_column_biogeochemistry .and. config_couple_biogeochemistry_fields) then
       call mpas_dmpar_exch_halo_field(oceanAlgaeConcField)
       call mpas_dmpar_exch_halo_field(oceanDOCConcField)
       call mpas_dmpar_exch_halo_field(oceanDICConcField)
@@ -2243,11 +2714,6 @@ contains
       call mpas_dmpar_exch_halo_field(oceanHumicsConcField)
       call mpas_dmpar_exch_halo_field(oceanParticulateIronConcField)
       call mpas_dmpar_exch_halo_field(oceanDissolvedIronConcField)
-      call mpas_dmpar_exch_halo_field(oceanZAerosolConcField)
-      if (config_use_zaerosols) then
-         call mpas_dmpar_exch_halo_field(atmosBlackCarbonFluxField)
-         call mpas_dmpar_exch_halo_field(atmosDustFluxField)
-      endif
    endif
 
 ! REVISION HISTORY:
@@ -2272,7 +2738,7 @@ contains
 !
 ! !INPUT/OUTPUT PARAMETERS:
 
-   type(mct_aVect)   , intent(inout) :: i2x_i
+   real(kind=RKIND)   , intent(inout) :: i2x_i(:,:)
 
 ! !OUTPUT PARAMETERS:
 
@@ -2288,7 +2754,7 @@ contains
 !-----------------------------------------------------------------------
 
    integer ::  &
-      i, n
+      i, n, iCategory, iFloeCategory
 
    real(kind=RKIND) :: &
       ailohi,          &
@@ -2313,17 +2779,25 @@ contains
       atmosFluxes,      &
       oceanFluxes,      &
       icebergFluxes,    &
-      biogeochemistry
+      biogeochemistry,  &
+      floe_size_distribution, &
+      icestate,         &
+      tracers
 
    integer, pointer :: &
-      nCellsSolve
+      nCellsSolve,     &
+      nCategories,     &
+      nFloeCategories
 
    logical, pointer :: &
       config_rotate_cartesian_grid,      &
       config_use_topo_meltponds,         &
       config_use_column_biogeochemistry, &
+      config_use_zaerosols,              &
+      config_couple_biogeochemistry_fields, &
       config_use_column_shortwave,       &
-      config_use_data_icebergs
+      config_use_data_icebergs,          &
+      config_use_floe_size_distribution
 
    real(kind=RKIND), pointer :: &
       sphere_radius
@@ -2371,8 +2845,10 @@ contains
       oceanDMSPpFlux,              &
       oceanDMSPdFlux,              &
       oceanHumicsFlux,             &
+      oceanDustIronFlux,           &
       carbonToNitrogenRatioAlgae,  &
-      carbonToNitrogenRatioDON
+      carbonToNitrogenRatioDON,    &
+      floeSizeDiameter
 
    real (kind=RKIND), dimension(:,:), pointer :: &
       oceanAlgaeFlux,              &
@@ -2386,16 +2862,19 @@ contains
 
    errorCode = 0
    n = 0
-   i2x_i % rAttr(: ,:) = 0.0_RKIND
+   i2x_i(: ,:) = 0.0_RKIND
    block_ptr => domain % blocklist
    do while(associated(block_ptr))
 
       configs => block_ptr % configs
       call MPAS_pool_get_config(configs, "config_rotate_cartesian_grid", config_rotate_cartesian_grid)
       call MPAS_pool_get_config(configs, "config_use_topo_meltponds", config_use_topo_meltponds)
+      call MPAS_pool_get_config(configs, "config_use_zaerosols", config_use_zaerosols)
       call MPAS_pool_get_config(configs, "config_use_column_biogeochemistry", config_use_column_biogeochemistry)
+      call mpas_pool_get_config(configs, "config_couple_biogeochemistry_fields", config_couple_biogeochemistry_fields)
       call MPAS_pool_get_config(configs, "config_use_column_shortwave", config_use_column_shortwave)
       call MPAS_pool_get_config(configs, "config_use_data_icebergs", config_use_data_icebergs)
+      call MPAS_pool_get_config(configs, "config_use_floe_size_distribution", config_use_floe_size_distribution)
 
       call MPAS_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
       call MPAS_pool_get_subpool(block_ptr % structs, "tracers_aggregate", tracersAggregate)
@@ -2439,6 +2918,11 @@ contains
 
       call MPAS_pool_get_array(oceanCoupling, 'frazilMassAdjust', frazilMassAdjust)
 
+      if (config_use_floe_size_distribution) then
+         call MPAS_pool_get_subpool(block_ptr % structs, "floe_size_distribution", floe_size_distribution)
+         call MPAS_pool_get_array(floe_size_distribution, "floeSizeDiameter",floeSizeDiameter)
+      endif
+
       call MPAS_pool_get_array(atmosFluxes, 'latentHeatFlux', latentHeatFlux)
       call MPAS_pool_get_array(atmosFluxes, 'sensibleHeatFlux', sensibleHeatFlux)
       call MPAS_pool_get_array(atmosFluxes, 'longwaveUp', longwaveUp)
@@ -2456,7 +2940,7 @@ contains
          call MPAS_pool_get_array(icebergFluxes, "bergLatentHeatFlux", bergLatentHeatFlux)
       endif
 
-      if (config_use_column_biogeochemistry) then
+      if (config_use_column_biogeochemistry .and. config_couple_biogeochemistry_fields) then
          call mpas_pool_get_subpool(block_ptr % structs, 'biogeochemistry', biogeochemistry)
 
          call mpas_pool_get_array(biogeochemistry, 'oceanAlgaeFlux', oceanAlgaeFlux)
@@ -2475,6 +2959,9 @@ contains
          call mpas_pool_get_array(biogeochemistry, 'carbonToNitrogenRatioAlgae', carbonToNitrogenRatioAlgae)
          call mpas_pool_get_array(biogeochemistry, 'carbonToNitrogenRatioDON', carbonToNitrogenRatioDON)
       endif
+
+      if (config_use_zaerosols .and. config_couple_biogeochemistry_fields) &
+         call mpas_pool_get_array(biogeochemistry, 'oceanDustIronFlux', oceanDustIronFlux)
 
       do i = 1, nCellsSolve
          n = n + 1
@@ -2528,77 +3015,90 @@ contains
               config_rotate_cartesian_grid)
 
          !-------states--------------------
-         i2x_i % rAttr(index_i2x_Si_ifrac ,n)    = ailohi
+         i2x_i(index_i2x_Si_ifrac ,n)    = ailohi
 
          if (config_use_data_icebergs) then
-            i2x_i % rAttr(index_i2x_Fioi_bergw,n) = bergFreshwaterFlux(i)
-            i2x_i % rAttr(index_i2x_Fioi_bergh,n) = bergLatentHeatFlux(i)
+            i2x_i(index_i2x_Fioi_bergw,n) = bergFreshwaterFlux(i)
+            i2x_i(index_i2x_Fioi_bergh,n) = bergLatentHeatFlux(i)
+         endif
+
+         if (wav_ice_coup == 'twoway') then
+            if (config_use_floe_size_distribution) then
+               i2x_i(index_i2x_Si_ifloe, n)  = floeSizeDiameter(i)
+            endif
          endif
 
          if ( ailohi > 0.0_RKIND ) then
 
             !-------states--------------------
-            i2x_i % rAttr(index_i2x_Si_t     ,n)  = Tsrf
-            i2x_i % rAttr(index_i2x_Si_bpress,n)  = basalPressure
-            i2x_i % rAttr(index_i2x_Si_u10   ,n)  = atmosReferenceSpeed10m(i)
-            i2x_i % rAttr(index_i2x_Si_tref  ,n)  = atmosReferenceTemperature2m(i)
-            i2x_i % rAttr(index_i2x_Si_qref  ,n)  = atmosReferenceHumidity2m(i)
-            i2x_i % rAttr(index_i2x_Si_snowh ,n)  = snowVolumeCell(i) / ailohi
-            i2x_i % rAttr(index_i2x_Si_ithick,n)  = iceVolumeCell(i) / ailohi
+            i2x_i(index_i2x_Si_t     ,n)  = Tsrf
+            i2x_i(index_i2x_Si_bpress,n)  = basalPressure
+            i2x_i(index_i2x_Si_u10   ,n)  = atmosReferenceSpeed10m(i)
+            i2x_i(index_i2x_Si_u10withgusts,n) = atmosReferenceSpeed10m(i)
+            i2x_i(index_i2x_Si_tref  ,n)  = atmosReferenceTemperature2m(i)
+            i2x_i(index_i2x_Si_qref  ,n)  = atmosReferenceHumidity2m(i)
+            i2x_i(index_i2x_Si_snowh ,n)  = snowVolumeCell(i) / ailohi
+            i2x_i(index_i2x_Si_ithick,n)  = iceVolumeCell(i) / ailohi
 
             !--- a/i fluxes computed by ice
-            i2x_i % rAttr(index_i2x_Faii_taux ,n) = tauxa
-            i2x_i % rAttr(index_i2x_Faii_tauy ,n) = tauya
-            i2x_i % rAttr(index_i2x_Faii_lat  ,n) = latentHeatFlux(i)
-            i2x_i % rAttr(index_i2x_Faii_sen  ,n) = sensibleHeatFlux(i)
-            i2x_i % rAttr(index_i2x_Faii_lwup ,n) = longwaveUp(i)
-            i2x_i % rAttr(index_i2x_Faii_evap ,n) = evaporativeWaterFlux(i)
-            i2x_i % rAttr(index_i2x_Faii_swnet,n) = absorbedShortwaveFlux(i)
-            i2x_i % rAttr(index_i2x_Faii_evap ,n) = evaporativeWaterFlux(i)
+            i2x_i(index_i2x_Faii_taux ,n) = tauxa
+            i2x_i(index_i2x_Faii_tauy ,n) = tauya
+            i2x_i(index_i2x_Faii_lat  ,n) = latentHeatFlux(i)
+            i2x_i(index_i2x_Faii_sen  ,n) = sensibleHeatFlux(i)
+            i2x_i(index_i2x_Faii_lwup ,n) = longwaveUp(i)
+            i2x_i(index_i2x_Faii_evap ,n) = evaporativeWaterFlux(i)
+            i2x_i(index_i2x_Faii_swnet,n) = absorbedShortwaveFlux(i)
+            i2x_i(index_i2x_Faii_evap ,n) = evaporativeWaterFlux(i)
 
             if (config_use_column_shortwave) then
-               i2x_i % rAttr(index_i2x_Si_avsdr ,n)  = albedoVisibleDirectCell(i)
-               i2x_i % rAttr(index_i2x_Si_anidr ,n)  = albedoIRDirectCell(i)
-               i2x_i % rAttr(index_i2x_Si_avsdf ,n)  = albedoVisibleDiffuseCell(i)
-               i2x_i % rAttr(index_i2x_Si_anidf ,n)  = albedoIRDiffuseCell(i)
+               i2x_i(index_i2x_Si_avsdr ,n)  = albedoVisibleDirectCell(i)
+               i2x_i(index_i2x_Si_anidr ,n)  = albedoIRDirectCell(i)
+               i2x_i(index_i2x_Si_avsdf ,n)  = albedoVisibleDiffuseCell(i)
+               i2x_i(index_i2x_Si_anidf ,n)  = albedoIRDiffuseCell(i)
 
-               i2x_i % rAttr(index_i2x_Faii_swnet,n) = absorbedShortwaveFlux(i)
+               i2x_i(index_i2x_Faii_swnet,n) = absorbedShortwaveFlux(i)
             endif
 
             ! i/o fluxes computed by ice, as well as additional freshwater and salt calculated at the last
             ! coupling import and needed to grow sea ice from frazil passed from the ocean model in the
             ! field frazilMassAdjust.
-            i2x_i % rAttr(index_i2x_Fioi_melth,n) = oceanHeatFlux(i)
-            i2x_i % rAttr(index_i2x_Fioi_swpen,n) = oceanShortwaveFlux(i)
-            i2x_i % rAttr(index_i2x_Fioi_meltw,n) = oceanFreshWaterFlux(i) + frazilMassAdjust(i)/ailohi
-            i2x_i % rAttr(index_i2x_Fioi_salt ,n) = oceanSaltFlux(i) + ice_ref_salinity*p001*frazilMassAdjust(i)/ailohi
-            i2x_i % rAttr(index_i2x_Fioi_taux ,n) = tauxo
-            i2x_i % rAttr(index_i2x_Fioi_tauy ,n) = tauyo
+            i2x_i(index_i2x_Fioi_melth  ,n) = oceanHeatFlux(i)
+            i2x_i(index_i2x_Fioi_swpen  ,n) = oceanShortwaveFlux(i)
+            i2x_i(index_i2x_Fioi_meltw  ,n) = oceanFreshWaterFlux(i) + frazilMassAdjust(i)/ailohi
+            i2x_i(index_i2x_Fioi_frazilm,n) = frazilMassAdjust(i)/ailohi
+            i2x_i(index_i2x_Fioi_salt   ,n) = oceanSaltFlux(i) + seaiceReferenceSalinity*0.001_RKIND*frazilMassAdjust(i)/ailohi
+            i2x_i(index_i2x_Fioi_frazils,n) = seaiceReferenceSalinity*0.001_RKIND*frazilMassAdjust(i)/ailohi
+            i2x_i(index_i2x_Fioi_frazilh,n) = 0.0_RKIND
+            i2x_i(index_i2x_Fioi_taux   ,n) = tauxo
+            i2x_i(index_i2x_Fioi_tauy   ,n) = tauyo
 
             ! export biogeochemistry fields, if configured
-            if (config_use_column_biogeochemistry) then
+            if (config_use_column_biogeochemistry .and. config_couple_biogeochemistry_fields) then
                ! convert from mmol N/m^3 to mmol C/m^3
-               i2x_i % rAttr(index_i2x_Fioi_algae1,n) = oceanAlgaeFlux(1,i) * carbonToNitrogenRatioAlgae(1)
-               i2x_i % rAttr(index_i2x_Fioi_algae2,n) = oceanAlgaeFlux(2,i) * carbonToNitrogenRatioAlgae(2)
-               i2x_i % rAttr(index_i2x_Fioi_algae3,n) = oceanAlgaeFlux(3,i) * carbonToNitrogenRatioAlgae(3)
-               i2x_i % rAttr(index_i2x_Fioi_doc1  ,n) = oceanDOCFlux(1,i)
-               i2x_i % rAttr(index_i2x_Fioi_doc2  ,n) = oceanDOCFlux(2,i)
-               i2x_i % rAttr(index_i2x_Fioi_doc3  ,n) = oceanDONFlux(1,i) * carbonToNitrogenRatioDON(1)
-               i2x_i % rAttr(index_i2x_Fioi_dic1  ,n) = oceanDICFlux(1,i)
-               i2x_i % rAttr(index_i2x_Fioi_don1  ,n) = oceanDONFlux(1,i)
-               i2x_i % rAttr(index_i2x_Fioi_no3   ,n) = oceanNitrateFlux(i)
-               i2x_i % rAttr(index_i2x_Fioi_sio3  ,n) = oceanSilicateFlux(i)
-               i2x_i % rAttr(index_i2x_Fioi_nh4   ,n) = oceanAmmoniumFlux(i)
-               i2x_i % rAttr(index_i2x_Fioi_dms   ,n) = oceanDMSFlux(i)
-               i2x_i % rAttr(index_i2x_Fioi_dmspp ,n) = oceanDMSPpFlux(i)
-               i2x_i % rAttr(index_i2x_Fioi_dmspd ,n) = oceanDMSPdFlux(i)
-               i2x_i % rAttr(index_i2x_Fioi_docr  ,n) = oceanHumicsFlux(i)
+               i2x_i(index_i2x_Fioi_algae1,n) = oceanAlgaeFlux(1,i) * carbonToNitrogenRatioAlgae(1)
+               i2x_i(index_i2x_Fioi_algae2,n) = oceanAlgaeFlux(2,i) * carbonToNitrogenRatioAlgae(2)
+               i2x_i(index_i2x_Fioi_algae3,n) = oceanAlgaeFlux(3,i) * carbonToNitrogenRatioAlgae(3)
+               i2x_i(index_i2x_Fioi_doc1  ,n) = oceanDOCFlux(1,i)
+               i2x_i(index_i2x_Fioi_doc2  ,n) = oceanDOCFlux(2,i)
+               i2x_i(index_i2x_Fioi_doc3  ,n) = oceanDONFlux(1,i) * carbonToNitrogenRatioDON(1)
+               i2x_i(index_i2x_Fioi_dic1  ,n) = oceanDICFlux(1,i)
+               i2x_i(index_i2x_Fioi_don1  ,n) = oceanDONFlux(1,i)
+               i2x_i(index_i2x_Fioi_no3   ,n) = oceanNitrateFlux(i)
+               i2x_i(index_i2x_Fioi_sio3  ,n) = oceanSilicateFlux(i)
+               i2x_i(index_i2x_Fioi_nh4   ,n) = oceanAmmoniumFlux(i)
+               i2x_i(index_i2x_Fioi_dms   ,n) = oceanDMSFlux(i)
+               i2x_i(index_i2x_Fioi_dmspp ,n) = oceanDMSPpFlux(i)
+               i2x_i(index_i2x_Fioi_dmspd ,n) = oceanDMSPdFlux(i)
+               i2x_i(index_i2x_Fioi_docr  ,n) = oceanHumicsFlux(i)
                ! convert from umol Fe/m^3 to mmol Fe/m^3
-               i2x_i % rAttr(index_i2x_Fioi_fep1  ,n) = oceanParticulateIronFlux(1,i) / 1000._RKIND
-               i2x_i % rAttr(index_i2x_Fioi_fep2  ,n) = oceanParticulateIronFlux(2,i) / 1000._RKIND
-               i2x_i % rAttr(index_i2x_Fioi_fed1  ,n) = oceanDissolvedIronFlux(1,i) / 1000._RKIND
-               i2x_i % rAttr(index_i2x_Fioi_fed2  ,n) = oceanDissolvedIronFlux(2,i) / 1000._RKIND
+               i2x_i(index_i2x_Fioi_fep1  ,n) = oceanParticulateIronFlux(1,i) / 1000._RKIND
+               i2x_i(index_i2x_Fioi_fep2  ,n) = oceanParticulateIronFlux(2,i) / 1000._RKIND
+               i2x_i(index_i2x_Fioi_fed1  ,n) = oceanDissolvedIronFlux(1,i) / 1000._RKIND
+               i2x_i(index_i2x_Fioi_fed2  ,n) = oceanDissolvedIronFlux(2,i) / 1000._RKIND
             endif
+            ! export dust, if configured kg/m2/s of dust
+            if (config_use_zaerosols .and. config_couple_biogeochemistry_fields) &
+               i2x_i(index_i2x_Fioi_dust1 ,n) = oceanDustIronFlux(i)
          endif
       enddo
 
@@ -2745,8 +3245,7 @@ contains
 ! !IROUTINE: frazil_mass
 !
 ! !INTERFACE
-   subroutine frazil_mass(freezingPotential, frazilMassFlux, seaSurfaceSalinity, &
-                                 config_thermodynamics_type)
+   subroutine frazil_mass(freezingPotential, frazilMassFlux, seaSurfaceSalinity)
 !
 ! !DESCRIPTION:
 ! Calculate frazil mass based on on the sea surface salinity, and frazil heat flux
@@ -2756,21 +3255,19 @@ contains
 ! the frazil mass based on the freezingPotential according to sea ice model thermodynamics,
 !
 ! !USES:
-      use ice_mushy_physics, only:  &
-         liquidus_temperature_mush, &
-         enthalpy_mush
-
-      use ice_colpkg_shared, only: &
-         dSin0_frazil,             &
-         phi_init
+      use icepack_intfc, only:  &
+         icepack_liquidus_temperature, &
+         icepack_enthalpy_mush
 
 ! !INPUT PARAMETERS:
       real (kind=RKIND),      intent(in)   :: freezingPotential
       real (kind=RKIND),      intent(in)   :: seaSurfaceSalinity
-      character(len=strKIND), intent(in)   :: config_thermodynamics_type
 
 ! !OUTPUT PARAMETERS:
       real (kind=RKIND),      intent(out)  :: frazilMassFlux
+
+      character(len=strKIND), pointer   :: config_thermodynamics_type
+      character(len=strKIND), pointer   :: config_column_physics_type
 
 !EOP
 !BOC
@@ -2785,17 +3282,23 @@ contains
       qi0new,          &
       vi0new
 
+   call MPAS_pool_get_config(domain % configs, "config_thermodynamics_type", config_thermodynamics_type)
+   call MPAS_pool_get_config(domain % configs, "config_column_physics_type", config_column_physics_type)
 
    if (freezingPotential > 0.0_RKIND) then
 
       if (trim(config_thermodynamics_type) == "mushy") then  ! mushy
-         if (seaSurfaceSalinity > 2.0_RKIND * dSin0_frazil) then
-             Si0new = seaSurfaceSalinity - dSin0_frazil
+         if (seaSurfaceSalinity > 2.0_RKIND * seaiceFrazilSalinityReduction) then
+             Si0new = seaSurfaceSalinity - seaiceFrazilSalinityReduction
          else
-             Si0new = seaSurfaceSalinity**2 / (4.0_RKIND*dSin0_frazil)
+             Si0new = seaSurfaceSalinity**2 / (4.0_RKIND*seaiceFrazilSalinityReduction)
          endif
-         Ti = liquidus_temperature_mush(Si0new/phi_init)
-         qi0new = enthalpy_mush(Ti, Si0new)
+
+!         if (trim(config_column_physics_type) == "icepack") then
+            Ti = icepack_liquidus_temperature(Si0new/seaiceFrazilIcePorosity)
+            qi0new = icepack_enthalpy_mush(Ti, Si0new)
+!         endif ! config_column_physics_type
+
       else
          qi0new = -seaiceDensityIce*seaiceLatentHeatMelting
       endif    ! ktherm
@@ -2865,7 +3368,4 @@ contains
 
    end subroutine datetime!}}}
 
-
 end module ice_comp_mct
-
-!|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||

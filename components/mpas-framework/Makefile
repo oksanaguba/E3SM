@@ -162,34 +162,14 @@ pgi-summit:
 	"CORE = $(CORE)" \
 	"DEBUG = $(DEBUG)" \
 	"USE_PAPI = $(USE_PAPI)" \
+	"USE_MAGMA = $(USE_MAGMA)" \
+	"USE_CUBLAS = $(USE_CUBLAS)" \
+	"USE_GPU_AWARE_MPI = $(USE_GPU_AWARE_MPI)" \
 	"OPENMP = $(OPENMP)" \
 	"OPENACC = $(OPENACC)" \
 	"USE_SHTNS = $(USE_SHTNS)" \
 	"CPPFLAGS = -DpgiFortran -D_MPI -DUNDERSCORE" )
 
-pgi-nersc:
-	( $(MAKE) all \
-	"FC_PARALLEL = ftn" \
-	"CC_PARALLEL = cc" \
-	"CXX_PARALLEL = CC" \
-	"FC_SERIAL = ftn" \
-	"CC_SERIAL = cc" \
-	"CXX_SERIAL = CC" \
-	"FFLAGS_FPIEEE = -Kieee" \
-	"FFLAGS_PROMOTION = -r8" \
-	"FFLAGS_OPT = -O3 -byteswapio -Mfree" \
-	"CFLAGS_OPT = -O3" \
-	"CXXFLAGS_OPT = -O3" \
-	"LDFLAGS_OPT = -O3" \
-	"FFLAGS_OMP = -mp" \
-	"CFLAGS_OMP = -mp" \
-	"BUILD_TARGET = $(@)" \
-	"CORE = $(CORE)" \
-	"DEBUG = $(DEBUG)" \
-	"USE_PAPI = $(USE_PAPI)" \
-	"OPENMP = $(OPENMP)" \
-	"USE_SHTNS = $(USE_SHTNS)" \
-	"CPPFLAGS = $(MODEL_FORMULATION) -D_MPI -DCPRPGI" )
 ifort:
 	( $(MAKE) all \
 	"FC_PARALLEL = mpif90" \
@@ -397,31 +377,7 @@ g95:
 	"USE_SHTNS = $(USE_SHTNS)" \
 	"CPPFLAGS = $(MODEL_FORMULATION) -D_MPI" )
 
-cray-nersc:
-	( $(MAKE) all \
-	"FC_PARALLEL = ftn" \
-	"CC_PARALLEL = cc" \
-	"CXX_PARALLEL = CC" \
-	"FC_SERIAL = ftn" \
-	"CC_SERIAL = cc" \
-	"CXX_SERIAL = CC" \
-	"FFLAGS_FPIEEE = " \
-	"FFLAGS_PROMOTION = -default64" \
-	"FFLAGS_OPT = -O3 -f free" \
-	"CFLAGS_OPT = -O3" \
-	"CXXFLAGS_OPT = -O3" \
-	"LDFLAGS_OPT = -O3" \
-	"FFLAGS_OMP = " \
-	"CFLAGS_OMP = " \
-	"BUILD_TARGET = $(@)" \
-	"CORE = $(CORE)" \
-	"DEBUG = $(DEBUG)" \
-	"USE_PAPI = $(USE_PAPI)" \
-	"OPENMP = $(OPENMP)" \
-	"USE_SHTNS = $(USE_SHTNS)" \
-	"CPPFLAGS = $(MODEL_FORMULATION) -D_MPI" )
-
-gnu-nersc:
+gnu-cray:
 	GFORTRAN_GTE_10=$$(expr `ftn -dumpversion | cut -f1 -d.` \>= 10) ;\
 	if [ "$${GFORTRAN_GTE_10}" = "1" ]; then \
 	    EXTRA_FFLAGS="-fallow-argument-mismatch"; \
@@ -440,11 +396,11 @@ gnu-nersc:
 	"FFLAGS_OPT = -O3 -m64 -ffree-line-length-none -fconvert=big-endian -ffree-form -ffpe-summary=none $${EXTRA_FFLAGS}" \
 	"CFLAGS_OPT = -O3 -m64" \
 	"CXXFLAGS_OPT = -O3 -m64" \
-	"LDFLAGS_OPT = -O3 -m64" \
+	"LDFLAGS_OPT = -O3 -m64 $(GNU_CRAY_LDFLAGS)" \
 	"FFLAGS_DEBUG = -g -m64 -ffree-line-length-none -fconvert=big-endian -ffree-form -fbounds-check -fbacktrace -ffpe-trap=invalid,zero,overflow -ffpe-summary=none $${EXTRA_FFLAGS}" \
 	"CFLAGS_DEBUG = -g -m64" \
 	"CXXFLAGS_DEBUG = -g -m64" \
-	"LDFLAGS_DEBUG = -g -m64" \
+	"LDFLAGS_DEBUG = -g -m64 $(GNU_CRAY_LDFLAGS)" \
 	"FFLAGS_OMP = -fopenmp" \
 	"CFLAGS_OMP = -fopenmp" \
 	"BUILD_TARGET = $(@)" \
@@ -456,7 +412,9 @@ gnu-nersc:
 	"USE_SHTNS = $(USE_SHTNS)" \
 	"CPPFLAGS = $(MODEL_FORMULATION) -D_MPI $(FILE_OFFSET) $(ZOLTAN_DEFINE)" )
 
-intel-nersc:
+# ifx (Intel oneAPI) fpp mishandles the COMMA macro-argument idiom used in the
+# MPAS framework, so preprocess .F with GNU cpp via GEN_F90=true instead.
+intel-cray:
 	( $(MAKE) all \
 	"FC_PARALLEL = ftn" \
 	"CC_PARALLEL = cc" \
@@ -481,6 +439,42 @@ intel-nersc:
 	"DEBUG = $(DEBUG)" \
 	"USE_PAPI = $(USE_PAPI)" \
 	"OPENMP = $(OPENMP)" \
+	"USE_SHTNS = $(USE_SHTNS)" \
+	"GEN_F90 = true" \
+	"CPPFLAGS = $(MODEL_FORMULATION) -D_MPI" )
+
+cray-cray:
+	( $(MAKE) all \
+	"FC_PARALLEL = ftn" \
+	"CC_PARALLEL = cc" \
+	"CXX_PARALLEL = CC" \
+	"FC_SERIAL = ftn" \
+	"CC_SERIAL = cc" \
+	"CXX_SERIAL = CC" \
+	"FFLAGS_FPIEEE = -h flex_mp=rigorous" \
+	"FFLAGS_PROMOTION = -s real64" \
+	"FFLAGS_OPT = -g -O3 -h byteswapio -ef -f free -h noacc -em -M1077 -hipa0 -hzero" \
+	"CFLAGS_OPT = -O3 -h noacc" \
+	"CXXFLAGS_OPT = -O3 -h noacc" \
+	"LDFLAGS_OPT = -O3 -h noacc" \
+	"FFLAGS_ACC = -h acc -rm -ri" \
+	"CFLAGS_ACC = -h acc"  \
+	"FFLAGS_GPU = -DUSE_OMPOFFLOAD -homp -fopenmp" \
+	"LDFLAGS_GPU = -homp -fopenmp" \
+	"FFLAGS_DEBUG = -O0 -g -h byteswapio -ef -f free -Ktrap=divz,fp,inv,ovf" \
+	"CFLAGS_DEBUG = -O0 -g" \
+	"CXXFLAGS_DEBUG = -O0 -g" \
+	"LDFLAGS_DEBUG = -O0 -g -Ktrap=divz,fp,inv,ovf" \
+	"FFLAGS_OMP = -homp -fopenmp" \
+	"CFLAGS_OMP = -homp -fopenmp" \
+	"PICFLAG = -f pic" \
+	"BUILD_TARGET = $(@)" \
+	"CORE = $(CORE)" \
+	"DEBUG = $(DEBUG)" \
+	"USE_PAPI = $(USE_PAPI)" \
+	"OPENMP = $(OPENMP)" \
+	"OPENACC = $(OPENACC)" \
+	"OPENMP_OFFLOAD = $(OPENMP_OFFLOAD)" \
 	"USE_SHTNS = $(USE_SHTNS)" \
 	"CPPFLAGS = $(MODEL_FORMULATION) -D_MPI" )
 
@@ -522,6 +516,22 @@ LIBS =
 #
 ifeq "$(USE_PIO2)" "true"
 	override CPPFLAGS += -DUSE_PIO2
+endif
+
+#
+# If user has indicated ADIOS isn't supported, define HAVE_ADIOS pre-processor macro
+#
+# Default is that we have ADIOS if a user hasn't said anything
+ifeq "$(HAVE_ADIOS)" ""
+	override CPPFLAGS += -DHAVE_ADIOS
+endif
+
+ifeq "$(HAVE_ADIOS)" "true"
+	override CPPFLAGS += -DHAVE_ADIOS
+endif
+
+ifeq "$(HAVE_HDF5)" "true"
+	override CPPFLAGS += -DHAVE_HDF5
 endif
 
 #
@@ -627,6 +637,13 @@ ifeq "$(USE_SHTNS)" "true"
 	override CPPFLAGS += -DUSE_SHTNS
 endif
 
+ifneq "$(MOAB_PATH)" ""
+       CPPINCLUDES +=  -DHAVE_MOAB -I$(MOAB_PATH)/include
+       FCINCLUDES += -DHAVE_MOAB -I$(MOAB_PATH)/include
+       include $(MOAB_PATH)/lib/moab.make
+       LIBS +=  ${MOAB_LIBS_LINK} -lstdc++
+endif
+
 RM = rm -f
 CPP = cpp -P -traditional
 RANLIB = ranlib
@@ -687,6 +704,8 @@ SCC=$(CC_SERIAL)
 PARALLEL_MESSAGE="Parallel version is on."
 
 ifeq "$(OPENMP)" "true"
+	CPPINCLUDES += $(OPENMP_INCLUDE)
+	FCINCLUDES += $(OPENMP_INCLUDE)
 	FFLAGS += $(FFLAGS_OMP)
 	CFLAGS += $(CFLAGS_OMP)
 	CXXFLAGS += $(CFLAGS_OMP)
@@ -709,6 +728,25 @@ ifeq "$(OPENMP_OFFLOAD)" "true"
 	override CPPFLAGS += "-DMPAS_OPENMP_OFFLOAD"
 	LDFLAGS += $(LDFLAGS_GPU)
 endif #OPENMP_OFFLOAD IF
+
+ifeq "$(USE_MAGMA)" "true"
+   LIBS += -L$(MAGMADIR)/lib -lmagma
+   FCINCLUDES += -I${MAGMADIR}/include
+   override CPPFLAGS += "-DUSE_MAGMA"
+   override FFLAGS_ACC += -Mcudalib=cublas
+endif
+
+ifeq "$(USE_CUBLAS)" "true"
+   override FFLAGS_ACC = -acc -Minfo=accel -gpu=cc70
+   FFLAGS += $(FFLAGS_CUBLAS)
+   CFLAGS += $(CFLAGS_CUBLAS)
+   override CPPFLAGS += "-DUSE_CUBLAS"
+   LDFLAGS += $(FFLAGS_CUBLAS)
+endif #USE_CUBLAS IF
+
+ifeq "$(USE_GPU_AWARE_MPI)" "true"
+   override CPPFLAGS += "-DUSE_GPU_AWARE_MPI"
+endif #USE_GPUAWARE
 
 ifeq "$(PRECISION)" "single"
 	CFLAGS += "-DSINGLE_PRECISION"
@@ -751,6 +789,12 @@ ifeq "$(USE_PIO2)" "true"
 else # USE_PIO2 IF
 	PIO_MESSAGE="Using the PIO 1.x library."
 endif # USE_PIO2 IF
+
+ifneq "$(MOAB_PATH)" ""
+       MOAB_MESSAGE="Using MOAB library"
+else # 
+       MOAB_MESSAGE="Not using MOAB library"
+endif 
 
 ifdef TIMER_LIB
 ifeq "$(TIMER_LIB)" "tau"
@@ -810,6 +854,18 @@ ifeq "$(OPENACC)" "true"
 	OPENACC_MESSAGE="MPAS was built with OpenACC accelerator support enabled."
 else
 	OPENACC_MESSAGE="MPAS was built without OpenACC accelerator support."
+endif
+
+ifeq "$(USE_MAGMA)" "true"
+   MAGMA_MESSAGE="MPAS was built with MAGMA library."
+endif
+
+ifeq "$(USE_CUBLAS)" "true"
+   CUBLAS_MESSAGE="MPAS was built with CUBLAS library."
+endif
+
+ifeq "$(USE_GPU_AWARE_MPI)" "true"
+   GPUAWARE_MESSAGE="GPU-aware MPI is enabled."
 endif
 
 ifeq "$(USE_SHTNS)" "true"
@@ -900,15 +956,15 @@ endif
 openmp_test:
 ifeq "$(OPENMP)" "true"
 	@echo "Testing compiler for OpenMP support"
-	@echo "#include <omp.h>" > conftest.c; echo "int main() { int n = omp_get_num_threads(); return 0; }" >> conftest.c; $(SCC) $(CFLAGS) -o conftest.out conftest.c || \
+	@echo "#include <omp.h>" > conftest.c; echo "int main() { int n = omp_get_num_threads(); return 0; }" >> conftest.c; $(SCC) $(OPENMP_INCLUDE) $(CFLAGS) -o conftest.out conftest.c || \
 		(echo "$(SCC) does not support OpenMP - see INSTALL in top-level directory for more information"; rm -fr conftest.*; exit 1)
-	@echo "#include <omp.h>" > conftest.c; echo "int main() { int n = omp_get_num_threads(); return 0; }" >> conftest.c; $(CC) $(CFLAGS) -o conftest.out conftest.c || \
+	@echo "#include <omp.h>" > conftest.c; echo "int main() { int n = omp_get_num_threads(); return 0; }" >> conftest.c; $(CC) $(OPENMP_INCLUDE) $(CFLAGS) -o conftest.out conftest.c || \
 		(echo "$(CC) does not support OpenMP - see INSTALL in top-level directory for more information"; rm -fr conftest.*; exit 1)
-	@echo "#include <omp.h>" > conftest.cpp; echo "int main() { int n = omp_get_num_threads(); return 0; }" >> conftest.cpp; $(CXX) $(CFLAGS) -o conftest.out conftest.cpp || \
+	@echo "#include <omp.h>" > conftest.cpp; echo "int main() { int n = omp_get_num_threads(); return 0; }" >> conftest.cpp; $(CXX) $(OPENMP_INCLUDE) $(CXXFLAGS) -o conftest.out conftest.cpp || \
 		(echo "$(CXX) does not support OpenMP - see INSTALL in top-level directory for more information"; rm -fr conftest.*; exit 1)
-	@echo "program test; use omp_lib; integer n; n = OMP_GET_NUM_THREADS(); stop 0; end program" > conftest.f90; $(SFC) $(FFLAGS) -o conftest.out conftest.f90 || \
+	@echo "program test; use omp_lib; integer n; n = OMP_GET_NUM_THREADS(); stop 0; end program" > conftest.f90; $(SFC) $(OPENMP_INCLUDE) $(FFLAGS) -o conftest.out conftest.f90 || \
 		(echo "$(SFC) does not support OpenMP - see INSTALL in top-level directory for more information"; rm -fr conftest.*; exit 1)
-	@echo "program test; use omp_lib; integer n; n = OMP_GET_NUM_THREADS(); stop 0; end program" > conftest.f90; $(FC) $(FFLAGS) -o conftest.out conftest.f90 || \
+	@echo "program test; use omp_lib; integer n; n = OMP_GET_NUM_THREADS(); stop 0; end program" > conftest.f90; $(FC) $(OPENMP_INCLUDE) $(FFLAGS) -o conftest.out conftest.f90 || \
 		(echo "$(FC) does not support OpenMP - see INSTALL in top-level directory for more information"; rm -fr conftest.*; exit 1)
 	@rm -fr conftest.*
 endif
@@ -1054,6 +1110,18 @@ endif
 	@echo $(TIMER_MESSAGE)
 	@echo $(PIO_MESSAGE)
 	@echo $(SHTNS_MESSAGE)
+ifeq "$(USE_MAGMA)" "true"
+   @echo $(MAGMA_MESSAGE)
+endif
+ifeq "$(USE_CUBLAS)" "true"
+   @echo $(CUBLAS_MESSAGE)
+endif
+ifeq "$(USE_GPUAWARE)" "true"
+   @echo $(GPUAWARE_MESSAGE)
+endif
+ifeq "$(USE_MOAB)" "true"
+	@echo $(MOAB_MESSAGE)
+endif
 	@echo "*******************************************************************************"
 clean:
 	cd $(FWPATH); $(MAKE) clean RM="$(RM)" CORE="$(CORE)"
@@ -1126,6 +1194,7 @@ errmsg:
 	@echo "    SHAREDLIB=true - generate position-independent code suitable for use in a shared library. Default is false."
 	@echo "    USE_LAPACK=true - builds and links with LAPACK / BLAS libraries.  Default is to not use LAPACK."
 	@echo "    USE_SHTNS=true - builds and links with SHTNS/FFTW.  Default is false."
+	@echo "    HAVE_ADIOS=false   - PIO2 library does not include ADIOS support.  Default is true."
 	@echo ""
 	@echo "Ensure that NETCDF, PNETCDF, PIO, LAPACK (if USE_LAPACK=true), and PAPI (if USE_PAPI=true) are environment variables"
 	@echo "that point to the absolute paths for the libraries."
@@ -1133,4 +1202,3 @@ errmsg:
 ifdef CORE
 	exit 1
 endif
-

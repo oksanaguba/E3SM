@@ -428,7 +428,7 @@ contains
   !===============================================================================
 
   subroutine component_init_aream(infodata, rof_c2_ocn, samegrid_ao, samegrid_al, &
-       samegrid_ro, samegrid_lg)
+       samegrid_ro, samegrid_lg, samegrid_az)
 
     !---------------------------------------------------------------
     ! Description
@@ -439,7 +439,8 @@ contains
     use prep_lnd_mod,       only : prep_lnd_get_mapper_Sa2l
     use prep_ice_mod,       only : prep_ice_get_mapper_SFo2i
     use prep_glc_mod,       only : prep_glc_get_mapper_Sl2g
-    use component_type_mod, only : atm, lnd, ice, ocn, rof, glc
+    use prep_iac_mod,       only : prep_iac_get_mapper_Sa2z
+    use component_type_mod, only : atm, lnd, ice, ocn, rof, glc, iac
     !
     ! Arguments
     type (seq_infodata_type) , intent(inout) :: infodata
@@ -448,6 +449,8 @@ contains
     logical                  , intent(in)    :: samegrid_al
     logical                  , intent(in)    :: samegrid_ro
     logical                  , intent(in)    :: samegrid_lg  ! lnd & glc on same grid
+    logical                  , intent(in)    :: samegrid_az  ! iac & atm on same grid
+
     !
     ! Local variables
     type(mct_gsmap), pointer :: gsmap_s, gsmap_d
@@ -456,11 +459,13 @@ contains
     type(seq_map)  , pointer :: mapper_Sa2l
     type(seq_map)  , pointer :: mapper_SFo2i
     type(seq_map)  , pointer :: mapper_Sl2g
+    type(seq_map)  , pointer :: mapper_Sa2z
     logical                  :: atm_present ! atm present flag
     logical                  :: lnd_present ! lnd present flag
     logical                  :: ocn_present ! ocn present flag
     logical                  :: ice_present ! ice present flag
     logical                  :: glc_present ! glc present flag
+    logical                  :: iac_present ! iac present flag
     integer                  :: ka,km
     character(*), parameter :: subname = '(component_init_aream)'
     !---------------------------------------------------------------
@@ -472,13 +477,16 @@ contains
     mapper_Sa2l  => prep_lnd_get_mapper_Sa2l()
     mapper_SFo2i => prep_ice_get_mapper_SFo2i()
     mapper_Sl2g  => prep_glc_get_mapper_Sl2g()
+    mapper_Sa2z  => prep_iac_get_mapper_Sa2z()
 
     call seq_infodata_GetData( infodata, &
          atm_present=atm_present,        &
          ocn_present=ocn_present,        &
          ice_present=ice_present,        &
          lnd_present=lnd_present,        &
-         glc_present=glc_present)
+         glc_present=glc_present,        &
+         iac_present=iac_present)
+    
 
     if (atm_present .and. ocn_present) then
        if (samegrid_ao) then
@@ -488,7 +496,8 @@ contains
           km = mct_aVect_indexRa(dom_s%data, "aream" )
           dom_s%data%rAttr(km,:) = dom_s%data%rAttr(ka,:)
 
-          call seq_map_map(mapper_Fa2o, av_s=dom_s%data, av_d=dom_d%data, fldlist='aream')
+          call seq_map_map(mapper_Fa2o, av_s=dom_s%data, av_d=dom_d%data, fldlist='aream', &
+               omit_nonlinear=.true.)
        else
           gsmap_s => component_get_gsmap_cx(ocn(1)) ! gsmap_ox
           gsmap_d => component_get_gsmap_cx(atm(1)) ! gsmap_ax
@@ -509,7 +518,8 @@ contains
        dom_s  => component_get_dom_cx(ocn(1))   !dom_ox
        dom_d  => component_get_dom_cx(ice(1))   !dom_ix
 
-       call seq_map_map(mapper_SFo2i, av_s=dom_s%data, av_d=dom_d%data, fldlist='aream')
+       call seq_map_map(mapper_SFo2i, av_s=dom_s%data, av_d=dom_d%data, fldlist='aream', &
+            omit_nonlinear=.true.)
     endif
 
     if (rof_c2_ocn) then
@@ -537,7 +547,8 @@ contains
           dom_s  => component_get_dom_cx(atm(1))   !dom_ax
           dom_d  => component_get_dom_cx(lnd(1))   !dom_lx
 
-          call seq_map_map(mapper_Sa2l, av_s=dom_s%data, av_d=dom_d%data, fldlist='aream')
+          call seq_map_map(mapper_Sa2l, av_s=dom_s%data, av_d=dom_d%data, fldlist='aream', &
+               omit_nonlinear=.true.)
        else
           gsmap_d => component_get_gsmap_cx(lnd(1)) ! gsmap_lx
           dom_d   => component_get_dom_cx(lnd(1))   ! dom_lx
@@ -556,7 +567,8 @@ contains
           dom_s  => component_get_dom_cx(lnd(1))   !dom_lx
           dom_d  => component_get_dom_cx(glc(1))   !dom_gx
 
-          call seq_map_map(mapper_Sl2g, av_s=dom_s%data, av_d=dom_d%data, fldlist='aream')
+          call seq_map_map(mapper_Sl2g, av_s=dom_s%data, av_d=dom_d%data, fldlist='aream', &
+               omit_nonlinear=.true.)
        else
           gsmap_d => component_get_gsmap_cx(glc(1)) ! gsmap_gx
           dom_d   => component_get_dom_cx(glc(1))   ! dom_gx
@@ -567,6 +579,25 @@ contains
                string='lnd2glc aream initialization')
           call t_stopf('CPL:seq_map_readdata-lnd2glc')
 
+       endif
+    endif
+
+    ! currently lnd and atm must be present if iac is present
+    ! this is based on the atm because iac domain is defined
+    !    in relation to the atmosphere, not the land
+    if (atm_present .and. iac_present) then
+       if (samegrid_az) then
+          dom_s  => component_get_dom_cx(atm(1))   !dom_ax
+          dom_d  => component_get_dom_cx(iac(1))   !dom_zx
+
+          call seq_map_map(mapper_Sa2z, av_s=dom_s%data, av_d=dom_d%data, fldlist='aream')
+       else
+          gsmap_d => component_get_gsmap_cx(iac(1)) ! gsmap_zx
+          dom_d   => component_get_dom_cx(iac(1))   ! dom_zx
+
+          call seq_map_readdata('seq_maps.rc','atm2iac_smapname:',mpicom_CPLID, CPLID, &
+               gsmap_d=gsmap_d, av_d=dom_d%data, avfld_d='aream', filefld_d='area_b', &
+               string='atm2iac aream initialization')
        endif
     endif
 
@@ -604,7 +635,8 @@ contains
           else
              mpi_tag = comp(eci)%cplcompid*10000+eci*10+5
           end if
-          call seq_map_map(comp(eci)%mapper_Cx2c, comp(eci)%dom_cx%data, comp(eci)%dom_cc%data, msgtag=mpi_tag)
+          call seq_map_map(comp(eci)%mapper_Cx2c, comp(eci)%dom_cx%data, comp(eci)%dom_cc%data, msgtag=mpi_tag, &
+               omit_nonlinear=.true.)
 
           ! For only component pes
           if (comp(eci)%iamin_compid) then
@@ -627,7 +659,8 @@ contains
           else
               mpi_tag = comp(eci)%cplcompid*10000+eci*10+7
           end if
-          call seq_map_map(comp(eci)%mapper_cc2x, comp(eci)%c2x_cc, comp(eci)%c2x_cx, msgtag=mpi_tag)
+          call seq_map_map(comp(eci)%mapper_cc2x, comp(eci)%c2x_cc, comp(eci)%c2x_cx, msgtag=mpi_tag, &
+               omit_nonlinear=.true.)
 
        endif
     enddo

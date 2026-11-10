@@ -20,7 +20,8 @@ module clubb_intr
   use shr_kind_mod,  only: r8=>shr_kind_r8
   use shr_log_mod ,  only: errMsg => shr_log_errMsg
   use ppgrid,        only: pver, pverp
-  use phys_control,  only: phys_getopts
+  use phys_control,  only: phys_getopts, use_od_ss, use_od_fd
+  use od_common,     only: od_ls_ncleff, od_bl_ncd, od_ss_sncleff
   use physconst,     only: rair, cpair, gravit, latvap, latice, zvir, rh2o, karman, &
                            tms_orocnst, tms_z0fac, pi
   use cam_logfile,   only: iulog
@@ -36,6 +37,8 @@ module clubb_intr
 #else
   use shr_kind_mod,     only: core_rknd=>shr_kind_r8
 #endif
+
+  use zm_conv,      only: zm_param
 
   implicit none
 
@@ -223,6 +226,15 @@ module clubb_intr
     ixvp2 = 0
 
   integer :: cmfmc_sh_idx = 0
+
+! ZM convective microphysics(zm_param%zm_microp)
+  integer :: &
+    dlfzm_idx  = -1,    & ! index of ZM detrainment of convective cloud water mixing ratio.
+    difzm_idx  = -1,    & ! index of ZM detrainment of convective cloud ice mixing ratio.
+    dsfzm_idx  = -1,    & ! index of ZM detrainment of convective snow mixing ratio.
+    dnlfzm_idx = -1,    & ! index of ZM detrainment of convective cloud water num concen.
+    dnifzm_idx = -1,    & ! index of ZM detrainment of convective cloud ice num concen.
+    dnsfzm_idx = -1       ! index of ZM detrainment of convective snow num concen.
 
   real(r8) :: dp1 !set in namelist; assigned in cloud_fraction.F90
   !  Output arrays for CLUBB statistics
@@ -620,7 +632,8 @@ end subroutine clubb_init_cnst
     use constituents,           only: cnst_get_ind
     use phys_control,           only: phys_getopts
 
-    use parameters_tunable, only: params_list
+    use parameters_tunable,     only: params_list
+    use cam_abortutils,         only: endrun
 
 #endif
 
@@ -763,6 +776,15 @@ end subroutine clubb_init_cnst
     iiedsclr_rt  = -1
     iiedsclr_thl = -1
     iiedsclr_CO2 = -1
+
+    if (zm_param%zm_microp) then
+        dlfzm_idx = pbuf_get_index('DLFZM')
+        difzm_idx = pbuf_get_index('DIFZM')
+        dsfzm_idx = pbuf_get_index('DSFZM')
+        dnlfzm_idx = pbuf_get_index('DNLFZM')
+        dnifzm_idx = pbuf_get_index('DNIFZM')
+        dnsfzm_idx = pbuf_get_index('DNSFZM')
+    end if
 
     ! ----------------------------------------------------------------- !
     ! Define number of tracers for CLUBB to diffuse
@@ -907,7 +929,25 @@ end subroutine clubb_init_cnst
     call addfld ('VMAGDP',        horiz_only,     'A',             '-', 'ZM gustiness enhancement')
     call addfld ('VMAGCL',        horiz_only,     'A',             '-', 'CLUBB gustiness enhancement')
     call addfld ('TPERTBLT',        horiz_only,     'A',             'K', 'perturbation temperature at PBL top')
-
+    !
+    if (use_od_fd) then
+       !added for turbulent orographic form drag (TOFD) output
+       call addfld ('DTAUX3_FD',(/'lev'/),'A','m/s2','U tendency - fd orographic drag')
+       call addfld ('DTAUY3_FD',(/'lev'/),'A','m/s2','V tendency - fd orographic drag')
+       call addfld ('DUSFC_FD',horiz_only,'A','N/m2','fd zonal oro surface stress')
+       call addfld ('DVSFC_FD',horiz_only,'A','N/m2','fd merio oro surface stress')
+       call add_default('DTAUX3_FD', 1,  ' ')
+       call add_default('DTAUY3_FD', 1,  ' ')
+       call add_default('DUSFC_FD',  1,  ' ')
+       call add_default('DVSFC_FD',  1,  ' ')
+       if (masterproc) then
+          write(iulog,*)'Using turbulent orographic form drag scheme (TOFD)'
+       end if
+       if (use_od_fd.and.do_tms) then
+          call endrun("clubb_intr: Both TMS and TOFD are turned on, please turn one off&
+          &by setting use_od_fd or do_tms as .false.")
+       end if
+    end if
     !  Initialize statistics, below are dummy variables
     dum1 = 300._r8
     dum2 = 1200._r8
@@ -1061,8 +1101,8 @@ end subroutine clubb_init_cnst
   ! =============================================================================== !
 
    subroutine clubb_tend_cam( &
-                              state,   ptend_all,   pbuf,     hdtime, &
-                              cmfmc,   cam_in,   sgh30, &
+                              state,   ptend_all,   pbuf,  diag,   hdtime, &
+                              cmfmc,   cam_in,   cam_out,  sgh30,          &
                               macmic_it, cld_macmic_num_steps,dlf, det_s, det_ice, alst_o)
 
 !-------------------------------------------------------------------------------
@@ -1088,16 +1128,19 @@ end subroutine clubb_init_cnst
    use ppgrid,         only: pver, pverp, pcols
    use constituents,   only: cnst_get_ind, cnst_type
    use co2_cycle,      only: co2_cycle_set_cnst_type
-   use camsrfexch,     only: cam_in_t
+   use camsrfexch,     only: cam_in_t, cam_out_t
    use ref_pres,       only: top_lev => trop_cloud_top_lev
    use time_manager,   only: is_first_step, is_first_restart_step, get_nstep
    use cam_abortutils, only: endrun
    use wv_saturation,  only: qsat
    use micro_mg_cam,   only: micro_mg_version
 
+   use conditional_diag,      only: cnd_diag_t
+   use conditional_diag_main, only: cnd_diag_checkpoint
+
 #ifdef CLUBB_SGS
    use hb_diff,                   only: pblintd
-   use scamMOD,                   only: single_column,scm_clubb_iop_name
+   use iop_data_mod,              only: single_column
    use phys_grid,                 only: get_gcol_p
    use cldfrc2m,                  only: aist_vector
    use cam_history,               only: outfld
@@ -1132,7 +1175,9 @@ end subroutine clubb_init_cnst
    use model_flags, only: ipdf_call_placement
    use advance_clubb_core_module, only: ipdf_post_advance_fields
 #endif
-
+   use od_common,          only: grid_size, oro_drag_interface
+   use hycoef,             only: etamid
+   use physconst,          only: rh2o,pi,rearth,r_universal
    implicit none
 
    ! --------------- !
@@ -1147,12 +1192,14 @@ end subroutine clubb_init_cnst
    real(r8),            intent(in)    :: sgh30(pcols)             ! std deviation of orography              [m]
    integer,             intent(in)    :: cld_macmic_num_steps     ! number of mac-mic iterations
    integer,             intent(in)    :: macmic_it                ! number of mac-mic iterations
+   type(cam_out_t),     intent(in)    :: cam_out
 
    ! ---------------------- !
    ! Input-Output Auguments !
    ! ---------------------- !
 
    type(physics_buffer_desc), pointer :: pbuf(:)
+   type(cnd_diag_t),    intent(inout) :: diag                     !  conditionally sampled fields
 
    ! ---------------------- !
    ! Output Auguments !
@@ -1448,6 +1495,15 @@ end subroutine clubb_init_cnst
    real(r8), pointer, dimension(:,:) :: prer_evap
    real(r8), pointer, dimension(:,:) :: qrl
    real(r8), pointer, dimension(:,:) :: radf_clubb
+
+   ! ZM convective microphysics(zm_param%zm_microp)
+   real(r8), pointer :: dlfzm(:,:)  ! ZM detrainment of convective cloud water mixing ratio.
+   real(r8), pointer :: difzm(:,:)  ! ZM detrainment of convective cloud ice mixing ratio.
+   real(r8), pointer :: dsfzm(:,:)  ! ZM detrainment of convective snow mixing ratio.
+   real(r8), pointer :: dnlfzm(:,:) ! ZM detrainment of convective cloud water num concen.
+   real(r8), pointer :: dnifzm(:,:) ! ZM detrainment of convective cloud ice num concen.
+   real(r8), pointer :: dnsfzm(:,:) ! ZM detrainment of convective snow num concen.
+
 !PMA
    real(r8)  relvarc(pcols,pver)
    real(r8)  stend(pcols,pver)
@@ -1458,6 +1514,8 @@ end subroutine clubb_init_cnst
    integer :: ktopi(pcols)
 
    integer :: ixorg
+
+   character(len=2) :: char_macmic_it
 
    intrinsic :: selected_real_kind, max
 
@@ -1474,7 +1532,6 @@ end subroutine clubb_init_cnst
    real(r8) :: gprec
    real(r8) :: prec_gust(pcols)
    real(r8) :: vmag_gust_dp(pcols),vmag_gust_cl(pcols)
-   real(r8) :: vmag(pcols)
    real(r8) :: gust_fac(pcols)
    real(r8) :: umb(pcols), vmb(pcols),up2b(pcols),vp2b(pcols)
    real(r8),parameter :: gust_facl = 1.2_r8 !gust fac for land
@@ -1484,14 +1541,45 @@ end subroutine clubb_init_cnst
    real(r8) :: sfc_v_diff_tau(pcols) ! Response to tau perturbation, m/s
    real(r8), parameter :: pert_tau = 0.1_r8 ! tau perturbation, Pa
 
+   !variables for turbulent orographic form drag (TOFD) interface
+   real(r8) :: dtaux3_fd(pcols,pver)
+   real(r8) :: dtauy3_fd(pcols,pver)
+   real(r8) :: dusfc_fd(pcols)
+   real(r8) :: dvsfc_fd(pcols)
+   logical  :: gwd_ls,gwd_bl,gwd_ss,gwd_fd
+   real(r8) :: dummy_nm(pcols,pver)
+   real(r8) :: dummy_utgw(pcols,pver)
+   real(r8) :: dummy_vtgw(pcols,pver)
+   real(r8) :: dummy_ttgw(pcols,pver)
+   real(r8) :: dummx_ls(pcols,pver)
+   real(r8) :: dummx_bl(pcols,pver)
+   real(r8) :: dummx_ss(pcols,pver)
+   real(r8) :: dummy_ls(pcols,pver)
+   real(r8) :: dummy_bl(pcols,pver)
+   real(r8) :: dummy_ss(pcols,pver)
+   real(r8) :: dummx3_ls(pcols,pver)
+   real(r8) :: dummx3_bl(pcols,pver)
+   real(r8) :: dummx3_ss(pcols,pver)
+   real(r8) :: dummy3_ls(pcols,pver)
+   real(r8) :: dummy3_bl(pcols,pver)
+   real(r8) :: dummy3_ss(pcols,pver)
+
+   real(r8) :: inv_exner_clubb_surf
+
+
 ! ZM gustiness equation below from Redelsperger et al. (2000)
 ! numbers are coefficients of the empirical equation
 
-   ugust(gprec,gfac) = gfac*log(1._R8+57801.6_R8*gprec-3.55332096e7_R8*(gprec**2.0_R8))
+   ugust(gprec) = log(1._R8+57801.6_R8*gprec-3.55332096e7_R8*(gprec**2.0_R8))
 
 #endif
    det_s(:)   = 0.0_r8
    det_ice(:) = 0.0_r8
+
+   if (macmic_it > 99) then
+      call endrun('clubb_tend_cam: macmic_it > 99. Revise checkpoint name for cnd_diag_checkpoint.')
+   end if
+
 #ifdef CLUBB_SGS
 
    !-----------------------------------------------------------------------------------------------!
@@ -1501,6 +1589,8 @@ end subroutine clubb_init_cnst
    !-----------------------------------------------------------------------------------------------!
    !-----------------------------------------------------------------------------------------------!
    !-----------------------------------------------------------------------------------------------!
+
+   write(char_macmic_it,'(i2.2)') macmic_it
 
    call t_startf('clubb_tend_cam_init')
    invrs_hdtime = 1._r8 / hdtime
@@ -1726,6 +1816,8 @@ end subroutine clubb_init_cnst
 
    endif
 
+   call cnd_diag_checkpoint(diag, 'ICEMAC'//char_macmic_it, state1, pbuf, cam_in, cam_out)
+
    !  Determine CLUBB time step and make it sub-step friendly
    !  For now we want CLUBB time step to be 5 min since that is
    !  what has been scientifically validated.  However, there are certain
@@ -1788,6 +1880,7 @@ end subroutine clubb_init_cnst
    !  At each CLUBB call, initialize mean momentum  and thermo CLUBB state
    !  from the CAM state
 
+   rvm = 0._r8
    do k=1,pver   ! loop over levels
      do i=1,ncol ! loop over columns
 
@@ -1795,7 +1888,20 @@ end subroutine clubb_init_cnst
        rvm(i,k)     = state1%q(i,k,ixq)
        um(i,k)      = state1%u(i,k)
        vm(i,k)      = state1%v(i,k)
+
+#define NEWTHETAL
+#ifndef NEWTHETAL
        thlm(i,k)    = state1%t(i,k)*exner_clubb(i,k)-(latvap/cpair)*state1%q(i,k,ixcldliq)
+#else
+!NCAR
+!       thlm(i,k) = ( state1%t(i,k) &
+!                     - (latvap/cpairv(i,k,lchnk))*state1%q(i,k,ixcldliq) ) &
+!                   * inv_exner_clubb(i,k)
+
+       thlm(i,k) = ( state1%t(i,k) &
+                     - (latvap/cpair)*state1%q(i,k,ixcldliq) ) &
+                   * exner_clubb(i,k)
+#endif
 
        if (clubb_do_adv) then
           if (macmic_it .eq. 1) then
@@ -1885,6 +1991,35 @@ end subroutine clubb_init_cnst
        call t_stopf('compute_tms')
     endif
 
+    if (use_od_fd) then
+        gwd_ls    =.false.
+        gwd_bl    =.false.
+        gwd_ss    =.false.
+        gwd_fd    =use_od_fd
+        dummy_nm  =0.0_r8
+        dummy_utgw=0.0_r8
+        dummy_vtgw=0.0_r8
+        dummy_ttgw=0.0_r8
+        !sgh30 as the input for turbulent orographic form drag (TOFD) instead of sgh
+	call oro_drag_interface(state,cam_in,sgh30,pbuf,hdtime,dummy_nm,&
+                                gwd_ls,gwd_bl,gwd_ss,gwd_fd,&
+                                od_ls_ncleff,od_bl_ncd,od_ss_sncleff,&
+                                dummy_utgw,dummy_vtgw,dummy_ttgw,& 
+                                dtaux3_ls=dummx3_ls,dtauy3_ls=dummy3_ls,&
+                                dtaux3_bl=dummx3_bl,dtauy3_bl=dummy3_bl,&
+                                dtaux3_ss=dummx3_ss,dtauy3_ss=dummy3_ss,&
+                                dtaux3_fd=dtaux3_fd,dtauy3_fd=dtauy3_fd,&
+                                dusfc_ls=dummx_ls,dvsfc_ls=dummy_ls,&
+                                dusfc_bl=dummx_bl,dvsfc_bl=dummy_bl,&
+                                dusfc_ss=dummx_ss,dvsfc_ss=dummy_ss,&
+                                dusfc_fd=dusfc_fd,dvsfc_fd=dvsfc_fd)
+
+        call outfld ('DTAUX3_FD', dtaux3_fd,  pcols, lchnk)
+        call outfld ('DTAUY3_FD', dtauy3_fd,  pcols, lchnk)
+        call outfld ('DUSFC_FD', dusfc_fd,  pcols, lchnk)
+        call outfld ('DVSFC_FD', dvsfc_fd,  pcols, lchnk)
+   endif
+
    if (micro_do_icesupersat) then
      call physics_ptend_init(ptend_loc,state%psetcols, 'clubb_ice3', ls=.true., lu=.true., lv=.true., lq=lq)
    endif
@@ -1955,59 +2090,6 @@ end subroutine clubb_init_cnst
         wm_zt(k+1) = real(dum1, kind = core_rknd)
       enddo
 
-      ! ------------------------------------------------- !
-      ! Begin case specific code for SCAM cases.          !
-      ! This section of code block NOT called in          !
-      ! global simulations                                !
-      ! ------------------------------------------------- !
-
-      if (single_column) then
-
-        !  Initialize zo if variable ustar is used
-
-        if (cam_in%landfrac(i) .ge. 0.5_r8) then
-           zo = 0.035_r8
-        else
-           zo = 0.0001_r8
-        endif
-
-        !  Compute surface wind (ubar)
-        ubar = sqrt(um(i,pver)**2+vm(i,pver)**2)
-        if (ubar .lt. 0.25_r8) ubar = 0.25_r8
-
-        !  Below denotes case specifics for surface momentum
-        !  and thermodynamic fluxes, depending on the case
-
-        !  Define ustar (based on case, if not variable)
-        ustar = 0.25_r8   ! Initialize ustar in case no case
-
-        if(trim(scm_clubb_iop_name) .eq. 'BOMEX_5day') then
-           ustar = 0.28_r8
-        endif
-
-        if(trim(scm_clubb_iop_name) .eq. 'ATEX_48hr') then
-           ustar = 0.30_r8
-        endif
-
-        if(trim(scm_clubb_iop_name) .eq. 'RICO_3day') then
-           ustar = 0.28_r8
-        endif
-
-        if(trim(scm_clubb_iop_name) .eq. 'arm97' .or. trim(scm_clubb_iop_name) .eq. 'gate' .or. &
-           trim(scm_clubb_iop_name) .eq. 'toga' .or. trim(scm_clubb_iop_name) .eq. 'mpace' .or. &
-           trim(scm_clubb_iop_name) .eq. 'ARM_CC') then
-
-             dum1   = real(zt_g(2), kind = r8)
-             bflx22 = (gravit/real(theta0, kind = r8))*real(wpthlp_sfc, kind = r8)
-             ustar  = diag_ustar(dum1,bflx22,ubar,zo)
-        endif
-
-        !  Compute the surface momentum fluxes, if this is a SCAM simulation
-        upwp_sfc = -real((um(i,pver)*ustar**2/ubar), kind = core_rknd)
-        vpwp_sfc = -real((vm(i,pver)*ustar**2/ubar), kind = core_rknd)
-
-      endif
-
       !  Set stats output and increment equal to CLUBB and host dt
       stats_tsamp = dtime
       stats_tout  = hdtime_core_rknd
@@ -2036,6 +2118,15 @@ end subroutine clubb_init_cnst
 
       !  Surface fluxes provided by host model
       wpthlp_sfc = real(cam_in%shf(i), kind = core_rknd)/(real(cpair, kind = core_rknd)*rho_ds_zm(1)) ! Sensible heat flux
+#if 1
+      inv_exner_clubb_surf = 1._r8/((state1%pmid(i,pver)/p0_clubb)**(rair/cpair)) !phl Option 2
+      wpthlp_sfc = wpthlp_sfc*inv_exner_clubb_surf
+#endif
+#if 0
+      inv_exner_clubb_surf = 1._r8/((state1%pint(i,pverp)/p0_clubb)**(rair/cpair)) !Peter B option
+      wpthlp_sfc = wpthlp_sfc*inv_exner_clubb_surf
+#endif
+
       wprtp_sfc  = real(cam_in%cflx(i,1), kind = core_rknd)/rho_ds_zm(1)                              ! Latent heat flux
       upwp_sfc   = real(cam_in%wsx(i), kind = core_rknd)/rho_ds_zm(1)                                 ! Surface meridional momentum flux
       vpwp_sfc   = real(cam_in%wsy(i), kind = core_rknd)/rho_ds_zm(1)                                 ! Surface zonal momentum flux
@@ -2049,7 +2140,14 @@ end subroutine clubb_init_cnst
          dum_core_rknd = real((ksrftms(i)*state1%v(i,pver)), kind = core_rknd)
          vpwp_sfc      = vpwp_sfc-(dum_core_rknd/rho_ds_zm(1))
        endif
-
+      ! ------------------------------------------------- !
+      ! Apply TOFD
+      ! ------------------------------------------------- !
+      ! tendency is flipped already
+      if (use_od_fd) then
+        um_forcing(2:pverp)=dtaux3_fd(i,pver:1:-1)
+        vm_forcing(2:pverp)=dtauy3_fd(i,pver:1:-1)
+      endif
       !  Need to flip arrays around for CLUBB core
       do k=1,pverp
          um_in(k)      = real(um(i,pverp-k+1), kind = core_rknd)
@@ -2444,7 +2542,11 @@ end subroutine clubb_init_cnst
       wv_a = 0._r8
       wl_a = 0._r8
       do k=1,pver
+#ifdef NEWTHETAL
+         enthalpy = cpair*thlm(i,k)/exner_clubb(i,k) + latvap*rcm(i,k)
+#else
          enthalpy = cpair*((thlm(i,k)+(latvap/cpair)*rcm(i,k))/exner_clubb(i,k))
+#endif
          clubb_s(k) = enthalpy + gravit*state1%zm(i,k)+state1%phis(i)
 !         se_a(i) = se_a(i) + clubb_s(k)*state1%pdel(i,k)*invrs_gravit
          se_a(i) = se_a(i) + enthalpy * state1%pdel(i,k)*invrs_gravit
@@ -2548,6 +2650,10 @@ end subroutine clubb_init_cnst
    enddo  ! end column loop
    call t_stopf('adv_clubb_core_col_loop')
 
+
+   call outfld('fixerCLUBB', te_a(:ncol)-te_b(:ncol), ncol, lchnk )
+
+
    ! Add constant to ghost point so that output is not corrupted
    if (clubb_do_adv) then
       if (macmic_it .eq. cld_macmic_num_steps) then
@@ -2584,6 +2690,8 @@ end subroutine clubb_init_cnst
    call physics_ptend_sum(ptend_loc,ptend_all,ncol)
    call physics_update(state1,ptend_loc,hdtime)
 
+   call cnd_diag_checkpoint(diag, 'CLUBB'//char_macmic_it, state1, pbuf, cam_in, cam_out)
+
    ! ------------------------------------------------------------ !
    ! ------------------------------------------------------------ !
    ! ------------------------------------------------------------ !
@@ -2610,6 +2718,15 @@ end subroutine clubb_init_cnst
 
    call physics_ptend_init(ptend_loc,state%psetcols, 'clubb_det', ls=.true., lq=lqice)
 
+   if (zm_param%zm_microp) then
+      call pbuf_get_field(pbuf, dlfzm_idx, dlfzm)
+      call pbuf_get_field(pbuf, difzm_idx, difzm)
+      call pbuf_get_field(pbuf, dsfzm_idx, dsfzm)
+      call pbuf_get_field(pbuf, dnlfzm_idx, dnlfzm)
+      call pbuf_get_field(pbuf, dnifzm_idx, dnifzm)
+      call pbuf_get_field(pbuf, dnsfzm_idx, dnsfzm)
+   end if
+
    call t_startf('ice_cloud_detrain_diag')
    do k=1,pver
       do i=1,ncol
@@ -2623,17 +2740,29 @@ end subroutine clubb_init_cnst
             dum1 = ( clubb_tk1 - state1%t(i,k) ) /(clubb_tk1 - clubb_tk2)
          endif
 
-         ptend_loc%q(i,k,ixcldliq) = dlf(i,k) * ( 1._r8 - dum1 )
-         ptend_loc%q(i,k,ixcldice) = dlf(i,k) * dum1
-         ptend_loc%q(i,k,ixnumliq) = 3._r8 * ( max(0._r8, ( dlf(i,k) - dlf2(i,k) )) * ( 1._r8 - dum1 ) ) &
-                                     / (4._r8*3.14_r8* clubb_liq_deep**3*997._r8) + & ! Deep    Convection
-                                     3._r8 * (                         dlf2(i,k)    * ( 1._r8 - dum1 ) ) &
-                                     / (4._r8*3.14_r8*clubb_liq_sh**3*997._r8)     ! Shallow Convection
-         ptend_loc%q(i,k,ixnumice) = 3._r8 * ( max(0._r8, ( dlf(i,k) - dlf2(i,k) )) *  dum1 ) &
-                                     / (4._r8*3.14_r8*clubb_ice_deep**3*500._r8) + & ! Deep    Convection
-                                     3._r8 * (                         dlf2(i,k)    *  dum1 ) &
-                                     / (4._r8*3.14_r8*clubb_ice_sh**3*500._r8)     ! Shallow Convection
-         ptend_loc%s(i,k)          = dlf(i,k) * dum1 * latice
+         if (zm_param%zm_microp) then
+           ptend_loc%q(i,k,ixcldliq) = dlfzm(i,k) + dlf2(i,k) * ( 1._r8 - dum1 )
+           ptend_loc%q(i,k,ixcldice) = difzm(i,k) + dsfzm(i,k) +  dlf2(i,k) * dum1
+           ptend_loc%q(i,k,ixnumliq) = dnlfzm(i,k) + 3._r8 * ( dlf2(i,k) * ( 1._r8 - dum1 ) )   &
+                                                   / (4._r8*pi*clubb_liq_sh**3._r8*997._r8)      ! Shallow Convection
+           ptend_loc%q(i,k,ixnumice) = dnifzm(i,k) + dnsfzm(i,k) + 3._r8 * ( dlf2(i,k) * dum1 ) &
+                                                   / (4._r8*pi*clubb_ice_sh**3._r8*500._r8)      ! Shallow Convection
+           ptend_loc%s(i,k)          = dlf2(i,k) * dum1 * latice
+         else
+
+           ptend_loc%q(i,k,ixcldliq) = dlf(i,k) * ( 1._r8 - dum1 )
+           ptend_loc%q(i,k,ixcldice) = dlf(i,k) * dum1
+           ptend_loc%q(i,k,ixnumliq) = 3._r8 * ( max(0._r8, ( dlf(i,k) - dlf2(i,k) )) * ( 1._r8 - dum1 ) ) &
+                                       / (4._r8*3.14_r8* clubb_liq_deep**3._r8*997._r8) + & ! Deep    Convection
+                                       3._r8 * (                         dlf2(i,k)    * ( 1._r8 - dum1 ) ) &
+                                       / (4._r8*3.14_r8*clubb_liq_sh**3._r8*997._r8)     ! Shallow Convection
+           ptend_loc%q(i,k,ixnumice) = 3._r8 * ( max(0._r8, ( dlf(i,k) - dlf2(i,k) )) *  dum1 ) &
+                                       / (4._r8*3.14_r8*clubb_ice_deep**3._r8*500._r8) + & ! Deep    Convection
+                                       3._r8 * (                         dlf2(i,k)    *  dum1 ) &
+                                       / (4._r8*3.14_r8*clubb_ice_sh**3._r8*500._r8)     ! Shallow Convection
+           ptend_loc%s(i,k)          = dlf(i,k) * dum1 * latice
+
+         end if 
 
          ! Only rliq is saved from deep convection, which is the reserved liquid.  We need to keep
          !   track of the integrals of ice and static energy that is effected from conversion to ice
@@ -2653,6 +2782,7 @@ end subroutine clubb_init_cnst
 
    call physics_ptend_sum(ptend_loc,ptend_all,ncol)
    call physics_update(state1,ptend_loc,hdtime)
+   call cnd_diag_checkpoint(diag, 'CUDET'//char_macmic_it, state1, pbuf, cam_in, cam_out)
 
    ! ptend_all now has all accumulated tendencies.  Convert the tendencies for the
    ! dry constituents to dry air basis.
@@ -2811,20 +2941,6 @@ end subroutine clubb_init_cnst
       enddo
    enddo
 
-   if (single_column) then
-      if (trim(scm_clubb_iop_name) .eq. 'ATEX_48hr'       .or. &
-          trim(scm_clubb_iop_name) .eq. 'BOMEX_5day'      .or. &
-          trim(scm_clubb_iop_name) .eq. 'DYCOMSrf01_4day' .or. &
-          trim(scm_clubb_iop_name) .eq. 'DYCOMSrf02_06hr' .or. &
-          trim(scm_clubb_iop_name) .eq. 'RICO_3day'       .or. &
-          trim(scm_clubb_iop_name) .eq. 'ARM_CC') then
-
-             deepcu(:,:) = 0.0_r8
-             concld(:,:) = 0.0_r8
-
-      endif
-   endif
-
    ! --------------------------------------------------------------------------------- !
    !  COMPUTE THE ICE CLOUD FRACTION PORTION                                           !
    !  use the aist_vector function to compute the ice cloud fraction                   !
@@ -2887,6 +3003,7 @@ end subroutine clubb_init_cnst
    enddo
 
    ! diagnose surface friction and obukhov length (inputs to diagnose PBL depth)
+   kbfs = 0._r8
    do i=1,ncol
       rrho = invrs_gravit*(state1%pdel(i,pver)/dz_g(pver))
       call calc_ustar( state1%t(i,pver), state1%pmid(i,pver), cam_in%wsx(i), cam_in%wsy(i), &
@@ -2897,8 +3014,6 @@ end subroutine clubb_init_cnst
 
    dummy2(:) = 0._r8
    dummy3(:) = 0._r8
-
-   where (kbfs .eq. -0.0_r8) kbfs = 0.0_r8
 
    !  Compute PBL depth according to Holtslag-Boville Scheme
    call pblintd(ncol, thv, state1%zm, state1%u, state1%v, &
@@ -2931,12 +3046,11 @@ end subroutine clubb_init_cnst
            else
              gust_fac(i)   = gust_faco
            endif
-           vmag(i)         = max(1.e-5_r8,sqrt( umb(i)**2._r8 + vmb(i)**2._r8))
-           vmag_gust_dp(i) = ugust(min(prec_gust(i),6.94444e-4_r8),gust_fac(i)) ! Limit for the ZM gustiness equation set in Redelsperger et al. (2000)
-           vmag_gust_dp(i) = max(0._r8, vmag_gust_dp(i) )!/ vmag(i))
-           vmag_gust_cl(i) = gust_facc*(sqrt(max(0._r8,up2b(i)+vp2b(i))+vmag(i)**2._r8)-vmag(i))
-           vmag_gust_cl(i) = max(0._r8, vmag_gust_cl(i) )!/ vmag(i))
-           vmag_gust(i)    = vmag_gust_cl(i) + vmag_gust_dp(i)
+           vmag_gust_dp(i) = ugust(min(prec_gust(i),6.94444e-4_r8)) ! Limit for the ZM gustiness equation set in Redelsperger et al. (2000)
+           vmag_gust_dp(i) = max(0._r8, vmag_gust_dp(i) )
+           vmag_gust_cl(i) = sqrt(max(0._r8,up2b(i)+vp2b(i)))
+           vmag_gust(i)    = sqrt(gust_facc * vmag_gust_cl(i)**2 &
+                + gust_fac(i) * vmag_gust_dp(i)**2)
           do k=1,pver
              if (state1%zi(i,k)>pblh(i).and.state1%zi(i,k+1)<=pblh(i)) then
                 ktopi(i) = k
@@ -3047,6 +3161,8 @@ end subroutine clubb_init_cnst
 
    endif
 
+   call cnd_diag_checkpoint(diag, 'MACDIAG'//char_macmic_it, state1, pbuf, cam_in, cam_out)
+
    return
 #endif
   end subroutine clubb_tend_cam
@@ -3055,10 +3171,10 @@ end subroutine clubb_init_cnst
   !                                                                                 !
   ! =============================================================================== !
 
-    subroutine clubb_surface (state, ptend, ztodt, cam_in, ustar, obklen)
+    subroutine clubb_surface (state, cam_in, pbuf, ustar, obklen)
 
 !-------------------------------------------------------------------------------
-! Description: Provide the obukov length and the surface friction velocity
+! Description: Provide the obukhov length and the surface friction velocity
 !              for the dry deposition code in routine tphysac.  Since University
 !              of Washington Moist Turbulence (UWMT) scheme is not called when
 !              CLUBB is turned on the obukov length and ustar are never initialized
@@ -3071,14 +3187,13 @@ end subroutine clubb_init_cnst
 !   None
 !-------------------------------------------------------------------------------
 
-    use physics_types,          only: physics_state, physics_ptend, &
-                                      physics_ptend_init, &
-                                      set_dry_to_wet, set_wet_to_dry
-    use physconst,              only: gravit, zvir, latvap
+    use physics_types,          only: physics_state
+    use physconst,              only: zvir,gravit
     use ppgrid,                 only: pver, pcols
-    use constituents,           only: pcnst, cnst_get_ind, cnst_type
-    use co2_cycle,              only: co2_cycle_set_cnst_type
+    use constituents,           only: cnst_get_ind
     use camsrfexch,             only: cam_in_t
+    use hb_diff,                only: pblintd_ri
+    use physics_buffer,         only: pbuf_get_index, pbuf_get_field, physics_buffer_desc
 
     implicit none
 
@@ -3086,65 +3201,54 @@ end subroutine clubb_init_cnst
     ! Input Auguments !
     ! --------------- !
 
-    type(physics_state), intent(inout)  :: state                ! Physics state variables
-    type(cam_in_t),      intent(in)     :: cam_in
-
-    real(r8),            intent(in)     :: ztodt                ! 2 delta-t        [ s ]
+    type(physics_state),                intent(inout)  :: state ! Physics state variables
+    type(cam_in_t),                     intent(in)     :: cam_in
+    type(physics_buffer_desc), pointer, intent(in)     :: pbuf(:)
 
     ! ---------------- !
     ! Output Auguments !
     ! ---------------- !
 
-    type(physics_ptend), intent(out)    :: ptend                ! Individual parameterization tendencies
     real(r8),            intent(out)    :: obklen(pcols)        ! Obukhov length [ m ]
     real(r8),            intent(out)    :: ustar(pcols)         ! Surface friction velocity [ m/s ]
 
-#ifdef CLUBB_SGS
+#if defined(CLUBB_SGS) || defined(SHOC_SGS)
 
     ! --------------- !
     ! Local Variables !
     ! --------------- !
 
     integer :: i                                                ! indicees
+    integer :: k
     integer :: ncol                                             ! # of atmospheric columns
 
     real(r8) :: th(pcols)                                       ! surface potential temperature
     real(r8) :: thv(pcols)                                      ! surface virtual potential temperature
+    real(r8) :: th_lv(pcols,pver)                               ! level potential temperature
+    real(r8) :: thv_lv(pcols,pver)                              ! level virtual potential temperature
     real(r8) :: kinheat                                         ! kinematic surface heat flux
     real(r8) :: kinwat                                          ! kinematic surface vapor flux
     real(r8) :: kbfs                                            ! kinematic surface buoyancy flux
-    real(r8) :: tmp1(pcols)
-    real(r8) :: rztodt                                          ! 1./ztodt
-    integer  :: m
+    real(r8) :: kbfs_pcol(pcols)                                ! kinematic surface buoyancy flux stored for all pcols
     integer  :: ixq,ixcldliq !PMA fix for thv
     real(r8) :: rrho                                            ! Inverse air density
 
-    logical  :: lq(pcnst)
+    integer  :: oro_drag_ribulk_idx                             ! pbuf index of bulk richardson number for oro drag
+    real(r8), pointer :: oro_drag_ribulk(:)                     ! pbuf pointer for bulk richardson number
 
-    character(len=3), dimension(pcnst) :: cnst_type_loc         ! local override option for constituents cnst_type
 
 #endif
     obklen(pcols) = 0.0_r8
     ustar(pcols)  = 0.0_r8
-#ifdef CLUBB_SGS
+#if defined(CLUBB_SGS) || defined(SHOC_SGS)
 
     ! ----------------------- !
     ! Main Computation Begins !
     ! ----------------------- !
-
-    ! Assume 'wet' mixing ratios in surface diffusion code.
-    ! don't convert co2 tracers to wet mixing ratios
-    cnst_type_loc(:) = cnst_type(:)
-    call co2_cycle_set_cnst_type(cnst_type_loc, 'wet')
-    call set_dry_to_wet(state, cnst_type_loc)
-
     call cnst_get_ind('Q',ixq)
     if (use_sgv) then
        call cnst_get_ind('CLDLIQ',ixcldliq)
     endif
-
-    lq(:) = .TRUE.
-    call physics_ptend_init(ptend, state%psetcols, 'clubb_srf', lq=lq)
 
     ncol = state%ncol
 
@@ -3167,27 +3271,42 @@ end subroutine clubb_init_cnst
                         kinheat, kinwat, kbfs, obklen(i) )
     enddo
 
-    rztodt                 = 1._r8/ztodt
-    ptend%q(:ncol,:pver,:) = state%q(:ncol,:pver,:)
-    tmp1(:ncol)            = ztodt * gravit * state%rpdel(:ncol,pver)
+    if (use_od_ss) then
+      !add calculation of bulk richardson number here
+      !compute the whole level th and thv for diagnose of bulk richardson number
+      thv_lv=0.0_r8
+      th_lv =0.0_r8
 
-    do m = 2, pcnst
-      ptend%q(:ncol,pver,m) = ptend%q(:ncol,pver,m) + tmp1(:ncol) * cam_in%cflx(:ncol,m)
-    enddo
+      !use the same virtual potential temperature formula as above (thv) except for all vertical levels
+      !used for bulk richardson number below in pblintd_ri
+      do i=1,ncol
+        do k=1,pver
+          th_lv(i,k) = state%t(i,k)*state%exner(i,k)
+            if (use_sgv) then
+              thv_lv(i,k) = th_lv(i,k)*(1.0_r8+zvir*state%q(i,k,ixq) &
+                            - state%q(i,k,ixcldliq))  
+            else
+              thv_lv(i,k) = th_lv(i,k)*(1.0_r8+zvir*state%q(i,k,ixq))
+            end if
+        enddo
+      enddo
 
-    ptend%q(:ncol,:pver,:) = (ptend%q(:ncol,:pver,:) - state%q(:ncol,:pver,:)) * rztodt
+      !recalculate the kbfs stored in kbfs_pcol for bulk richardson number in pblintd_ri
+      kbfs_pcol=0.0_r8
+      do i=1,ncol
+        call calc_ustar( state%t(i,pver), state%pmid(i,pver), cam_in%wsx(i), cam_in%wsy(i), rrho, ustar(i) )
+        call calc_obklen( th(i), thv(i), cam_in%cflx(i,1), cam_in%shf(i), rrho, ustar(i), &
+                        kinheat, kinwat, kbfs, obklen(i) )
+        kbfs_pcol(i)=kbfs
+      enddo
 
-    ! Convert tendencies of dry constituents to dry basis.
-    do m = 1,pcnst
-       if (cnst_type(m).eq.'dry') then
-          ptend%q(:ncol,:pver,m) = ptend%q(:ncol,:pver,m)*state%pdel(:ncol,:pver)/state%pdeldry(:ncol,:pver)
-       endif
-    end do
-    ! convert wet mmr back to dry before conservation check
-    ! avoid converting co2 tracers again
-    cnst_type_loc(:) = cnst_type(:)
-    call co2_cycle_set_cnst_type(cnst_type_loc, 'wet')
-    call set_wet_to_dry(state, cnst_type_loc)
+      oro_drag_ribulk_idx = pbuf_get_index('oro_drag_ribulk')
+      call pbuf_get_field(pbuf, oro_drag_ribulk_idx, oro_drag_ribulk)
+
+      !calculate the bulk richardson number
+      call pblintd_ri(ncol, gravit, thv_lv, state%zm, state%u, state%v, &
+                      ustar, obklen, kbfs_pcol, oro_drag_ribulk)
+    endif
 
     return
 

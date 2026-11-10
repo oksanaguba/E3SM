@@ -90,6 +90,7 @@ module seq_timemgr_mod
   !      seq_timemgr_clock_ice
   !      seq_timemgr_clock_glc
   !      seq_timemgr_clock_wav
+  !      seq_timemgr_clock_iac
   !      seq_timemgr_clock_esp
 
   !  alarmnames:
@@ -107,6 +108,7 @@ module seq_timemgr_mod
   !      seq_timemgr_alarm_glcrun
   !      seq_timemgr_alarm_glcrun_avg
   !      seq_timemgr_alarm_wavrun
+  !      seq_timemgr_alarm_iacrun
   !      seq_timemgr_alarm_esprun
   !      seq_timemgr_alarm_ocnnext
   !      seq_timemgr_alarm_tprof
@@ -166,6 +168,7 @@ module seq_timemgr_mod
        seq_timemgr_clock_glc  = 'seq_timemgr_clock_glc' , &
        seq_timemgr_clock_wav  = 'seq_timemgr_clock_wav' , &
        seq_timemgr_clock_rof  = 'seq_timemgr_clock_rof' , &
+       seq_timemgr_clock_iac  = 'seq_timemgr_clock_iac' , &
        seq_timemgr_clock_esp  = 'seq_timemgr_clock_esp'
   character(len=8),private,parameter :: seq_timemgr_clocks(max_clocks) = &
        (/'drv     ','atm     ','lnd     ','ocn     ', &
@@ -191,9 +194,10 @@ module seq_timemgr_mod
        seq_timemgr_nalarm_rofrun     =15 , & ! driver only clock alarm
        seq_timemgr_nalarm_wavrun     =16 , & ! driver only clock alarm
        seq_timemgr_nalarm_iacrun     =17 , & ! driver only clock alarm
-       seq_timemgr_nalarm_esprun     =18 , & ! driver only clock alarm
-       seq_timemgr_nalarm_pause      =19 , &
-       seq_timemgr_nalarm_barrier    =20 , & ! driver and component clock alarm
+       seq_timemgr_nalarm_iacrun_avg =18 , & ! driver only clock alarm
+       seq_timemgr_nalarm_esprun     =19 , & ! driver only clock alarm
+       seq_timemgr_nalarm_pause      =20 , &
+       seq_timemgr_nalarm_barrier    =21 , & ! driver and component clock alarm
        max_alarms = seq_timemgr_nalarm_barrier
 
   character(len=*),public,parameter :: &
@@ -214,6 +218,7 @@ module seq_timemgr_mod
        seq_timemgr_alarm_rofrun     = 'seq_timemgr_alarm_rofrun  ', &
        seq_timemgr_alarm_wavrun     = 'seq_timemgr_alarm_wavrun  ', &
        seq_timemgr_alarm_iacrun     = 'seq_timemgr_alarm_iacrun  ', &
+       seq_timemgr_alarm_iacrun_avg = 'seq_timemgr_alarm_iacrun_avg ', &
        seq_timemgr_alarm_esprun     = 'seq_timemgr_alarm_esprun  ', &
        seq_timemgr_alarm_pause      = 'seq_timemgr_alarm_pause   ', &
        seq_timemgr_alarm_barrier    = 'seq_timemgr_alarm_barrier '
@@ -300,6 +305,8 @@ contains
     type(ESMF_TimeInterval)     :: TimeStep           ! Clock time-step
     type(ESMF_TimeInterval)     :: cplTimeStep           ! Clock time-step
     type(ESMF_CalKind_Flag)     :: esmf_caltype       ! local esmf calendar
+    type(ESMF_Time)             :: EhcRefTime         ! Clock time-step for adjusting EHC alarm reference time
+    type(ESMF_Time)             :: ComRefTime         ! Clock reference time for common alarms
     integer                     :: rc                 ! Return code
     integer                     :: n, i               ! index
     integer                     :: min_dt             ! smallest time step
@@ -369,6 +376,8 @@ contains
     integer(SHR_KIND_IN)    :: wav_cpl_dt            ! Wav coupling interval
     integer(SHR_KIND_IN)    :: iac_cpl_dt            ! Iac coupling interval
     integer(SHR_KIND_IN)    :: esp_cpl_dt            ! Esp coupling interval
+    integer(SHR_KIND_IN)    :: min_cpl_dt            ! Smallest component coupling interval (s)
+    integer(SHR_KIND_IN)    :: histavg_dt           ! Histavg interval in seconds
     integer(SHR_KIND_IN)    :: atm_cpl_offset        ! Atmosphere coupling interval
     integer(SHR_KIND_IN)    :: lnd_cpl_offset        ! Land coupling interval
     integer(SHR_KIND_IN)    :: ice_cpl_offset        ! Sea-Ice coupling interval
@@ -381,6 +390,9 @@ contains
     logical                 :: esp_run_on_pause      ! Run ESP on pause cycle
     logical                 :: end_restart           ! Write restart at end of run
     integer(SHR_KIND_IN)    :: ierr                  ! Return code
+    integer(SHR_KIND_IN)    :: curr_yr               ! Current year
+    integer(SHR_KIND_IN)    :: curr_mon              ! Current month
+    integer(SHR_KIND_IN)    :: curr_day              ! Current day in month
 
     character(len=*), parameter ::  F0A = "(2A,A)"
     character(len=*), parameter ::  F0I = "(2A,I10)"
@@ -701,6 +713,41 @@ contains
           call shr_sys_abort( subname//': ERROR invalid start_ymd')
        end if
 
+       ! --- Histavg period vs coupling period ---------------------------------
+       ! The coupler average-history averaging period must not be smaller than
+       ! the smallest component coupling period.  Otherwise an averaging window
+       ! can close before some components have coupled even once, leaving their
+       ! fields unset and producing wrong averages for that window.
+       min_cpl_dt = min(atm_cpl_dt, lnd_cpl_dt, ice_cpl_dt, ocn_cpl_dt, &
+            glc_cpl_dt, rof_cpl_dt, wav_cpl_dt, esp_cpl_dt, iac_cpl_dt)
+
+       ! Convert the absolute-time averaging options to seconds so they can be
+       ! compared with the coupling period.  nsteps averaging is always a whole
+       ! number of driver steps (>= the smallest coupling period), and
+       ! nmonth/nyear are always larger, so those need no check.  never/none/
+       ! other/date do no fixed-length averaging that can be compared here.
+       histavg_dt = -1
+       if ( trim(histavg_option) == trim(seq_timemgr_optNSeconds) .or. &
+            trim(histavg_option) == trim(seq_timemgr_optNSecond) ) then
+          histavg_dt = histavg_n
+       elseif ( trim(histavg_option) == trim(seq_timemgr_optNMinutes) .or. &
+            trim(histavg_option) == trim(seq_timemgr_optNMinute) ) then
+          histavg_dt = histavg_n * 60
+       elseif ( trim(histavg_option) == trim(seq_timemgr_optNHours) .or. &
+            trim(histavg_option) == trim(seq_timemgr_optNHour) ) then
+          histavg_dt = histavg_n * 3600
+       elseif ( trim(histavg_option) == trim(seq_timemgr_optNDays) .or. &
+            trim(histavg_option) == trim(seq_timemgr_optNDay) ) then
+          histavg_dt = histavg_n * 86400
+       end if
+
+       if ( histavg_dt > 0 .and. histavg_dt < min_cpl_dt ) then
+          write(logunit,*) trim(subname),' ERROR: histavg period (', histavg_dt, &
+               ' s) is smaller than the smallest coupling period (', min_cpl_dt, ' s)'
+          call shr_sys_abort( subname// &
+               ': ERROR histavg period must not be smaller than the smallest coupling period' )
+       end if
+
     endif
 
     !---------------------------------------------------------------------------
@@ -900,7 +947,16 @@ contains
     end if
 
     ! --- Initialize component and driver clocks and alarms common to components and driver clocks ---
-    call ESMF_TimeIntervalSet( CplTimeStep, s=dtime(seq_timemgr_nclock_drv), rc=rc )
+    call ESMF_TimeIntervalSet( cplTimeStep, s=dtime(seq_timemgr_nclock_drv), rc=rc )
+    call shr_cal_date2ymd(curr_ymd, curr_yr, curr_mon, curr_day)
+
+    ! the ehc run alarm is always on the first day of the year in the first coupler run interval
+    ! note that seq_timemgr_alarmInit() sets the first alarm date after the current driver time, based on the RefTime and the component interval
+    if (curr_mon == 1 .and. curr_day == 1 .and. curr_tod == 0) then
+         EhcRefTime = CurrTime + cplTimeStep
+    else
+         call ESMF_TimeSet( EhcRefTime , yy=curr_yr, mm=1, dd=1, s=dtime(seq_timemgr_nclock_drv), calendar=seq_timemgr_cal, rc=rc )
+    end if
     do n = 1,max_clocks
        call ESMF_TimeIntervalSet( TimeStep, s=dtime(n), rc=rc )
 
@@ -908,11 +964,19 @@ contains
 
        call seq_timemgr_EClockInit( TimeStep, StartTime, RefTime, CurrTime, SyncClock%ECP(n)%EClock)
 
+       ! the ehc run alarm is always on the first day of the year in the first coupler run interval
+       ! note that seq_timemgr_alarmInit() sets the first alarm date after the current driver time, based on the RefTime and the component interval
+       if (n == seq_timemgr_nclock_iac) then
+            ComRefTime = EhcRefTime
+       else
+            ComRefTime = CurrTime
+       end if
+
        call seq_timemgr_alarmInit(SyncClock%ECP(n)%EClock, &
             EAlarm  = SyncClock%EAlarm(n,seq_timemgr_nalarm_run),  &
             option  = seq_timemgr_optNSeconds, &
             opt_n   = dtime(n),                &
-            RefTime = CurrTime,                &
+            RefTime = ComRefTime,                &
             alarmname = trim(seq_timemgr_alarm_run))
 
        call seq_timemgr_alarmInit(SyncClock%ECP(n)%EClock, &
@@ -921,7 +985,7 @@ contains
             opt_n   = stop_n,              &
             opt_ymd = stop_ymd,            &
             opt_tod = stop_tod,            &
-            RefTime = CurrTime,            &
+            RefTime = ComRefTime,            &
             cplTimeStep = cplTimeStep, &
             alarmname = trim(seq_timemgr_alarm_stop))
 
@@ -938,7 +1002,7 @@ contains
             option  = restart_option,      &
             opt_n   = restart_n,           &
             opt_ymd = restart_ymd,         &
-            RefTime = CurrTime,            &
+            RefTime = ComRefTime,            &
             cplTimeStep = cplTimeStep, &
             alarmname = trim(seq_timemgr_alarm_restart))
 
@@ -965,7 +1029,7 @@ contains
             option  = barrier_option,      &
             opt_n   = barrier_n,           &
             opt_ymd = barrier_ymd,         &
-            RefTime = CurrTime,            &
+            RefTime = ComRefTime,            &
             cplTimeStep = cplTimeStep, &
             alarmname = trim(seq_timemgr_alarm_barrier))
 
@@ -999,7 +1063,7 @@ contains
                EAlarm  = SyncClock%EAlarm(n,seq_timemgr_nalarm_pause),         &
                option  = pause_option,                                         &
                opt_n   = pause_n,                                              &
-               RefTime = CurrTime,                                             &
+               RefTime = ComRefTime,                                             &
                alarmname = trim(seq_timemgr_alarm_pause))
        else
           call seq_timemgr_alarmInit(SyncClock%ECP(n)%EClock,                  &
@@ -1114,14 +1178,27 @@ contains
          RefTime = OffsetTime,                    &
          alarmname = trim(seq_timemgr_alarm_wavrun))
 
-    call ESMF_TimeIntervalSet( TimeStep, s=offset(seq_timemgr_nclock_iac), rc=rc )
-    OffsetTime = CurrTime + TimeStep
+    ! the ehc run alarm is always on the first day of the year in the first coupler run interval
+    ! note that seq_timemgr_alarmInit() sets the first alarm date after the current driver time, based on the RefTime and the component interval
     call seq_timemgr_alarmInit(SyncClock%ECP(seq_timemgr_nclock_drv)%EClock, &
        EAlarm  = SyncClock%EAlarm(seq_timemgr_nclock_drv,seq_timemgr_nalarm_iacrun),  &
        option  = seq_timemgr_optNSeconds,       &
        opt_n   = dtime(seq_timemgr_nclock_iac), &
-       RefTime = OffsetTime,                    &
+       RefTime = EhcRefTime,                    &
        alarmname = trim(seq_timemgr_alarm_iacrun))
+    ! Now call the average in the first coupler run interval on the first day every five years
+    !    which is right before running the iac
+    if (curr_mon == 1 .and. curr_day == 1 .and. curr_tod == 0 .and. mod(curr_yr,5) == 0) then
+         EhcRefTime = CurrTime + cplTimeStep
+    else
+         call ESMF_TimeSet( EhcRefTime , yy=curr_yr - mod(curr_yr,5), mm=1, dd=1, s=dtime(seq_timemgr_nclock_drv), calendar=seq_timemgr_cal, rc=rc )
+    end if
+    call seq_timemgr_alarmInit(SyncClock%ECP(seq_timemgr_nclock_drv)%EClock, &
+         EAlarm  = SyncClock%EAlarm(seq_timemgr_nclock_drv,seq_timemgr_nalarm_iacrun_avg),  &
+         option  = seq_timemgr_optNSeconds,         &
+         opt_n   = 5*dtime(seq_timemgr_nclock_iac), &
+         RefTime = EhcRefTime,                    &
+         alarmname = trim(seq_timemgr_alarm_iacrun_avg))
 
     call ESMF_TimeIntervalSet( TimeStep, s=offset(seq_timemgr_nclock_glc), rc=rc )
     OffsetTime = CurrTime + TimeStep
@@ -1430,6 +1507,8 @@ contains
        call ESMF_ClockAdvance(SyncClock%ECP(seq_timemgr_nclock_wav)%EClock, rc=rc )
        call seq_timemgr_ESMFCodeCheck(rc, msg=subname//"Error from wav ESMF_ClockAdvance")
     endif
+
+    ! iac clock is advance by the iac component
 
     if (ESMF_AlarmIsRinging(SyncClock%EAlarm(seq_timemgr_nclock_drv,seq_timemgr_nalarm_esprun))) then
        call ESMF_ClockAdvance(SyncClock%ECP(seq_timemgr_nclock_esp)%EClock, rc=rc )

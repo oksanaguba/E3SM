@@ -131,7 +131,7 @@ real constexpr SHR_CONST_SDAY    = 86164.0;      // sec in siderial day ~ sec
 real constexpr SHR_CONST_OMEGA   = 2.0*SHR_CONST_PI/SHR_CONST_SDAY; // earth rot ~ rad/sec
 real constexpr SHR_CONST_REARTH  = 6.37122e6  ;  // radius of earth ~ m
 real constexpr SHR_CONST_G       = 9.80616    ;  // acceleration of gravity ~ m/s^2
-real constexpr SHR_CONST_STEBOL  = 5.67e-8    ;  // Stefan-Boltzmann constant ~ W/m^2/K^4
+real constexpr SHR_CONST_STEBOL  = 5.670374419e-8    ;  // Stefan-Boltzmann constant ~ W/m^2/K^4
 real constexpr SHR_CONST_BOLTZ   = 1.38065e-23;  // Boltzmann's constant ~ J/K/molecule
 real constexpr SHR_CONST_AVOGAD  = 6.02214e26 ;  // Avogadro's number ~ molecules/kmole
 real constexpr SHR_CONST_RGAS    = SHR_CONST_AVOGAD*SHR_CONST_BOLTZ;       // Universal gas constant ~ J/K/kmole
@@ -209,8 +209,6 @@ int  constexpr index_cloud_ice = 0;
 real constexpr rhor = 1000.; // Density of water, kg/m3
 real constexpr rhos = 100.;  // Density of snow, kg/m3
 real constexpr rhog = 400.;  // Density of graupel, kg/m3
-real constexpr tbgmin = 253.16;    // Minimum temperature for cloud water., K
-real constexpr tbgmax = 273.16;    // Maximum temperature for cloud ice, K
 real constexpr tprmin = 268.16;    // Minimum temperature for rain, K
 real constexpr tprmax = 283.16;    // Maximum temperature for snow+graupel, K
 real constexpr tgrmin = 223.16;    // Minimum temperature for snow, K
@@ -231,10 +229,37 @@ real constexpr nzeros = 3.e6;   // Intersept coeff. for snow
 real constexpr nzerog = 4.e6;   // Intersept coeff. for graupel
 real constexpr qp_threshold = 1.e-8; // minimal rain/snow water content
 
-real constexpr qcw0 = 1.e-3;
-real constexpr qci0 = 1.e-4;
 real constexpr alphaelq = 1.e-3;
 real constexpr betaelq = 1.e-3;
+
+//------------------------------------------------------------------------------
+// MMF climate tuning parameters
+//------------------------------------------------------------------------------
+#ifdef MMF_TMN
+real constexpr tbgmin = MMF_TMN;
+#else
+real constexpr tbgmin = 253.16; // Min temperature for cloud liq, K
+#endif
+
+#ifdef MMF_TMX
+real constexpr tbgmax = MMF_TMX;
+#else
+real constexpr tbgmax = 273.16; // Max temperature for cloud ice, K
+#endif
+
+#ifdef MMF_QCW
+real constexpr qcw0 = MMF_QCW;
+#else
+real constexpr qcw0 = 1.e-3;    // liq autoconversion threshold
+#endif
+
+#ifdef MMF_QCI
+real constexpr qci0 = MMF_QCI;
+#else
+real constexpr qci0 = 1.e-4;    // ice autoconversion threshold
+#endif
+//------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 
 real constexpr crm_accel_coef = 1.0/( (real) nx * (real) ny );
 

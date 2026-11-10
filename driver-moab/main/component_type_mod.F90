@@ -12,7 +12,7 @@ module component_type_mod
   use seq_comm_mct     , only: seq_comm_namelen
   use seq_comm_mct     , only: num_inst_atm, num_inst_lnd, num_inst_rof
   use seq_comm_mct     , only: num_inst_ocn, num_inst_ice, num_inst_glc
-  use seq_comm_mct     , only: num_inst_wav, num_inst_esp
+  use seq_comm_mct     , only: num_inst_wav, num_inst_esp, num_inst_iac
   use mct_mod
 
   implicit none
@@ -48,6 +48,7 @@ module component_type_mod
   public :: component_get_name
   public :: component_get_suffix
   public :: component_get_iamin_compid
+  public :: component_get_mbGridType
 
   !--------------------------------------------------------------------------
   ! Public data
@@ -72,6 +73,9 @@ module component_type_mod
      type(mct_aVect) , pointer       :: c2x_cc      => null()
      real(r8)        , pointer       :: drv2mdl(:)  => null() ! area correction factors
      real(r8)        , pointer       :: mdl2drv(:)  => null() ! area correction factors
+     integer                         :: mbApCCid ! moab app id on component side
+     integer                         :: mbGridType ! 0 for PC, 1 for cell (ocean, ice)
+     integer                         :: mblsize    ! size of local arrays
      !
      ! Union of coupler/component pes - used by exchange routines
      !
@@ -86,14 +90,12 @@ module component_type_mod
      integer                         :: mpicom_compid
      integer                         :: mpicom_cplcompid
      integer                         :: mpicom_cplallcompid
-     integer                         :: mbcpid
      logical                         :: iamin_compid
      logical                         :: iamin_cplcompid
      logical                         :: iamin_cplallcompid
      logical                         :: iamroot_compid
      logical                         :: present ! true => component is present and not stub
      integer                         :: nthreads_compid
-     integer                         :: instn
      character(len=CL)               :: suffix
      character(len=1)                :: oneletterid
      character(len=3)                :: ntype
@@ -114,8 +116,9 @@ module component_type_mod
   type(component_type), target :: glc(num_inst_glc)
   type(component_type), target :: wav(num_inst_wav)
   type(component_type), target :: esp(num_inst_esp)
+  type(component_type), target :: iac(num_inst_iac)
 
-  public :: atm, lnd, rof, ocn, ice, glc, wav, esp
+  public :: atm, lnd, rof, ocn, ice, glc, wav, esp, iac
 
   !===============================================================================
 
@@ -227,6 +230,12 @@ contains
     component_get_mapper_Cx2c => comp%mapper_Cx2c
   end function component_get_mapper_Cx2c
 
+  function component_get_mbGridType(comp)
+    type(component_type), intent(in), target :: comp
+    integer :: component_get_mbGridType
+    component_get_mbGridType = comp%mbGridType
+  end function component_get_mbGridType
+
   subroutine check_fields(comp, comp_index)
     use shr_infnan_mod, only: shr_infnan_isnan
     use mct_mod, only: mct_avect_getrlist2c, mct_gsMap_orderedPoints
@@ -247,6 +256,7 @@ contains
        ! c2x_cc is allocated even if not used such as in stub models
        ! do not test this case.
        if(lsize <= 1 .and. nflds <= 1) return
+#ifndef CPRFJ
        if(any(shr_infnan_isnan(comp%c2x_cc%rattr))) then
           do fld=1,nflds
              do n=1,lsize
@@ -260,6 +270,7 @@ contains
              enddo
           enddo
        endif
+#endif
     endif
   end subroutine check_fields
 

@@ -9,9 +9,7 @@ use shr_kind_mod,    only: r8 => shr_kind_r8
 use ppgrid,          only: pcols, pver, pverp
 use cam_abortutils,      only: endrun
 use cam_history,     only: outfld
-use scamMod,         only: single_column,scm_crm_mode,have_asdir, &
-                           asdirobs, have_asdif, asdifobs, have_aldir, &
-                           aldirobs, have_aldif, aldifobs
+use iop_data_mod,    only: single_column
 use cam_logfile,     only: iulog
 use parrrsw,         only: nbndsw, ngptsw
 use rrtmg_sw_init,   only: rrtmg_sw_ini
@@ -43,7 +41,7 @@ subroutine rad_rrtmg_sw(lchnk,ncol       ,rrtmg_levs   ,r_state      , &
                     E_pmid   ,E_cld      ,                             &
                     E_aer_tau,E_aer_tau_w,E_aer_tau_w_g,E_aer_tau_w_f, &
                     eccf     ,E_coszrs   ,solin        ,sfac         , &
-                    E_asdir  ,E_asdif    ,E_aldir      ,E_aldif      , &
+                    E_asdir  ,E_asdif    ,E_aldir      ,E_aldif,   vis_frc, &
                     qrs      ,qrsc       ,fsnt         ,fsntc        ,fsntoa,fsutoa, &
                     fsntoac  ,fsnirtoa   ,fsnrtoac     ,fsnrtoaq     ,fsns    , &
                     fsnsc    ,fsdsc      ,fsds         ,sols         ,soll    , &
@@ -124,6 +122,8 @@ subroutine rad_rrtmg_sw(lchnk,ncol       ,rrtmg_levs   ,r_state      , &
    real(r8), intent(in) :: E_aldir(pcols)     ! 0.7-5.0 micro-meter srfc alb: direct rad
    real(r8), intent(in) :: E_asdif(pcols)     ! 0.2-0.7 micro-meter srfc alb: diffuse rad
    real(r8), intent(in) :: E_aldif(pcols)     ! 0.7-5.0 micro-meter srfc alb: diffuse rad
+   real(r8), intent(in) :: vis_frc            ! Fraction of surface insolation blueward of 0.7microns
+                                              ! in rrtmg_sw split band 
    real(r8), intent(in) :: sfac(nbndsw)            ! factor to account for solar variability in each band 
    integer,  intent(inout) :: clm_rand_seed(pcols,4)            ! rand # seeds for sw
 
@@ -308,12 +308,6 @@ subroutine rad_rrtmg_sw(lchnk,ncol       ,rrtmg_levs   ,r_state      , &
    qrsc(1:ncol,1:pver) = 0.0_r8
    fns(1:ncol,1:pverp) = 0.0_r8
    fcns(1:ncol,1:pverp) = 0.0_r8
-   if (single_column.and.scm_crm_mode) then 
-      fus(1:ncol,1:pverp) = 0.0_r8
-      fds(1:ncol,1:pverp) = 0.0_r8
-      fusc(:ncol,:pverp) = 0.0_r8
-      fdsc(:ncol,:pverp) = 0.0_r8
-   endif
 
    if (associated(su)) su(1:ncol,:,:) = 0.0_r8
    if (associated(sd)) sd(1:ncol,:,:) = 0.0_r8
@@ -382,14 +376,6 @@ subroutine rad_rrtmg_sw(lchnk,ncol       ,rrtmg_levs   ,r_state      , &
          enddo
       enddo
    enddo
-
-   if (scm_crm_mode) then
-      ! overwrite albedos for CRM
-      if(have_asdir) asdir = asdirobs(1)
-      if(have_asdif) asdif = asdifobs(1)
-      if(have_aldir) aldir = aldirobs(1)
-      if(have_aldif) aldif = aldifobs(1)
-   endif
 
    ! Define solar incident radiation
    do i = 1, Nday
@@ -538,7 +524,7 @@ subroutine rad_rrtmg_sw(lchnk,ncol       ,rrtmg_levs   ,r_state      , &
    call rrtmg_sw(lchnk, Nday, rrtmg_levs, icld,         &
                  pmidmb, pintmb, tlay, tlev, tsfc, &
                  h2ovmr, o3vmr, co2vmr, ch4vmr, o2vmr, n2ovmr, &
-                 asdir, asdif, aldir, aldif, &
+                 asdir, asdif, aldir, aldif, vis_frc, &
                  coszrs, eccf, dyofyr, solvar, &
                  inflgsw, iceflgsw, liqflgsw, &
                  cld_stosw, tauc_stosw, ssac_stosw, asmc_stosw, fsfc_stosw, &
@@ -647,19 +633,6 @@ subroutine rad_rrtmg_sw(lchnk,ncol       ,rrtmg_levs   ,r_state      , &
    if (associated(sd)) then
       call ExpDayNite(sd,	Nday, IdxDay, Nnite, IdxNite, 1, pcols, 1, pverp, 1, nbndsw)
    end if
-
-   !  these outfld calls don't work for spmd only outfield in scm mode (nonspmd)
-   if (single_column .and. scm_crm_mode) then 
-      ! Following outputs added for CRM
-      call ExpDayNite(fus,Nday, IdxDay, Nnite, IdxNite, 1, pcols, 1, pverp)
-      call ExpDayNite(fds,Nday, IdxDay, Nnite, IdxNite, 1, pcols, 1, pverp)
-      call ExpDayNite(fusc,Nday, IdxDay, Nnite, IdxNite, 1, pcols, 1, pverp)
-      call ExpDayNite(fdsc,Nday, IdxDay, Nnite, IdxNite, 1, pcols, 1, pverp)
-      call outfld('FUS     ',fus * 1.e-3_r8 ,pcols,lchnk)
-      call outfld('FDS     ',fds * 1.e-3_r8 ,pcols,lchnk)
-      call outfld('FUSC    ',fusc,pcols,lchnk)
-      call outfld('FDSC    ',fdsc,pcols,lchnk)
-   endif
 
 end subroutine rad_rrtmg_sw
 

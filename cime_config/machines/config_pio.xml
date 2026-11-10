@@ -62,10 +62,9 @@
       <value mach="lawrencium-lr6">netcdf</value>
 	  <value mach="eddi">netcdf</value>
       <value mach="cades">netcdf</value>
-      <value mach="grizzly">netcdf</value>
-      <value mach="badger">netcdf</value>
+      <value mach="cades-baseline">netcdf</value>
       <value mach="chicoma-cpu">netcdf</value>
-      <value mach="bebop" mpilib="impi" compset=".*CAM5.+MPAS.*">netcdf</value>
+      <value mach="chicoma-gpu">netcdf</value>
       <value mach="fugaku" compiler="gnu">netcdf</value>
     </values>
   </entry>
@@ -161,7 +160,6 @@
 
   <entry id="LND_PIO_TYPENAME">
     <values>
-      <value mach="bebop" compset=".*CLM45.+MALI%SIA.*">netcdf</value>
       <value mach="compy" compset=".*DLND.*">netcdf</value>
     </values>
   </entry>
@@ -276,11 +274,13 @@
     </values>
   </entry-->
 
-  <!--entry id="CPL_PIO_TYPENAME">
+  <entry id="CPL_PIO_TYPENAME">
     <values>
-      <value></value>
+      <value mach="onyx">netcdf</value>
+      <value mach="narwhal">netcdf</value>
+      <value mach="warhawk">netcdf</value>
     </values>
-  </entry-->
+  </entry>
 
   <!--- uncomment and fill in relevant sections
   <entry id="GLC_PIO_STRIDE">

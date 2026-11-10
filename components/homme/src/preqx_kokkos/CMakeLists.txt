@@ -14,14 +14,9 @@ MACRO(PREQX_KOKKOS_SETUP)
   SET(TRILINOS_ZOLTAN_DIR   ${HOMME_SOURCE_DIR}/src/zoltan)
   SET(TEST_SRC_DIR          ${HOMME_SOURCE_DIR}/src/test_src)
 
-  SET(UTILS_TIMING_SRC_DIR  ${HOMME_SOURCE_DIR}/utils/cime/CIME/non_py/src/timing)
-  SET(UTILS_TIMING_DIR      ${HOMME_BINARY_DIR}/utils/cime/CIME/non_py/src/timing)
-
   # Make INCLUDE_DIRS global so the tests can access it
   SET (EXEC_LIB_INCLUDE_DIRS
     ${TARGET_DIR}/cxx
-    ${UTILS_TIMING_DIR}
-    ${UTILS_TIMING_SRC_DIR}
     ${PREQX_SHARE_DIR}
     ${SRC_SHARE_DIR}/cxx
     ${HOMME_BINARY_DIR}/src/share/cxx
@@ -33,9 +28,6 @@ MACRO(PREQX_KOKKOS_SETUP)
   )
 
   SET (TARGET_F90
-    ${TARGET_DIR}/bndry_mod.F90
-    ${TARGET_DIR}/derivative_mod.F90
-    ${TARGET_DIR}/edge_mod.F90
     ${TARGET_DIR}/element_state.F90
     ${TARGET_DIR}/model_init_mod.F90
     ${TARGET_DIR}/prim_advection_mod.F90
@@ -50,16 +42,16 @@ MACRO(PREQX_KOKKOS_SETUP)
   )
 
   SET (SRC_SHARE_F90
-    ${SRC_SHARE_DIR}/bndry_mod_base.F90
+    ${SRC_SHARE_DIR}/bndry_mod.F90
     ${SRC_SHARE_DIR}/cg_mod.F90
     ${SRC_SHARE_DIR}/control_mod.F90
     ${SRC_SHARE_DIR}/coordinate_systems_mod.F90
     ${SRC_SHARE_DIR}/cube_mod.F90
-    ${SRC_SHARE_DIR}/derivative_mod_base.F90
+    ${SRC_SHARE_DIR}/derivative_mod.F90
     ${SRC_SHARE_DIR}/dimensions_mod.F90
     ${SRC_SHARE_DIR}/dof_mod.F90
     ${SRC_SHARE_DIR}/domain_mod.F90
-    ${SRC_SHARE_DIR}/edge_mod_base.F90
+    ${SRC_SHARE_DIR}/edge_mod.F90
     ${SRC_SHARE_DIR}/edgetype_mod.F90
     ${SRC_SHARE_DIR}/element_mod.F90
     ${SRC_SHARE_DIR}/gllfvremap_mod.F90
@@ -105,6 +97,7 @@ MACRO(PREQX_KOKKOS_SETUP)
     ${SRC_SHARE_DIR}/cxx/prim_cxx_driver_base.F90
     ${SRC_SHARE_DIR}/cxx/utilities/bfb_mod.F90
     ${SRC_SHARE_DIR}/planar_mod.F90
+    ${TEST_SRC_DIR}/planar_transport.F90
     ${SRC_SHARE_DIR}/geometry_mod.F90
     ${SRC_SHARE_DIR}/planar_mesh_mod.F90
   )
@@ -115,7 +108,7 @@ MACRO(PREQX_KOKKOS_SETUP)
     ${TEST_SRC_DIR}/dcmip12_wrapper.F90
     ${TEST_SRC_DIR}/dcmip16_wrapper.F90
     ${TEST_SRC_DIR}/dcmip2012_test1_2_3.F90
-    ${TEST_SRC_DIR}/dcmip2012_test1_conv.F90
+    ${TEST_SRC_DIR}/dcmip2012_test1_conv_mod.F90
     ${TEST_SRC_DIR}/dcmip2012_test4.F90
     ${TEST_SRC_DIR}/dcmip2012_test5.F90
     ${TEST_SRC_DIR}/dcmip2016-baroclinic.F90
@@ -168,6 +161,8 @@ MACRO(PREQX_KOKKOS_SETUP)
     ${SRC_SHARE_DIR}/cxx/EulerStepFunctor.cpp
     ${SRC_SHARE_DIR}/cxx/ExecSpaceDefs.cpp
     ${SRC_SHARE_DIR}/cxx/FunctorsBuffersManager.cpp
+    ${SRC_SHARE_DIR}/cxx/GllFvRemap.cpp
+    ${SRC_SHARE_DIR}/cxx/GllFvRemapImpl.cpp
     ${SRC_SHARE_DIR}/cxx/Hommexx_Session.cpp
     ${SRC_SHARE_DIR}/cxx/HybridVCoord.cpp
     ${SRC_SHARE_DIR}/cxx/HyperviscosityFunctor.cpp
@@ -184,6 +179,8 @@ MACRO(PREQX_KOKKOS_SETUP)
     ${SRC_SHARE_DIR}/cxx/prim_step.cpp
     ${SRC_SHARE_DIR}/cxx/vertical_remap.cpp
     ${SRC_SHARE_DIR}/cxx/utilities/BfbUtils.cpp
+    ${SRC_SHARE_DIR}/cxx/utilities/InternalDiagnostics.cpp
+    ${SRC_SHARE_DIR}/cxx/utilities/Hash.cpp
   )
 
   IF (HOMME_USE_TRILINOS)

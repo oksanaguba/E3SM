@@ -16,7 +16,7 @@ module CanopyHydrologyMod
   use shr_sys_mod       , only : shr_sys_flush
   use decompMod         , only : bounds_type
   use abortutils        , only : endrun
-  use elm_varctl        , only : iulog, tw_irr, extra_gw_irr, irrigate, use_extrasnowlayers
+  use elm_varctl        , only : iulog, tw_irr, extra_gw_irr, irrigate, use_firn_percolation_and_compaction
   use LandunitType      , only : lun_pp
   use atm2lndType       , only : atm2lnd_type
   use AerosolType       , only : aerosol_type
@@ -29,7 +29,7 @@ module CanopyHydrologyMod
   use elm_varcon        , only : snw_rds_min
   use pftvarcon         , only : irrigated
   use GridcellType      , only : grc_pp
-  use timeinfoMod, only : dtime_mod
+  use timeinfoMod       , only : dtime_mod
   !
   ! !PUBLIC TYPES:
   implicit none
@@ -122,9 +122,9 @@ contains
      use atm2lndType        , only : atm2lnd_type
      !use domainMod          , only : ldomain
      use TopounitType       , only : top_pp
-     use clm_time_manager   , only : get_step_size
+     use elm_time_manager   , only : get_step_size
      use subgridAveMod      , only : p2c,p2g
-     use clm_time_manager   , only : get_step_size, get_prev_date, get_nstep
+     use elm_time_manager   , only : get_step_size, get_prev_date, get_nstep
      use SnowHydrologyMod   , only : NewSnowBulkDensity
      !
      ! !ARGUMENTS:
@@ -278,12 +278,12 @@ contains
           ! Canopy interception and precipitation onto ground surface
           ! Add precipitation to leaf water
 
-          if (ltype(l)==istsoil .or. ltype(l)==istwet .or. urbpoi(l) .or. &
-               ltype(l)==istcrop) then
+          if (veg_pp%is_on_soil_col(p) .or. ltype(l) == istwet .or. urbpoi(l) .or. &
+               ltype(l) == istcrop) then
 
              qflx_candrip(p) = 0._r8      ! rate of canopy runoff
-             qflx_through_snow(p) = 0._r8 ! rain precipitation direct through canopy
-             qflx_through_rain(p) = 0._r8 ! snow precipitation direct through canopy
+             qflx_through_snow(p) = 0._r8 ! snow precipitation direct through canopy
+             qflx_through_rain(p) = 0._r8 ! rain precipitation direct through canopy
              qflx_prec_intr(p) = 0._r8    ! total intercepted precipitation
              fracsnow(p) = 0._r8          ! fraction of input precip that is snow
              fracrain(p) = 0._r8          ! fraction of input precip that is rain
@@ -334,7 +334,7 @@ contains
                 end if
              end if
 
-          else if (ltype(l)==istice .or. ltype(l)==istice_mec) then
+          else if (ltype(l) == istice .or. ltype(l) == istice_mec) then
 
              h2ocan(p)            = 0._r8
              qflx_candrip(p)      = 0._r8
@@ -433,7 +433,7 @@ contains
 
           qflx_prec_grnd(p) = qflx_prec_grnd_snow(p) + qflx_prec_grnd_rain(p)
 
-          if (.not. use_extrasnowlayers) then
+          if (.not. use_firn_percolation_and_compaction) then
              if (do_capsnow(c)) then
                 qflx_snwcp_liq(p) = qflx_prec_grnd_rain(p)
                 qflx_snwcp_ice(p) = qflx_prec_grnd_snow(p)
@@ -491,7 +491,7 @@ contains
 
        ! Determine snow height and snow water
        
-       if (use_extrasnowlayers) then
+       if (use_firn_percolation_and_compaction) then
           call NewSnowBulkDensity(bounds, num_nolakec, filter_nolakec, &
                                   top_as, bifall(bounds%begc:bounds%endc))
        end if
@@ -517,13 +517,13 @@ contains
              swe_old(c,j)=h2osoi_liq(c,j)+h2osoi_ice(c,j)
           enddo
 
-          if (do_capsnow(c) .and. .not. use_extrasnowlayers) then
+          if (do_capsnow(c) .and. .not. use_firn_percolation_and_compaction) then
              dz_snowf = 0._r8
              newsnow(c) = qflx_snow_grnd_col(c) * dtime
              frac_sno(c)=1._r8
              int_snow(c) = 5.e2_r8
           else
-             if (.not. use_extrasnowlayers) then
+             if (.not. use_firn_percolation_and_compaction) then
                 if (forc_t(t) > tfrz + 2._r8) then
                    bifall(c)=50._r8 + 1.7_r8*(17.0_r8)**1.5_r8
                 else if (forc_t(t) > tfrz - 15._r8) then
@@ -642,17 +642,18 @@ contains
           end if !end of do_capsnow construct
 
           ! set frac_sno_eff variable
-          if (ltype(l) == istsoil .or. ltype(l) == istcrop) then
-             if (subgridflag ==1) then 
-                frac_sno_eff(c) = frac_sno(c)
-             else
-                frac_sno_eff(c) = 1._r8
-             endif
-          else
+          ! Port of CLM fractional-snow energy fix: when subgrid fluxes are on,
+          ! allow fractional frac_sno_eff for all non-urban, non-lake columns
+          ! (including glacier and wetland), matching soil/crop treatment.
+          if (subgridflag == 1 .and. .not. urbpoi(l) .and. ltype(l) /= istdlak) then
+             frac_sno_eff(c) = frac_sno(c)
+          else if (frac_sno(c) > 0._r8) then
              frac_sno_eff(c) = 1._r8
+          else
+             frac_sno_eff(c) = 0._r8
           endif
 
-          if (ltype(l)==istwet .and. t_grnd(c)>tfrz) then
+          if (ltype(l) == istwet .and. t_grnd(c)>tfrz) then
              h2osno(c)=0._r8
              snow_depth(c)=0._r8
           end if
@@ -662,7 +663,7 @@ contains
           ! as the surface air temperature
 
           newnode = 0    ! flag for when snow node will be initialized
-          if (.not. use_extrasnowlayers) then
+          if (.not. use_firn_percolation_and_compaction) then
              if (snl(c) == 0 .and. qflx_snow_grnd_col(c) > 0.0_r8 .and. frac_sno(c)*snow_depth(c) >= 0.01_r8) then
                 newnode = 1
                 snl(c) = -1
@@ -713,7 +714,7 @@ contains
        call FracH2oSfc(bounds, num_nolakec, filter_nolakec, &
              col_wf%qflx_h2osfc2topsoi, dtime)
 
-     end associate 
+     end associate
 
    end subroutine CanopyHydrology
 
@@ -794,22 +795,28 @@ contains
      integer               , intent(in), optional :: no_update        ! flag to make calculation w/o updating variables
      !
      ! !LOCAL VARIABLES:
-     integer :: c,f,l          ! indices
-     real(r8):: d,fd,dfdd      ! temporary variable for frac_h2oscs iteration
-     real(r8):: sigma          ! microtopography pdf sigma in mm
+     integer :: c,f,l,k          ! indices
+     real(r8):: d,fd,dfdd        ! temporary variable for frac_h2oscs iteration
+     real(r8):: sigma            ! microtopography pdf sigma in mm
+     real(r8):: swc              ! surface water content in m
      real(r8):: min_h2osfc
      !-----------------------------------------------------------------------
 
-     associate(                                 & 
-          micro_sigma  => col_pp%micro_sigma  , & ! Input:  [real(r8) (:)   ] microtopography pdf sigma (m)                     
+     associate(                                 &
+          micro_sigma  => col_pp%micro_sigma  , & ! Input:  [real(r8) (:)   ] microtopography pdf sigma (m)
 
-          h2osno       => col_ws%h2osno       , & ! Input:  [real(r8) (:)   ] snow water (mm H2O)                               
-          
-          h2osoi_liq   => col_ws%h2osoi_liq   , & ! Output: [real(r8) (:,:) ] liquid water (col,lyr) [kg/m2]                  
-          h2osfc       => col_ws%h2osfc       , & ! Output: [real(r8) (:)   ] surface water (mm)                                
-          frac_sno     => col_ws%frac_sno     , & ! Output: [real(r8) (:)   ] fraction of ground covered by snow (0 to 1)       
-          frac_sno_eff => col_ws%frac_sno_eff , & ! Output: [real(r8) (:)   ] eff. fraction of ground covered by snow (0 to 1)  
-          frac_h2osfc  => col_ws%frac_h2osfc    & ! Output: [real(r8) (:)   ] col fractional area with surface water greater than zero 
+          iwp_microrel => col_ws%iwp_microrel , & ! Input:  [real(r8) (:)   ] ice wedge polygon microtopographic relief (m)
+          iwp_exclvol  => col_ws%iwp_exclvol  , & ! Input:  [real(r8) (:)   ] ice wedge polygon excluded volume (m)
+          iwp_ddep     => col_ws%iwp_ddep     , & ! Input:  [real(r8) (:)   ] ice wedge polygon depression depth (m)
+
+          h2osno       => col_ws%h2osno       , & ! Input:  [real(r8) (:)   ] snow water (mm H2O)
+
+          h2osoi_liq   => col_ws%h2osoi_liq   , & ! Output: [real(r8) (:,:) ] liquid water (col,lyr) [kg/m2]
+          h2osfc       => col_ws%h2osfc       , & ! Output: [real(r8) (:)   ] surface water (mm)
+          frac_sno     => col_ws%frac_sno     , & ! Output: [real(r8) (:)   ] fraction of ground covered by snow (0 to 1)
+          frac_sno_eff => col_ws%frac_sno_eff , & ! Output: [real(r8) (:)   ] eff. fraction of ground covered by snow (0 to 1)
+          frac_h2osfc  => col_ws%frac_h2osfc  , & ! Output: [real(r8) (:)   ] col fractional area with surface water greater than zero
+          frac_h2osfc_act => col_ws%frac_h2osfc_act & ! Output: [real(r8) (:)   ] col fractional area with surface water greater than zero
           )
 
        ! arbitrary lower limit on h2osfc for safer numerics...
@@ -820,34 +827,64 @@ contains
           l = col_pp%landunit(c)
           qflx_h2osfc2topsoi(c) = 0._r8
           ! h2osfc only calculated for soil vegetated land units
-          if (lun_pp%itype(l) == istsoil .or. lun_pp%itype(l) == istcrop) then
+          if (col_pp%is_soil(c) .or. col_pp%is_crop(c)) then
 
              !  Use newton-raphson method to iteratively determine frac_h20sfc
-             !  based on amount of surface water storage (h2osfc) and 
-             !  microtopography variability (micro_sigma)
+             !  based on amount of surface water storage (h2osfc) and
+             !  microtopography variability (micro_sigma) if nonpolygonal, or
+             !  amount of surface water (h2osfc) and microtopographic attributes
+             !  (iwp_microrel, iwp_exclvol) if polygonal tundra
 
              if (h2osfc(c) > min_h2osfc) then
                 ! a cutoff is needed for numerical reasons...(nonconvergence after 5 iterations)
-                d=0.0
 
-                sigma=1.0e3 * micro_sigma(c) ! convert to mm
-                do l=1,10
-                   fd = 0.5*d*(1.0_r8+erf(d/(sigma*sqrt(2.0)))) &
-                        +sigma/sqrt(2.0*shr_const_pi)*exp(-d**2/(2.0*sigma**2)) &
-                        -h2osfc(c)
-                   dfdd = 0.5*(1.0_r8+erf(d/(sigma*sqrt(2.0))))
+                if (lun_pp%ispolygon(l)) then
+                    ! calculate water depth and inundation fraction if column is polygonal
+                    swc = h2osfc(c)/1000_r8 ! convert to m
 
-                   d = d - fd/dfdd
-                enddo
-                !--  update the submerged areal fraction using the new d value
-                frac_h2osfc(c) = 0.5*(1.0_r8+erf(d/(sigma*sqrt(2.0))))
+                    if (swc > iwp_microrel(c) - iwp_exclvol(c)) then
+                        d = swc + iwp_exclvol(c)
+                    else
+                        d = swc + iwp_exclvol(c)
+                        do k=1,10
+                            fd = (2_r8*iwp_exclvol(c) - iwp_microrel(c)) * (d/iwp_microrel(c))**3_r8 &
+                                 + (2_r8*iwp_microrel(c) - 3_r8*iwp_exclvol(c)) * (d/iwp_microrel(c))**2_r8 &
+                                 - swc
+                            dfdd = (3_r8/iwp_microrel(c)) * (2_r8*iwp_exclvol(c) - iwp_microrel(c)) * (d/iwp_microrel(c))**2_r8 &
+                                   + (2_r8/iwp_microrel(c)) * (2_r8*iwp_microrel(c) - 3_r8*iwp_exclvol(c)) * (d/iwp_microrel(c))
+                            if (dfdd < 1.0e-12_r8) then
+                              write(iulog,*) "careful! getting close to dividing by 0..."
+                            end if
+                            d = d - fd/dfdd
+                        enddo
+                    endif
 
-             else
+                    !--  update the submerged areal fraction using the new d value
+                    frac_h2osfc(c) = (3_r8/iwp_microrel(c)) * (2_r8*iwp_exclvol(c) - iwp_microrel(c)) * (d/iwp_microrel(c))**2_r8 &
+                                     + (2_r8/iwp_microrel(c)) * (2_r8*iwp_microrel(c) - 3_r8*iwp_exclvol(c)) * (d/iwp_microrel(c))
+
+                else ! calculate water depth and inudation fraction if column is non-polygonal
+                    d=0.0
+                    sigma=1.0e3_r8 * micro_sigma(c) ! convert to mm
+                    do k=1,10
+                       fd = 0.5*d*(1.0_r8+erf(d/(sigma*sqrt(2.0)))) &
+                            +sigma/sqrt(2.0*shr_const_pi)*exp(-d**2/(2.0*sigma**2)) &
+                            -h2osfc(c)
+                       dfdd = 0.5*(1.0_r8+erf(d/(sigma*sqrt(2.0))))
+
+                       d = d - fd/dfdd
+                    enddo
+                    !--  update the submerged areal fraction using the new d value
+                    frac_h2osfc(c) = 0.5*(1.0_r8+erf(d/(sigma*sqrt(2.0))))
+                endif ! end if polygonal test
+             else ! if h2osfc(c) <= min_h2osfc
                 frac_h2osfc(c) = 0._r8
                 h2osoi_liq(c,1) = h2osoi_liq(c,1) + h2osfc(c)
                 qflx_h2osfc2topsoi(c) = h2osfc(c)/dtime                
                 h2osfc(c)=0._r8
              endif
+             
+             frac_h2osfc_act(c) = frac_h2osfc(c)
 
              if (.not. present(no_update)) then
 
@@ -863,13 +900,13 @@ contains
                    frac_sno_eff(c)=frac_sno(c)
 
                 endif
-
              endif ! end of no_update construct
 
           else !if landunit not istsoil/istcrop, set frac_h2osfc to zero
 
              frac_h2osfc(c) = 0._r8
-
+             frac_h2osfc_act(c) = 0._r8
+             
           endif
 
        end do

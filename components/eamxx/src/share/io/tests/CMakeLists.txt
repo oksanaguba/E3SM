@@ -1,0 +1,216 @@
+# NOTE: tests inside this if statement won't be built in a baselines-only build
+if (NOT SCREAM_ONLY_GENERATE_BASELINES)
+  include(ScreamUtils)
+
+  # The restart test requires cprnc
+  include (BuildCprnc)
+  BuildCprnc()
+
+  ## Test io utils
+  CreateUnitTest(io_utils
+    SOURCES io_utils.cpp
+    LIBS eamxx_io LABELS io
+    PROPERTIES RESOURCE_LOCK rpointer_file
+  )
+
+  ## Test field aliasing functionality
+  CreateUnitTest(io_alias
+    SOURCES io_alias.cpp
+    LIBS eamxx_io eamxx_diagnostics
+    LABELS io
+  )
+
+  # Test creation of diagnostic from diag_field_name
+  CreateUnitTest(create_diag
+    SOURCES create_diag.cpp
+    LIBS eamxx_io eamxx_diagnostics
+    LABELS io diagnostics
+  )
+
+  ## Test output of diagnostics requested as expressions
+  CreateUnitTest(io_dexpr
+    SOURCES io_dexpr.cpp
+    LIBS eamxx_io eamxx_diagnostics
+    LABELS io diagnostics
+    MPI_RANKS 1 ${SCREAM_TEST_MAX_RANKS}
+  )
+
+  ## How far back a shift looks, through an output stream
+  CreateUnitTest(io_dexpr_lag
+    SOURCES io_dexpr_lag.cpp
+    LIBS eamxx_io eamxx_diagnostics
+    LABELS io diagnostics
+    MPI_RANKS 1 ${SCREAM_TEST_MAX_RANKS}
+  )
+
+  ## Conditional sampling in AVERAGE/MAX/MIN streams, and its avg counts
+  CreateUnitTest(io_dexpr_masks
+    SOURCES io_dexpr_masks.cpp
+    LIBS eamxx_io eamxx_diagnostics
+    LABELS io diagnostics
+    MPI_RANKS 1 ${SCREAM_TEST_MAX_RANKS}
+  )
+
+  ## Fields at the same pressure level share an avg count, unless masked differently
+  CreateUnitTest(io_dexpr_plev_avg_cnt
+    SOURCES io_dexpr_plev_avg_cnt.cpp
+    LIBS eamxx_io eamxx_diagnostics
+    LABELS io diagnostics
+    MPI_RANKS 1 ${SCREAM_TEST_MAX_RANKS}
+  )
+
+  ## The average of AODVis is over its valid (daylight) steps only
+  CreateUnitTest(io_aodvis_avg
+    SOURCES io_aodvis_avg.cpp
+    LIBS eamxx_io eamxx_diagnostics
+    LABELS io diagnostics
+    MPI_RANKS 1 ${SCREAM_TEST_MAX_RANKS}
+  )
+
+  ## Test conditional geo data output (io_output_if_dim_exists feature)
+  CreateUnitTest(io_cond_geo
+    SOURCES io_cond_geo.cpp
+    LIBS eamxx_io LABELS io
+    MPI_RANKS 1 ${SCREAM_TEST_MAX_RANKS}
+  )
+
+  ## Test basic output (no packs, no diags, all avg types, all freq units)
+  CreateUnitTest(io_basic
+    SOURCES io_basic.cpp
+    LIBS eamxx_io LABELS io
+    MPI_RANKS 1 ${SCREAM_TEST_MAX_RANKS}
+  )
+
+  ## Test output where we write one file per month
+  CreateUnitTest(io_monthly
+    SOURCES io_monthly.cpp
+    LIBS eamxx_io LABELS io
+    MPI_RANKS 1 ${SCREAM_TEST_MAX_RANKS}
+  )
+
+  ## Test basic output (no packs, no diags, all avg types, all freq units)
+  CreateUnitTest(io_filled
+    SOURCES io_filled.cpp
+    LIBS eamxx_io LABELS io
+    MPI_RANKS 1 ${SCREAM_TEST_MAX_RANKS}
+  )
+
+  ## Test packed I/O
+  CreateUnitTest(io_packed
+    SOURCES io_packed.cpp
+    LIBS eamxx_io LABELS io
+    MPI_RANKS 1 ${SCREAM_TEST_MAX_RANKS}
+  )
+
+  ## Test diagnostic output
+  CreateUnitTest(io_diags
+    SOURCES io_diags.cpp
+    LIBS eamxx_io LABELS io
+    MPI_RANKS 1 ${SCREAM_TEST_MAX_RANKS}
+  )
+
+  ## Test transposed output (all averaging types)
+  CreateUnitTest(io_transpose
+    SOURCES io_transpose.cpp
+    LIBS eamxx_io LABELS io
+    MPI_RANKS 1 ${SCREAM_TEST_MAX_RANKS}
+    FIXTURES_SETUP_INDIVIDUAL io_transpose_output
+  )
+
+  # For each averaging type, compare transposed vs non-transposed output
+  # to verify they contain the same data (just with dimensions reversed)
+  set(AVG_TYPES INSTANT MAX MIN AVERAGE)
+  foreach (AVG_TYPE IN LISTS AVG_TYPES)
+    foreach (MPI_RANKS RANGE 1 ${SCREAM_TEST_MAX_RANKS})
+      set(prefix_N "io_transpose_N")
+      set(prefix_T "io_transpose_T")
+      set(suffix "${AVG_TYPE}.nsteps_x3.np${MPI_RANKS}.2023-02-17-00000.nc")
+      set(file_N "${prefix_N}.${suffix}")
+      set(file_T "${prefix_T}.${suffix}")
+      
+      # Add test to compare files using compare-nc-files script
+      # The script should handle transposed dimensions automatically with -a flag
+      add_test(
+        NAME io_transpose_check_${AVG_TYPE}_np${MPI_RANKS}
+        COMMAND ${SCREAM_BASE_DIR}/scripts/compare-nc-files
+          -s ${file_N} -t ${file_T}
+          -c "f_0=f_0" "f_1=f_1" "f_2=f_2"
+          -a
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+      )
+      set_tests_properties(io_transpose_check_${AVG_TYPE}_np${MPI_RANKS} PROPERTIES
+        LABELS "io"
+        FIXTURES_REQUIRED io_transpose_output_np${MPI_RANKS}_omp1
+      )
+    endforeach()
+  endforeach()
+
+  # Test output on SE grid
+  CreateUnitTest(io_se_grid
+    SOURCES io_se_grid.cpp
+    LIBS eamxx_io LABELS io
+    MPI_RANKS 1 ${SCREAM_TEST_MAX_RANKS}
+  )
+
+  ## Test output restart
+  # NOTE: These tests cannot run in parallel due to contention of the rpointer file
+  CreateUnitTest(output_restart
+    SOURCES output_restart.cpp
+    LIBS eamxx_io LABELS io
+    MPI_RANKS 1 ${SCREAM_TEST_MAX_RANKS}
+    FIXTURES_SETUP_INDIVIDUAL restart_check_setup
+    PROPERTIES RESOURCE_LOCK rpointer_file
+  )
+
+  # For each avg_type and rank combination, compare the monolithic and restared run
+  include (CompareNCFiles)
+  foreach (AVG_TYPE IN ITEMS INSTANT AVERAGE)
+    foreach (MPI_RANKS RANGE 1 ${SCREAM_TEST_MAX_RANKS})
+      CompareNCFiles (
+        TEST_NAME output_restart_check_${AVG_TYPE}_np${MPI_RANKS}
+        SRC_FILE monolithic.${AVG_TYPE}.nsteps_x10.np${MPI_RANKS}.2000-01-01-00000.nc
+        TGT_FILE restarted.${AVG_TYPE}.nsteps_x10.np${MPI_RANKS}.2000-01-01-00000.nc
+        LABELS io
+        FIXTURES_REQUIRED restart_check_setup_np${MPI_RANKS}_omp1
+      )
+    endforeach()
+  endforeach()
+
+  ## Test remap output
+  CreateUnitTest(io_remap_test
+    SOURCES io_remap_test.cpp
+    LIBS eamxx_io eamxx_diagnostics
+    LABELS io remap
+    MPI_RANKS 1 ${SCREAM_TEST_MAX_RANKS}
+  )
+
+  ## Test remap output when map file is sub-sampling (ARM-style)
+  CreateUnitTest(io_horiz_sampling
+    SOURCES io_horiz_sampling.cpp
+    LIBS eamxx_io LABELS io remap
+    MPI_RANKS 1 ${SCREAM_TEST_MAX_RANKS}
+  )
+
+  ## Test latlon output
+  set(MAP_FILE map_ne30pg2_to_20x40_20260112.nc)
+  set(MAP_FILE_FULL ${SCREAM_INPUT_ROOT}/atm/scream/maps/${MAP_FILE})
+
+  GetInputFile ("scream/maps/${MAP_FILE}")
+  CreateUnitTest(io_latlon_write
+    SOURCES io_latlon.cpp
+    LIBS eamxx_io LABELS io
+    MPI_RANKS ${SCREAM_TEST_MAX_RANKS}
+    EXE_ARGS --args --map-file=${MAP_FILE_FULL}
+    FIXTURES_SETUP latlon_output
+  )
+
+  add_test (
+    NAME io_latlon_check
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/check_latlon_output.py
+      --mask-cols 1 # Do not compare the 1x1 cols groups in the latlon grid corners
+      --map-file ${MAP_FILE_FULL}
+      --out-file ./io_latlon.INSTANT.nsteps_x1.np${SCREAM_TEST_MAX_RANKS}.2000.nc
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+  set_tests_properties(io_latlon_check PROPERTIES FIXTURES_REQUIRED latlon_output)
+
+endif()

@@ -93,6 +93,7 @@
 				type="output"
 				mode="forward;analysis"
 				io_type="pnetcdf"
+				useMissingValMask="true"
 				precision="single"
 				filename_template="analysis_members/mpaso.hist.am.timeSeriesStatsMonthlyMax.$Y-$M-$D.nc"
 				filename_interval="00-01-00_00:00:00"
@@ -127,6 +128,8 @@
 			<var name="snowFlux"/>
 			<var name="boundaryLayerDepth"/>
 			<var name="landIceFreshwaterFlux"/>
+			<var name="landIceFreshwaterFluxTotal"/>
+			<var name="frazilIceFreshwaterFlux"/>
 			<var name="landIceHeatFlux"/>
 			<var name="heatFluxToLandIce"/>
 			<var name="surfaceBuoyancyForcing"/>

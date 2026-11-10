@@ -383,7 +383,7 @@ CONTAINS
          nxgo = scm_nx
          nygo = scm_ny
          nzgo = -1
-         gsize = abs(scm_nx*scm_nx*nzgo)
+         gsize = abs(scm_nx*scm_ny*nzgo)
        else
          nxgo = nxg
          nygo = nyg
@@ -534,8 +534,8 @@ CONTAINS
 
             n=0
             do k=1,abs(nzg)
-              do j=1,nyg
-                do i=1,nxg
+              do j=1,nygo
+                do i=1,nxgo
                   n=n+1
                   gGridRoot%data%rAttr(nlat ,n) = lat(i_scm,j_scm)
                   gGridRoot%data%rAttr(nlon ,n) = lon(i_scm,j_scm)

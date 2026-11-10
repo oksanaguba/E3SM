@@ -2,7 +2,7 @@ IF (NOT DEFINED PROJECT_NAME)
   SET (HOMME_STANDALONE TRUE CACHE BOOL "Whether Homme is built in standalone mode" FORCE)
 
   # Best practice to put cmake required version at the top
-  CMAKE_MINIMUM_REQUIRED(VERSION 2.8.5)
+  CMAKE_MINIMUM_REQUIRED(VERSION 3.16)
 
   # Print the sha of the last commit,
   # useful to double check which version was build in the build folder.
@@ -50,8 +50,16 @@ IF (HOMME_BUILD_EXECS OR BUILD_HOMME_TOOL)
 ELSE ()
   SET(BUILD_HOMME_WITHOUT_PIOLIBRARY ON CACHE BOOL "")
 ENDIF ()
+
+SET(HOMME_BUILD_SCORPIO ON)
 IF(BUILD_HOMME_WITHOUT_PIOLIBRARY)
   MESSAGE(STATUS "This configuration builds without PIO library and NetCDF calls")
+  SET(HOMME_BUILD_SCORPIO OFF)
+ELSE()
+  IF (TARGET pioc OR TARGET piof)
+    message(STATUS "pioc and/or piof are already defined; skipping SCORPIO build in HOMME")
+    SET(HOMME_BUILD_SCORPIO OFF)
+  ENDIF()
 ENDIF()
 
 #option to discard forcings call and push to/from F
@@ -71,7 +79,7 @@ INCLUDE_DIRECTORIES(${CMAKE_CURRENT_BINARY_DIR})
 FortranCInterface_HEADER(cmake_fortran_c_interface.h
                          MACRO_NAMESPACE  "FCI_")
 
-# Prefer shared libraries (Yellowstone etc.) 
+# Prefer shared libraries (Yellowstone etc.)
 OPTION(PREFER_SHARED "Prefer linking with shared libraries." FALSE)
 
 # need to tell the source to use this capability
@@ -97,7 +105,7 @@ OPTION(IS_BIG_ENDIAN "Whether the machine is big endian" FALSE)
 # Default use quad precision
 OPTION(HOMME_QUAD_PREC "Default to try to use quadruple precision" TRUE)
 
-IF (${HOMME_QUAD_PREC}) 
+IF (${HOMME_QUAD_PREC})
   testQuadPrec(HOMME_QUAD_SUPPORTED)
   IF (NOT ${HOMME_QUAD_SUPPORTED})
     SET(HOMME_QUAD_PREC FALSE)
@@ -111,10 +119,7 @@ OPTION(BUILD_HOMME_SWEQX "Shallow water equations FEM" ON)
 OPTION(BUILD_HOMME_PREQX "Primitive equations FEM" ON)
 OPTION(BUILD_HOMME_THETA "SB81 NH model with theta and Exner pressure" ON)
 OPTION(BUILD_HOMME_THETA_KOKKOS "SB81 NH model with theta and Exner pressure, Kokkos target" OFF)
-OPTION(BUILD_HOMME_PREQX_ACC "Primitive equations FEM with OpenACC" ON)
 OPTION(BUILD_HOMME_PREQX_KOKKOS "Primitive equations FEM with Kokkos" OFF)
-OPTION(BUILD_HOMME_SWIM  "Shallow water equations implicit" OFF)
-OPTION(BUILD_HOMME_PRIM  "Primitive equations implicit" OFF)
 OPTION(BUILD_HOMME_TOOL  "Offline tool" ON)
 OPTION(HOMME_ENABLE_COMPOSE "Build COMPOSE semi-Lagrangian tracer transport code" ON)
 OPTION(HOMME_USE_SCORPIO  "Use Scorpio as the I/O library (Disable to use Scorpio classic)" ON)
@@ -123,13 +128,8 @@ OPTION(HOMME_USE_SCORPIO  "Use Scorpio as the I/O library (Disable to use Scorpi
 SET(HOMME_USE_CXX FALSE)
 SET(HOMME_USE_KOKKOS FALSE)
 
-# swim and prim executables require C++ compiler
-IF(${BUILD_HOMME_SWIM} OR ${BUILD_HOMME_PRIM})
-  SET (HOMME_USE_CXX TRUE)
-  SET (HOMME_USE_TRILINOS TRUE)
-ENDIF ()
 #if trilinos is needed, we need cxx
-IF (${HOMME_USE_TRILINOS})
+IF (HOMME_USE_TRILINOS)
   SET (HOMME_USE_CXX TRUE)
 ENDIF()
 #if kokkos is needed, then so is cxx
@@ -168,7 +168,7 @@ IF (HOMME_BUILD_KOKKOS_DYCORE)
   ENDIF ()
 ENDIF ()
 
-IF (BUILD_HOMME_PREQX OR BUILD_HOMME_THETA OR BUILD_HOMME_PREQX_ACC)
+IF (BUILD_HOMME_PREQX OR BUILD_HOMME_THETA)
   SET (HOMME_BUILD_FORTRAN_DYCORE TRUE)
 ENDIF()
 
@@ -189,7 +189,7 @@ IF (${HOMME_USE_ARKODE})
   ADD_DEFINITIONS(-DARKODE)
 ENDIF ()
 
-IF (${HOMME_USE_KOKKOS})
+IF (HOMME_USE_KOKKOS)
   ############################################
   # Selection of Kokkos execution space
   ############################################
@@ -198,17 +198,19 @@ IF (${HOMME_USE_KOKKOS})
 
   STRING (TOUPPER ${HOMMEXX_EXEC_SPACE} HOMMEXX_EXEC_SPACE_UPPER)
 
-  IF (${HOMMEXX_EXEC_SPACE_UPPER} STREQUAL "HIP")
+  IF (${HOMMEXX_EXEC_SPACE_UPPER} STREQUAL "SYCL")
+    SET (HOMMEXX_SYCL_SPACE ON)
+  ELSEIF (${HOMMEXX_EXEC_SPACE_UPPER} STREQUAL "HIP")
     SET (HOMMEXX_HIP_SPACE ON)
-  ELSEIF (${HOMMEXX_EXEC_SPACE_UPPER} STREQUAL "CUDA")
+  ELSEIF (HOMMEXX_EXEC_SPACE_UPPER STREQUAL "CUDA")
     SET (HOMMEXX_CUDA_SPACE ON)
-  ELSEIF (${HOMMEXX_EXEC_SPACE_UPPER} STREQUAL "OPENMP")
+  ELSEIF (HOMMEXX_EXEC_SPACE_UPPER STREQUAL "OPENMP")
     SET (HOMMEXX_OPENMP_SPACE ON)
-  ELSEIF (${HOMMEXX_EXEC_SPACE_UPPER} STREQUAL "THREADS")
+  ELSEIF (HOMMEXX_EXEC_SPACE_UPPER STREQUAL "THREADS")
     SET (HOMMEXX_THREADS_SPACE ON)
-  ELSEIF (${HOMMEXX_EXEC_SPACE_UPPER} STREQUAL "SERIAL")
+  ELSEIF (HOMMEXX_EXEC_SPACE_UPPER STREQUAL "SERIAL")
     SET (HOMMEXX_SERIAL_SPACE ON)
-  ELSEIF (${HOMMEXX_EXEC_SPACE_UPPER} STREQUAL "DEFAULT")
+  ELSEIF (HOMMEXX_EXEC_SPACE_UPPER STREQUAL "DEFAULT")
     SET (HOMMEXX_DEFAULT_SPACE ON)
   ELSE()
     MESSAGE (ABORT "Invalid choice for 'HOMMEXX_EXEC_SPACE'. Valid options (case insensitive) are 'Cuda', 'OpenMP', 'Threads', 'Serial', 'Default'")
@@ -223,6 +225,11 @@ IF (${HOMME_USE_KOKKOS})
 
   # An option to allow workspace sharing on GPU
   OPTION (HOMMEXX_CUDA_SHARE_BUFFER "Whether we want to allow for buffer sharing on GPU. This feature incurs some computational overhead but can allow running of larger problems (relevant only for GPU builds)" OFF)
+
+  # For now, hommexx view usage is only compatible with Kokkos' lecacy view impl.
+  # FIXME: View usage in Hommexx will need to allow for Kokkos' MDSpan view implementation as the legacy
+  #        implementation will go away in the future, unannounced (it's an "impl" option => no deprecation).
+  OPTION (Kokkos_ENABLE_IMPL_VIEW_LEGACY "Currently, HOMME is only compatible with Kokkos' legacy view implementation." ON)
 ENDIF()
 
 ##############################################################################
@@ -246,9 +253,22 @@ elseif (NOT TARGET csm_share)
   message (FATAL_ERROR "Aborting.")
 endif()
 
-OPTION(HOMME_USE_MKL "Whether to use Intel's MKL instead of blas/lapack" FALSE)
+OPTION(HOMME_USE_MKL "Whether to use Intel's MKL/oneMKL instead of blas/lapack" FALSE)
 IF(HOMME_USE_MKL)
-  MESSAGE(STATUS "HOMME_USE_MKL is ON. The flag -mkl will be added to each executable/library.")
+  IF(DEFINED ENV{MKLROOT})
+    SET(MKL_ROOT_PATH "$ENV{MKLROOT}")
+    IF(MKL_ROOT_PATH MATCHES "oneapi")
+      SET(MKL_TYPE "oneMKL" CACHE INTERNAL "")
+      MESSAGE(STATUS "Detected oneMKL based on MKLROOT: ${MKL_ROOT_PATH}")
+      FIND_PACKAGE(MKL REQUIRED $ENV{MKLROOT}/lib/cmake/mkl)
+    ELSE()
+      SET(MKL_TYPE "Intel MKL" CACHE INTERNAL "")
+      MESSAGE(STATUS "Detected standalone Intel MKL based on MKLROOT: ${MKL_ROOT_PATH}")
+    ENDIF()
+  ELSE()
+    MESSAGE(FATAL_ERROR "MKLROOT environment variable is not set. Please set it to your MKL installation path.")
+  ENDIF()
+  MESSAGE(STATUS "HOMME_USE_MKL is ON. The flag -mkl/-qmkl will be added to each executable/library.")
 ELSE()
   OPTION(HOMME_FIND_BLASLAPACK "Whether to use system blas/lapack" FALSE)
   MESSAGE(STATUS "HOMME_FIND_BLASLAPACK=${HOMME_FIND_BLASLAPACK}")
@@ -290,25 +310,31 @@ MESSAGE(STATUS "C Flags = ${CMAKE_C_FLAGS}")
 MESSAGE(STATUS "CXX Flags = ${CMAKE_CXX_FLAGS}")
 MESSAGE(STATUS "Linker Flags = ${CMAKE_EXE_LINKER_FLAGS}")
 
-SET (HOMMEXX_ENABLE_GPU FALSE) 
+SET (HOMMEXX_ENABLE_GPU FALSE)
+SET (HOMMEXX_ENABLE_GPU_F90 FALSE)
 
-IF (${HOMME_USE_KOKKOS})
+IF (HOMME_USE_KOKKOS)
 
-  IF (CUDA_BUILD OR HIP_BUILD)
+  IF (Kokkos_ENABLE_CUDA OR Kokkos_ENABLE_HIP OR Kokkos_ENABLE_SYCL)
     SET (DEFAULT_VECTOR_SIZE 1)
-    SET (HOMMEXX_ENABLE_GPU TRUE) 
+    SET (HOMMEXX_ENABLE_GPU TRUE)
+    SET (HOMMEXX_ENABLE_GPU_F90 TRUE)
+    IF (Kokkos_ENABLE_SYCL)
+      SET (DISABLE_TIMERS_IN_FIRST_STEP TRUE)
+    ENDIF()
   ELSE ()
     SET (DEFAULT_VECTOR_SIZE 8)
   ENDIF()
 
   SET (HOMMEXX_VECTOR_SIZE ${DEFAULT_VECTOR_SIZE} CACHE STRING
-	  "If AVX or Cuda or HIP don't take priority, use this software vector size.")
+	  "If AVX or Cuda or HIP or SYCL don't take priority, use this software vector size.")
 
   IF (CMAKE_BUILD_TYPE_UPPER MATCHES "DEBUG" OR CMAKE_BUILD_TYPE_UPPER MATCHES "RELWITHDEBINFO")
     SET (HOMMEXX_DEBUG ON)
   ENDIF()
 
-  CONFIGURE_FILE (${CMAKE_CURRENT_SOURCE_DIR}/src/share/cxx/Hommexx_config.h.in ${HOMME_BINARY_DIR}/src/share/cxx/Hommexx_config.h)
+  CONFIGURE_FILE (${CMAKE_CURRENT_SOURCE_DIR}/src/share/cxx/Hommexx_config.h.in
+                  ${HOMME_BINARY_DIR}/src/share/cxx/Hommexx_config.h)
 
 ENDIF ()
 
@@ -336,28 +362,36 @@ IF (DEFINED SUNDIALS_DIR)
   INCLUDE_DIRECTORIES(${SUNDIALS_DIR}/fortran)
 ENDIF ()
 
-###########################################
-# Definitions for timing library
-###########################################
-# This is required in timing to set HAVE_MPI
-ADD_DEFINITIONS(-DSPMD)
-OPTION(ENABLE_NANOTIMERS "Use nano timers in timing library" FALSE)
-OPTION(USE_BIT64 "Set BIT64 (for 64 bit arch) in timing library when ENABLE_NANOTIME" FALSE)
-IF (${ENABLE_NANOTIMERS})
-  ADD_DEFINITIONS(-DHAVE_NANOTIME)
-  IF (${USE_BIT64})
-    ADD_DEFINITIONS(-DBIT64)
+if (HOMME_STANDALONE OR NOT TARGET gptl)
+  ###########################################
+  # Definitions for timing library
+  ###########################################
+  # This is required in timing to set HAVE_MPI
+  ADD_DEFINITIONS(-DSPMD)
+  OPTION(ENABLE_NANOTIMERS "Use nano timers in timing library" FALSE)
+  OPTION(USE_BIT64 "Set BIT64 (for 64 bit arch) in timing library when ENABLE_NANOTIME" FALSE)
+  IF (${ENABLE_NANOTIMERS})
+    ADD_DEFINITIONS(-DHAVE_NANOTIME)
+    IF (${USE_BIT64})
+      ADD_DEFINITIONS(-DBIT64)
+    ENDIF ()
   ENDIF ()
-ENDIF ()
-ADD_SUBDIRECTORY(utils/cime/CIME/non_py/src/timing)
+  ADD_SUBDIRECTORY(utils/cime/CIME/non_py/src/timing)
+  target_include_directories (timing PUBLIC utils/cime/CIME/non_py/src/timing)
+  target_include_directories (timing PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/utils/cime/CIME/non_py/src/timing)
+else ()
+  # EAMxx already takes care of making the gptl target available, so just make the timing tgt point to that
+  add_library(timing INTERFACE)
+  target_link_libraries (timing INTERFACE gptl)
+endif()
 
 
 # CMAKE_CURRENT_SOURCE_DIR == homme
 SET (CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake" ${CMAKE_MODULE_PATH})
 SET (CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/utils/cime/src/CMake" ${CMAKE_MODULE_PATH})
-SET (CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/utils/externals/scorpio/cmake" ${CMAKE_MODULE_PATH})
-
-
+if (HOMME_BUILD_SCORPIO)
+  SET (CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/utils/externals/scorpio/cmake" ${CMAKE_MODULE_PATH})
+endif ()
 
 #
 # Scorpio
@@ -369,28 +403,30 @@ SET (CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/utils/externals/scorpio/cmak
 #
 ADD_DEFINITIONS(-D_NO_MPI_RSEND)
 
-if(NOT BUILD_HOMME_WITHOUT_PIOLIBRARY)
-SET(NetCDF_PATH ${NETCDF_DIR})
-SET(PnetCDF_PATH ${PNETCDF_DIR})
-message("** Configuring SCORPIO with:")
-message("-- NetCDF_PATH = ${NetCDF_PATH}")
-message("-- PnetCDF_PATH = ${PnetCDF_PATH}")
-message("-- NetCDF_Fortran_PATH = ${NetCDF_Fortran_PATH}")
-message("-- NetCDF_C_PATH = ${NetCDF_C_PATH}")
-message("-- PnetCDF_Fortran_PATH = ${PnetCDF_Fortran_PATH}")
-message("-- PnetCDF_C_PATH = ${PnetCDF_C_PATH}")
-# pio needs cime/externals/genf90/genf90.pl
-if (HOMME_USE_SCORPIO)
-  # Need to use scorpio's older genf90 for now
-  SET(GENF90_PATH ${CMAKE_CURRENT_SOURCE_DIR}/utils/utils/externals/scorpio/src/genf90)
-  SET(PIO_ENABLE_TOOLS OFF CACHE BOOL "Disabling Scorpio tool build")
-  ADD_SUBDIRECTORY(utils/externals/scorpio)
-else ()
-  # The default I/O library used in "Scorpio classic"
-  ADD_SUBDIRECTORY(utils/externals/scorpio_classic)
+if (HOMME_BUILD_SCORPIO)
+  SET(NetCDF_PATH ${NETCDF_DIR})
+  SET(PnetCDF_PATH ${PNETCDF_DIR})
+  message("-- NetCDF_PATH = ${NetCDF_PATH}")
+  message("-- PnetCDF_PATH = ${PnetCDF_PATH}")
+  message("-- NetCDF_Fortran_PATH = ${NetCDF_Fortran_PATH}")
+  message("-- NetCDF_C_PATH = ${NetCDF_C_PATH}")
+  message("-- PnetCDF_Fortran_PATH = ${PnetCDF_Fortran_PATH}")
+  message("-- PnetCDF_C_PATH = ${PnetCDF_C_PATH}")
+  message("** Configuring SCORPIO")
+  # pio needs cime/externals/genf90/genf90.pl
   SET(GENF90_PATH ${CMAKE_CURRENT_SOURCE_DIR}/utils/cime/CIME/non_py/externals/genf90)
+  if (HOMME_USE_SCORPIO)
+    # Need to use scorpio's older genf90 for now
+    SET(PIO_ENABLE_TOOLS OFF CACHE BOOL "Disabling Scorpio tool build")
+    ADD_SUBDIRECTORY(utils/externals/scorpio)
+    SET(PIO_INCLUDE_DIRS "${CMAKE_CURRENT_BINARY_DIR}/utils/externals/scorpio/src/flib")
+  else ()
+    # The default I/O library used in "Scorpio classic"
+    ADD_SUBDIRECTORY(utils/externals/scorpio_classic)
+    SET(PIO_INCLUDE_DIRS "${CMAKE_CURRENT_BINARY_DIR}/utils/externals/scorpio/pio")
+  endif ()
+  INCLUDE_DIRECTORIES(${PIO_INCLUDE_DIRS})
 endif ()
-ENDIF()
 
 
 # CPRNC locations
@@ -407,7 +443,7 @@ IF (CPRNC_DIR)
 ENDIF ()
 
 #compile cprnc only if pio is built
-if(NOT BUILD_HOMME_WITHOUT_PIOLIBRARY)
+if(HOMME_BUILD_EXECS AND NOT BUILD_HOMME_WITHOUT_PIOLIBRARY)
   IF (NOT (CPRNC_DIR))
     # compile CPRNC from CIME source code. Requires CIME support for machine
     message("-- CPRNC_BINARY = will compile from source")
@@ -429,15 +465,40 @@ if(NOT BUILD_HOMME_WITHOUT_PIOLIBRARY)
     set(BLDROOT ${CMAKE_CURRENT_SOURCE_DIR}/utils/cime/CIME/non_py/cprnc)
     set(SFC ${CMAKE_Fortran_COMPILER})
     set(SCC ${CMAKE_C_COMPILER})
-    
+
     SET (CPRNC_INSTALL_DIR ${HOMME_BINARY_DIR}/utils/cime/CIME/non_py/cprnc)
     SET (CPRNC_BINARY ${HOMME_BINARY_DIR}/utils/cime/CIME/non_py/cprnc/cprnc)
     ADD_SUBDIRECTORY(utils/cime/CIME/non_py/cprnc)
   ENDIF ()
 ENDIF ()
 
-IF (${HOMME_USE_KOKKOS})
-  INCLUDE(Kokkos)
+IF (HOMME_USE_KOKKOS)
+  # Add ekat's cmake scripts folders to cmake path
+  set (EKAT_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../externals/ekat)
+  set (EKAT_CMAKE_PATH ${EKAT_SOURCE_DIR}/cmake)
+  list(APPEND CMAKE_MODULE_PATH
+    ${EKAT_CMAKE_PATH}
+    ${EKAT_CMAKE_PATH}/tpls
+  )
+
+  # We first try to use find_package. If that doesn't work, build from EKAT's submodule
+  include (EkatFindKokkos)
+  if (NOT Kokkos_FOUND)
+    # The following script checks if Kokkos is already available as a target, and if so does nothing.
+    # For instance, if HOMME is built inside EAMxx, Kokkos will already be available
+    include (EkatBuildKokkos)
+  endif()
+
+  # Add --fmad=false for BFB and CUDA
+  if (HOMMEXX_BFB_TESTING AND Kokkos_ENABLE_CUDA AND TARGET kokkoscore)
+    include (EkatSetCompilerFlags)
+    if (Kokkos_ENABLE_COMPILE_AS_CMAKE_LANGUAGE)
+      SetCudaFlags(kokkoscore CUDA_LANG FLAGS --fmad=false)
+    else()
+      SetCudaFlags(kokkoscore FLAGS --fmad=false)
+    endif()
+  endif()
+
 ENDIF ()
 
 # This folder contains the CMake macro used to build cxx unit tests
@@ -501,10 +562,6 @@ IF(${BUILD_HOMME_SWIM})
   ADD_SUBDIRECTORY(src/swim)
 ENDIF()
 
-IF(${BUILD_HOMME_PRIM})
-  ADD_SUBDIRECTORY(src/prim)
-ENDIF()
-
 IF(${BUILD_HOMME_TOOL})
   ADD_SUBDIRECTORY(src/tool)
 ENDIF()
@@ -524,9 +581,3 @@ ADD_CUSTOM_TARGET(clean-all
    COMMAND ${CMAKE_BUILD_TOOL} clean
    COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/clean-cmake-files.cmake"
 )
-
-IF (${HOMME_USE_KOKKOS})
-  # Put this last so that tribits.cmake's 'check' target doesn't conflict with
-  # Homme's.
-  install_kokkos_if_needed()
-ENDIF ()

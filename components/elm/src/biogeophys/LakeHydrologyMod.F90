@@ -74,8 +74,8 @@ contains
       !$acc routine seq
     use elm_varcon      , only : denh2o, denice, spval, hfus, tfrz, cpliq, cpice
     use elm_varpar      , only : nlevsno, nlevgrnd, nlevsoi
-    use elm_varctl      , only : iulog, use_extrasnowlayers, use_lake_wat_storage
-    use clm_time_manager, only : get_step_size
+    use elm_varctl      , only : iulog, use_extrasnowlayers, use_lake_wat_storage, use_firn_percolation_and_compaction
+    use elm_time_manager, only : get_step_size
     use SnowHydrologyMod, only : SnowCompaction, CombineSnowLayers, SnowWater, BuildSnowFilter
     use SnowHydrologyMod, only : DivideSnowLayers, DivideExtraSnowLayers, SnowCapping
     use LakeCon         , only : lsadz
@@ -199,6 +199,7 @@ contains
          qflx_rsub_sat        =>  col_wf%qflx_rsub_sat      , & ! Output: [real(r8) (:)   ]  soil saturation excess [mm h2o/s]
          qflx_surf            =>  col_wf%qflx_surf          , & ! Output: [real(r8) (:)   ]  surface runoff (mm H2O /s)
          qflx_drain           =>  col_wf%qflx_drain         , & ! Output: [real(r8) (:)   ]  sub-surface runoff (mm H2O /s)
+         qflx_lnd2ocn         =>  col_wf%qflx_lnd2ocn       , & ! Output: [real(r8) (:)   ] lateral flow from lnd to ocn (mm H2O /s)
          qflx_infl            =>  col_wf%qflx_infl          , & ! Output: [real(r8) (:)   ]  infiltration (mm H2O /s)
          qflx_qrgwl           =>  col_wf%qflx_qrgwl         , & ! Output: [real(r8) (:)   ]  qflx_surf at glaciers, wetlands, lakes
          qflx_runoff          =>  col_wf%qflx_runoff        , & ! Output: [real(r8) (:)   ]  total runoff (qflx_drain+qflx_surf+qflx_qrgwl) (mm H2O /s)
@@ -256,7 +257,7 @@ contains
 
          qflx_dirct_rain(p) = 0._r8
          qflx_leafdrip(p) = 0._r8
-         if (.not. use_extrasnowlayers) then
+         if (.not. use_firn_percolation_and_compaction) then
             if (do_capsnow(c)) then
                qflx_snwcp_ice(p) = qflx_prec_grnd_snow(p)
                qflx_snwcp_liq(p) = qflx_prec_grnd_rain(p)
@@ -288,7 +289,7 @@ contains
          ! U.S.Department of Agriculture Forest Service, Project F,
          ! Progress Rep. 1, Alta Avalanche Study Center:Snow Layer Densification.
 
-         if (do_capsnow(c) .and. .not. use_extrasnowlayers) then
+         if (do_capsnow(c) .and. .not. use_firn_percolation_and_compaction) then
             dz_snowf = 0._r8
          else
             if (forc_t(t) > tfrz + 2._r8) then
@@ -400,7 +401,7 @@ contains
             ! Update the pft-level qflx_snowcap
             ! This was moved in from Hydrology2 to keep all pft-level
             ! calculations out of Hydrology2
-            if (do_capsnow(c) .and. .not. use_extrasnowlayers) then
+            if (do_capsnow(c) .and. .not. use_firn_percolation_and_compaction) then
                qflx_snwcp_ice(p) = qflx_snwcp_ice(p) + qflx_dew_snow(p) 
                qflx_snwcp_liq(p) = qflx_snwcp_liq(p) + qflx_dew_grnd(p)
             end if
@@ -422,23 +423,22 @@ contains
             ! Update snow pack for dew & sub.
 
             h2osno_temp = h2osno(c)
-            if (do_capsnow(c) .and. .not. use_extrasnowlayers) then
+            if (do_capsnow(c) .and. .not. use_firn_percolation_and_compaction) then
                h2osno(c) = h2osno(c) - qflx_sub_snow(p)*dtime
                qflx_snwcp_ice(p) = qflx_snwcp_ice(p) + qflx_dew_snow(p)
                qflx_snwcp_liq(p) = qflx_snwcp_liq(p) + qflx_dew_grnd(p)
             else
                h2osno(c) = h2osno(c) + (-qflx_sub_snow(p)+qflx_dew_snow(p))*dtime
             end if
+            h2osno(c) = max(h2osno(c), 0._r8)
             if (h2osno_temp > 0._r8) then
                snow_depth(c) = snow_depth(c) * h2osno(c) / h2osno_temp
             else
                snow_depth(c) = h2osno(c)/snow_bd !Assume a constant snow bulk density = 250.
             end if
-
-            h2osno(c) = max(h2osno(c), 0._r8)
          end if
 
-         if (.not. use_extrasnowlayers) then
+         if (.not. use_firn_percolation_and_compaction) then
             qflx_snwcp_ice_col(c) = qflx_snwcp_ice(p)
             qflx_snwcp_liq_col(c) = qflx_snwcp_liq(p)
          end if
@@ -486,7 +486,7 @@ contains
            num_shlakesnowc, filter_shlakesnowc, num_shlakenosnowc, filter_shlakenosnowc, &
            atm2lnd_vars,  aerosol_vars)
            
-      if (use_extrasnowlayers) then
+      if (use_firn_percolation_and_compaction) then
          call SnowCapping(bounds, num_lakec, filter_lakec, num_shlakesnowc, filter_shlakesnowc, &
                           aerosol_vars)
       end if
@@ -713,6 +713,7 @@ contains
          qflx_infl(c)          = 0._r8
          qflx_surf(c)          = 0._r8
          qflx_drain(c)         = 0._r8
+         qflx_lnd2ocn(c)       = 0._r8
          qflx_irrig(p)         = 0._r8
          qflx_irrig_col(c)     = 0._r8
 
@@ -720,7 +721,7 @@ contains
          if (use_lake_wat_storage) then
             qflx_qrgwl(c)     = 0._r8
             if (wslake(c) >= 5000._r8) then
-               if (.not. use_extrasnowlayers) then
+               if (.not. use_firn_percolation_and_compaction) then
                   qflx_snwcp = qflx_snwcp_ice(p)
                else
                   qflx_snwcp = qflx_snwcp_ice_col(c)
@@ -733,7 +734,7 @@ contains
                 (endwb(c) - begwb(c))
             endwb(c) = endwb(c) + wslake(c)
          else
-            if (.not. use_extrasnowlayers) then
+            if (.not. use_firn_percolation_and_compaction) then
                qflx_snwcp = qflx_snwcp_ice(p)
             else
                qflx_snwcp = qflx_snwcp_ice_col(c)

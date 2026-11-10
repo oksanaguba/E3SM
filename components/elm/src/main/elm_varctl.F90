@@ -19,6 +19,7 @@ module elm_varctl
   public :: cnallocate_carbonphosphorus_only_set
   public :: cnallocate_carbonphosphorus_only
   public :: get_carbontag ! get the tag for carbon simulations
+  public :: elm_varctl_set_iac_flag
   !
   private
   save
@@ -164,6 +165,10 @@ module elm_varctl
   ! BGC logic and datasets
   !----------------------------------------------------------
 
+  ! true => iac/gcam component is present (prognostic)
+  !(public and protected to ensure read only access in other modules)
+  logical, public, protected :: iac_present = .false.
+
   ! values of 'prognostic','diagnostic','constant'
   character(len=16), public :: co2_type = 'constant'
 
@@ -221,28 +226,54 @@ module elm_varctl
 
   logical, public            :: use_fates = .false.                     ! true => use  ED
   integer, public            :: fates_spitfire_mode = 0                 ! 0 for no fire; 1 for constant ignitions
+  integer, public            :: fates_lu_transition_logic = -9          ! controls logic around transition between land use classes
+  logical, public            :: use_fates_managed_fire = .false.        ! true => turn on managed fire
+  character(len=256), public :: fates_harvest_mode = ''                 ! five different harvest modes; see namelist_definitions
+  character(len=256), public :: fates_photosynth_acclimation = ''       ! nonacclimating, kumarathunge2019
+  character(len=256), public :: fates_stomatal_model = ''               ! stomatal conductance model, Ball-berry or Medlyn
+  character(len=256), public :: fates_stomatal_assimilation = ''        ! net or gross assimilation modes
+  character(len=256), public :: fates_leafresp_model = ''               ! Leaf maintenance respiration model, Ryan or Atkin
+  character(len=256), public :: fates_cstarvation_model = ''            ! linear or exponential function
+  character(len=256), public :: fates_regeneration_model = ''           ! default, TRS, or TRS without seed dynamics
+  character(len=256), public :: fates_hydro_solver = ''                 ! 1D Taylor, 2D Picard, 2D Newton
+  character(len=256), public :: fates_radiation_model = ''              ! Norman or two-stream radiation model
+  character(len=256), public :: fates_electron_transport_model = ''     ! FvCB or JB electron transport model
   logical, public            :: use_fates_fixed_biogeog = .false.       ! true => use fixed biogeography mode
-  logical, public            :: use_fates_logging = .false.             ! true => turn on logging module
   logical, public            :: use_fates_planthydro = .false.          ! true => turn on fates hydro
   logical, public            :: use_fates_cohort_age_tracking = .false. ! true => turn on cohort age tracking
   logical, public            :: use_fates_tree_damage = .false.         ! true => turn on tree damage module
   logical, public            :: use_fates_ed_st3   = .false.            ! true => static stand structure
   logical, public            :: use_fates_ed_prescribed_phys = .false.  ! true => prescribed physiology
   logical, public            :: use_fates_inventory_init = .false.      ! true => initialize fates from inventory
-  logical, public            :: use_fates_nocomp = .false.              ! true => use no comopetition mode
-  logical, public            :: use_fates_sp = .false.                  ! true => use FATES satellite phenology mode
+  logical, public            :: use_fates_dbh_init = .false.            ! true => initialize cohorts from dbh (nocomp only)
+  logical, public            :: use_fates_nocomp = .false.              ! true => no competition mode
+  logical, public            :: use_fates_sp = .false.                  ! true => FATES satellite phenology mode
+  logical, public            :: use_fates_luh = .false.                 ! true => FATES land use transitions mode
+  logical, public            :: use_fates_lupft = .false.               ! true => FATES land use x pft mode
+  logical, public            :: use_fates_potentialveg = .false.        ! true => FATES potential veg only
+  logical, public            :: use_fates_daylength_factor = .false.    ! true => enable fates to use host land model daylength factor
+  character(len=256), public :: fluh_timeseries = ''                    ! filename for land use harmonization data
+  character(len=256), public :: flandusepftdat = ''                     ! filename for fates landuse x pft data
   character(len=256), public :: fates_inventory_ctrl_filename = ''      ! filename for inventory control
-  integer, public            :: fates_parteh_mode = -9                  ! 1 => carbon only
-                                                                        ! 2 => C+N+P (not enabled yet)
-                                                                        ! no others enabled
+  character(len=256), public :: fates_parteh_mode = ''                  ! carbon_onoly => carbon only
+                                                                        ! cnp => Carbon+Nitrogen+Phosphorus
+  integer, public            :: fates_seeddisp_cadence = iundef         ! 0 => no seed dispersal across gridcells
+                                                                        ! 1, 2, 3  => daily, monthly, or yearly seed dispersal
 
+  ! FATES history dimension level
+  ! fates can produce history at either the daily timescale (dynamics)
+  ! and the model step timescale. It can also generate output on the extra dimension
+  ! Performing this output can be expensive, so we allow different history dimension
+  ! levels.
+  ! The first index is output at the model timescale
+  ! The second index is output at the dynamics (daily) timescale      
+  ! 0 - no output
+  ! 1 - include only column level means (3D)
+  ! 2 - include output that includes the 4th dimension
 
-  !----------------------------------------------------------
-  !  BeTR switches
-  !----------------------------------------------------------
-  logical, public :: use_betr = .false.          ! true=> use BeTR
-  !$acc declare create(use_betr)
+  integer, dimension(2), public   :: fates_history_dimlevel = (/2,2/)
 
+  
   !----------------------------------------------------------
   ! lai streams switch for Sat. Phenology
   !----------------------------------------------------------
@@ -299,8 +330,11 @@ module elm_varctl
   !----------------------------------------------------------
 
   logical,  public :: single_column = .false. ! true => single column mode
+  logical,  public :: scm_multcols  = .false. ! true => SCM domain mode
   real(r8), public :: scmlat        = rundef  ! single column lat
   real(r8), public :: scmlon        = rundef  ! single column lon
+  integer,  public :: scm_nx        = -1      ! doubly periodic points x direction
+  integer,  public :: scm_ny        = -1      ! doubly periodic points y direction
 
   !----------------------------------------------------------
   ! instance control
@@ -350,31 +384,35 @@ module elm_varctl
   logical, public :: use_cndv            = .false.
   logical, public :: use_crop            = .false.
   logical, public :: use_snicar_frc      = .false.
-  logical, public :: use_snicar_ad       = .false.
+  logical, public :: use_snicar_ad       = .true.
   logical, public :: use_extrasnowlayers = .false.
+  logical, public :: use_firn_percolation_and_compaction  = .false.
   logical, public :: use_vancouver       = .false.
   logical, public :: use_mexicocity      = .false.
   logical, public :: use_noio            = .false.
   logical, public :: use_var_soil_thick  = .false.
+  logical, public :: use_T_rho_dependent_snowthk     = .false.
   logical, public :: use_atm_downscaling_to_topunit  = .false.
   character(len = SHR_KIND_CS), public :: precip_downscaling_method  = 'ERMM' ! Precip downscaling method values can be ERMM or FNM
   logical, public :: use_lake_wat_storage = .false.
+  character(len = SHR_KIND_CS), public :: lake_evap_cap_method = 'none' ! Lake evap cap method values can be none, rain_snow, or rain_snow_h2osno
   logical, public :: use_top_solar_rad   = .false.  ! TOP : sub-grid topographic effect on surface solar radiation
+  logical, public :: use_finetop_rad     = .false.  ! fineTOP : fine(grid)-scale topographic effect on surface radiation balance (longwave + shortwave)
+  
+  !----------------------------------------------------------
+  ! Fan controls (use_fan)
+  !----------------------------------------------------------
+  logical, public :: use_fan             = .false.
+  character(len=32), public :: fan_mode  = 'none'
+  logical, public :: fan_nh3_to_atm      = .false.
+  logical, public :: fan_to_bgc_crop     = .false.
+  logical, public :: fan_to_bgc_veg      = .false.
 
-
   !----------------------------------------------------------
-  ! VSFM switches
+  ! NGEE Arctic parameterizations
   !----------------------------------------------------------
-  logical          , public :: use_vsfm                    = .false.
-  logical          , public :: vsfm_use_dynamic_linesearch = .false.
-  logical          , public :: vsfm_include_seepage_bc     = .false.
-  character(len=32), public :: vsfm_satfunc_type           = 'smooth_brooks_corey_bz3'
-  character(len=32), public :: vsfm_lateral_model_type     = 'none'
-
-  !----------------------------------------------------------
-  ! PETSc-based thermal model switches
-  !----------------------------------------------------------
-  logical, public :: use_petsc_thermal_model = .false.
+  logical, public :: use_polygonal_tundra = .false.
+  logical, public :: use_arctic_init     = .false.
 
   !----------------------------------------------------------
   ! Stub EM switches
@@ -415,11 +453,15 @@ module elm_varctl
   real(r8), public         :: add_temperature = 0d0
 
   !-----------------------------------------------------------------------
-  ! Lateral grid connectivity
+  ! Domain decomposition
   !-----------------------------------------------------------------------
-  logical, public            :: lateral_connectivity  = .false.
   character(len=256), public :: domain_decomp_type    = 'round_robin'
 
+  !-----------------------------------------------------------------------
+  ! Subgrid hillslope hydrologic connectivity (through topounits)
+  !-----------------------------------------------------------------------
+  logical, public            :: use_IM2_hillslope_hydrology  = .false.
+ 
   !-----------------------------------------------------------------------
   ! flux limiter for phenology flux calculation
   logical, public :: use_pheno_flux_limiter = .false.
@@ -487,11 +529,6 @@ module elm_varctl
   !$acc declare copyin(use_noio           )
   !$acc declare copyin(use_var_soil_thick )
   !$acc declare copyin(tw_irr)
-  !$acc declare copyin(use_vsfm                   )
-  !$acc declare copyin(vsfm_use_dynamic_linesearch)
-  !$acc declare copyin(vsfm_include_seepage_bc    )
-  !$acc declare copyin(vsfm_satfunc_type          )
-  !$acc declare copyin(vsfm_lateral_model_type    )
 
 
   !----------------------------------------------------------
@@ -510,22 +547,36 @@ module elm_varctl
    !----------------------------------------------------------
    logical, public :: use_lnd_rof_two_way = .false.
    integer, public :: lnd_rof_coupling_nstep = 0
+
+   !----------------------------------------------------------
+   ! ocean land one way coupling
+   !----------------------------------------------------------
+   logical, public :: use_ocn_lnd_one_way = .false.
    
    
    !----------------------------------------------------------
    ! SNICAR-AD
    !----------------------------------------------------------
-   character(len=256), public :: snow_shape = 'sphere'
+   character(len=256), public :: snow_shape = 'hexagonal_plate'
    character(len=256), public :: snicar_atm_type = 'default'
    logical, public :: use_dust_snow_internal_mixing = .false.
 
+   !----------------------------------------------------------
+   ! MPI syncing
+   !----------------------------------------------------------
+   integer, public :: mpi_sync_nstep_freq = 0
+   
+   !----------------------------------------------------------
+   ! Modified infiltration scheme in surface water storage
+   !----------------------------------------------------------
+   logical, public :: use_modified_infil = .false.
 
 contains
 
   !---------------------------------------------------------------------------
   subroutine elm_varctl_set( caseid_in, ctitle_in, brnch_retain_casename_in,    &
-       single_column_in, scmlat_in, scmlon_in, nsrest_in, &
-       version_in, hostname_in, username_in)
+       single_column_in, scm_multcols_in, scmlat_in, scmlon_in, scm_nx_in, scm_ny_in, &
+       nsrest_in, version_in, hostname_in, username_in)
     !
     ! !DESCRIPTION:
     ! Set input control variables.
@@ -536,8 +587,11 @@ contains
     logical,            optional, intent(IN) :: brnch_retain_casename_in ! true => allow case name to remain the
                                                                          ! same for branch run
     logical,            optional, intent(IN) :: single_column_in         ! true => single column mode
+    logical,            optional, intent(IN) :: scm_multcols_in          ! SCM for multiple columns
     real(r8),           optional, intent(IN) :: scmlat_in                ! single column lat
     real(r8),           optional, intent(IN) :: scmlon_in                ! single column lon
+    integer,            optional, intent(IN) :: scm_nx_in                ! x direction points
+    integer,            optional, intent(IN) :: scm_ny_in                ! y direction points
     integer,            optional, intent(IN) :: nsrest_in                ! 0: initial run. 1: restart: 3: branch
     character(len=256), optional, intent(IN) :: version_in               ! model version
     character(len=256), optional, intent(IN) :: hostname_in              ! hostname running on
@@ -551,8 +605,11 @@ contains
     if ( present(caseid_in       ) ) caseid        = caseid_in
     if ( present(ctitle_in       ) ) ctitle        = ctitle_in
     if ( present(single_column_in) ) single_column = single_column_in
+    if ( present(scm_multcols_in ) ) scm_multcols  = scm_multcols_in
     if ( present(scmlat_in       ) ) scmlat        = scmlat_in
     if ( present(scmlon_in       ) ) scmlon        = scmlon_in
+    if ( present(scm_nx_in       ) ) scm_nx        = scm_nx_in
+    if ( present(scm_ny_in       ) ) scm_ny        = scm_ny_in
     if ( present(nsrest_in       ) ) nsrest        = nsrest_in
     if ( present(brnch_retain_casename_in) ) brnch_retain_casename = brnch_retain_casename_in
     if ( present(version_in      ) ) version       = version_in
@@ -594,6 +651,12 @@ contains
   logical function CNAllocate_CarbonPhosphorus_only()
     cnallocate_carbonphosphorus_only = carbonphosphorus_only
   end function CNAllocate_CarbonPhosphorus_only
+
+  ! set module iac flag
+  subroutine elm_varctl_set_iac_flag(iac_flag_in)
+    logical, intent(in) :: iac_flag_in
+    iac_present = iac_flag_in
+  end subroutine elm_varctl_set_iac_flag
 
   function get_carbontag(carbon_type)result(ctag)
     !$acc routine seq

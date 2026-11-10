@@ -1,0 +1,112 @@
+name: eamxx-v1
+
+on:
+  # Runs on all PRs (the filter [master] would prevent testing stacked PRs)
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+    paths:
+      # first, yes to these
+      - '.github/workflows/eamxx-v1-testing.yml'
+      - 'cime_config/machines/config_machines.xml'
+      - 'cime_config/machines/cmake_macros/ghci*.cmake'
+      - 'components/eamxx/**'
+      - 'components/homme/**'
+      - 'components/eam/src/physics/rrtmgp/**'
+      - 'components/eam/src/physics/cosp2/**'
+      - 'externals/ekat'
+      - 'externals/mam4xx'
+      - 'externals/haero'
+      - 'externals/scorpio'
+      # second, no to these
+      - '!components/eamxx/.clang-format'
+      - '!components/eamxx/docs/**'
+      - '!components/eamxx/mkdocs.yml'
+
+  # Manual run is used to bless
+  workflow_dispatch:
+    inputs:
+      bless:
+        description: 'Generate baselines'
+        required: true
+        type: boolean
+
+  # Also run nightly
+  schedule:
+    - cron: '0 7 * * *'  # Runs at 7 AM UTC, which is midnight MT during Standard Time
+
+defaults:
+  run:
+    shell: bash -leo pipefail {0}
+
+concurrency:
+  # Two runs are in the same group if they are testing the same git ref
+  #  - if trigger=pull_request, the ref is refs/pull/<PR_NUMBER>/merge
+  #  - for other triggers, the ref is the branch tested
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Submit to cdash only for nightlies or if the user explicitly forced a submission via workflow dispatch
+  submit: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch') }}
+  # Generate only if user requested via workflow_dispatch
+  generate: ${{ github.event_name == 'workflow_dispatch' && inputs.bless }}
+  # Compare/generate flags for create_test
+  flags: ${{ github.event_name == 'workflow_dispatch' && inputs.bless && '-o -g -b master' || '-c -b master' }}
+
+jobs:
+  tests:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    runs-on: [self-hosted, e3sm, '${{ matrix.runner }}']
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: gnu, name: ERS_Ln9.ne4_ne4.F2000-SCREAMv1-AQP1.ghci_gnu.eamxx-output-preset-2--eamxx-L72}
+          - {runner: gnu, name: ERS_P16_Ln22.ne30pg2_ne30pg2.FIOP-SCREAMv1-DP.ghci_gnu.eamxx-dpxx-arm97}
+          - {runner: gnu, name: ERS_Ln22.ne4pg2_ne4pg2.F2010-SCREAMv1.ghci_gnu.eamxx-small_kernels--eamxx-output-preset-5}
+          - {runner: gnu, name: REP_D_Ln5.ne4pg2_oQU480.F2010-EAMxx-MAM4xx.ghci_gnu.eamxx-L72}
+          - {runner: gnu, name: ERS.ne4pg2_ne4pg2.F2010-SCREAMv1.ghci_gnu.eamxx-output-prod}
+          - {runner: intel, name: ERS.ne4pg2_ne4pg2.F2010-SCREAMv1.ghci_intel.eamxx-output-prod}
+          - {runner: cuda, name: ERS.ne4pg2_ne4pg2.F2010-SCREAMv1.ghci_gnugpu.eamxx-output-prod}
+    name: ${{ matrix.name }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          show-progress: false
+          submodules: recursive
+      - name: Show action trigger
+        uses: e3sm-project/automation/show-trigger@v1
+      - name: Run test
+        id: run-tests
+        run: |
+          ./cime/scripts/create_test ${{ matrix.name }} ${{ env.flags }} --wait
+      - name: Print TestStatus.log
+        if: ${{ always() && steps.run-tests.outcome == 'failure' }}
+        run: |
+          for f in /tmp/${{ matrix.name }}*/TestStatus.log; do
+            echo "::group::$f"
+            cat "$f"
+            echo "::endgroup::"
+          done
+      - name: Upload log files
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: logs.${{ matrix.name }}
+          path: |
+            /tmp/${{ matrix.name }}*/TestStatus
+            /tmp/${{ matrix.name }}*/TestStatus.log
+            /tmp/${{ matrix.name }}*/bld/**/*.bldlog.*
+            /tmp/${{ matrix.name }}*/run/**/*.log.*
+            /tmp/${{ matrix.name }}*/run/**/*.cprnc.out
+          retention-days: 14
+      - name: Upload nc files
+        if: ${{ failure() && steps.run-tests.outcome == 'failure' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: outputs.${{ matrix.name }}
+          path: |
+            /tmp/${{ matrix.name }}*/run/**/*.nc*
+          retention-days: 14

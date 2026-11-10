@@ -3,6 +3,8 @@
 list(APPEND CPPDEFS "-DCORE_LANDICE")
 list(APPEND INCLUDES "${CMAKE_BINARY_DIR}/core_landice/shared" "${CMAKE_BINARY_DIR}/core_landice/analysis_members" "${CMAKE_BINARY_DIR}/core_landice/mode_forward")
 
+list(APPEND LIBRARIES ${Albany_LIBRARIES})
+
 #
 # Check if building with LifeV, Albany, and/or PHG external libraries
 #
@@ -43,11 +45,15 @@ list(APPEND RAW_SOURCES
   core_landice/shared/mpas_li_constants.F
   core_landice/shared/mpas_li_mask.F
   core_landice/shared/mpas_li_setup.F
+  core_landice/shared/mpas_li_mesh.F
+  core_landice/shared/mpas_li_config.F
+  core_landice/shared/mpas_li_time_average_coupled.F
 )
 
 # analysis members
 list(APPEND RAW_SOURCES
   core_landice/analysis_members/mpas_li_analysis_driver.F
+  core_landice/analysis_members/mpas_li_flux_gates.F
   core_landice/analysis_members/mpas_li_global_stats.F
   core_landice/analysis_members/mpas_li_regional_stats.F
 )
@@ -57,9 +63,11 @@ list(APPEND RAW_SOURCES
   core_landice/mode_forward/mpas_li_core.F
   core_landice/mode_forward/mpas_li_core_interface.F
   core_landice/mode_forward/mpas_li_time_integration.F
-  core_landice/mode_forward/mpas_li_time_integration_fe.F
+  core_landice/mode_forward/mpas_li_time_integration_fe_rk.F
   core_landice/mode_forward/mpas_li_diagnostic_vars.F
   core_landice/mode_forward/mpas_li_advection.F
+  core_landice/mode_forward/mpas_li_advection_fct_shared.F
+  core_landice/mode_forward/mpas_li_advection_fct.F
   core_landice/mode_forward/mpas_li_calving.F
   core_landice/mode_forward/mpas_li_statistics.F
   core_landice/mode_forward/mpas_li_velocity.F
@@ -70,6 +78,7 @@ list(APPEND RAW_SOURCES
   core_landice/mode_forward/mpas_li_velocity_external.F
   core_landice/mode_forward/mpas_li_subglacial_hydro.F
   core_landice/mode_forward/mpas_li_bedtopo.F
+  core_landice/mode_forward/mpas_li_ocean_extrap.F
 )
 
 if (CPPDEFS MATCHES ".*MPAS_LI_BUILD_INTERFACE.*")

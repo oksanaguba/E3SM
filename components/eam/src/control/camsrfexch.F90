@@ -104,12 +104,14 @@ module camsrfexch
      real(r8), allocatable :: tref(:)       ! ref height surface air temp
      real(r8), allocatable :: qref(:)       ! ref height specific humidity 
      real(r8), allocatable :: u10(:)        ! 10m wind speed
+     real(r8), allocatable :: u10withgusts(:) ! 10m wind speed with gustiness
      real(r8), allocatable :: ts(:)         ! merged surface temp 
      real(r8), allocatable :: sst(:)        ! sea surface temp
      real(r8), allocatable :: snowhland(:)  ! snow depth (liquid water equivalent) over land
      real(r8), allocatable :: snowhice(:)   ! snow depth over ice
      real(r8), allocatable :: fco2_lnd(:)   ! co2 flux from lnd
      real(r8), allocatable :: fco2_ocn(:)   ! co2 flux from ocn
+     real(r8), allocatable :: fco2_surface_iac(:)   ! co2 flux from iac (surface)
      real(r8), allocatable :: fdms(:)       ! dms flux
      real(r8), allocatable :: landfrac(:)   ! land area fraction
      real(r8), allocatable :: icefrac(:)    ! sea-ice areal fraction
@@ -219,6 +221,9 @@ CONTAINS
        allocate (cam_in(c)%u10(pcols), stat=ierror)
        if ( ierror /= 0 ) call endrun('HUB2ATM_ALLOC error: allocation error u10')
 
+       allocate (cam_in(c)%u10withgusts(pcols), stat=ierror)
+       if ( ierror /= 0 ) call endrun('HUB2ATM_ALLOC error: allocation error u10withgusts')
+
        allocate (cam_in(c)%ts(pcols), stat=ierror)
        if ( ierror /= 0 ) call endrun('HUB2ATM_ALLOC error: allocation error ts')
 
@@ -236,6 +241,9 @@ CONTAINS
 
        allocate (cam_in(c)%fco2_ocn(pcols), stat=ierror)
        if ( ierror /= 0 ) call endrun('HUB2ATM_ALLOC error: allocation error fco2_ocn')
+
+       allocate (cam_in(c)%fco2_surface_iac(pcols), stat=ierror)
+       if ( ierror /= 0 ) call endrun('HUB2ATM_ALLOC error: allocation error fco2_surface_iac')
 
        allocate (cam_in(c)%fdms(pcols), stat=ierror)
        if ( ierror /= 0 ) call endrun('HUB2ATM_ALLOC error: allocation error fdms')
@@ -308,12 +316,14 @@ CONTAINS
        cam_in(c)%tref     (:) = 0._r8
        cam_in(c)%qref     (:) = 0._r8
        cam_in(c)%u10      (:) = 0._r8
+       cam_in(c)%u10withgusts(:) = 0._r8
        cam_in(c)%ts       (:) = 0._r8
        cam_in(c)%sst      (:) = 0._r8
        cam_in(c)%snowhland(:) = 0._r8
        cam_in(c)%snowhice (:) = 0._r8
        cam_in(c)%fco2_lnd (:) = 0._r8
        cam_in(c)%fco2_ocn (:) = 0._r8
+       cam_in(c)%fco2_surface_iac (:) = 0._r8
        cam_in(c)%fdms     (:) = 0._r8
        cam_in(c)%landfrac (:) = posinf
        cam_in(c)%icefrac  (:) = posinf
@@ -617,12 +627,14 @@ CONTAINS
           deallocate(cam_in(c)%tref)
           deallocate(cam_in(c)%qref)
           deallocate(cam_in(c)%u10)
+          deallocate(cam_in(c)%u10withgusts)
           deallocate(cam_in(c)%ts)
           deallocate(cam_in(c)%sst)
           deallocate(cam_in(c)%snowhland)
           deallocate(cam_in(c)%snowhice)
           deallocate(cam_in(c)%fco2_lnd)
           deallocate(cam_in(c)%fco2_ocn)
+          deallocate(cam_in(c)%fco2_surface_iac)
           deallocate(cam_in(c)%fdms)
           deallocate(cam_in(c)%landfrac)
           deallocate(cam_in(c)%icefrac)
@@ -713,7 +725,6 @@ subroutine cam_export(state,cam_out,pbuf)
    integer :: vmag_gust_idx, wsresp_idx, tau_est_idx
    real(r8) :: umb(pcols), vmb(pcols),vmag(pcols)
    logical :: linearize_pbl_winds ! Send wsresp and tau_est to coupler.
-   logical :: export_gustiness ! Send vmag_gust to coupler
 
    real(r8), pointer :: prec_dp(:)                 ! total precipitation   from ZM convection
    real(r8), pointer :: snow_dp(:)                 ! snow from ZM   convection
@@ -732,8 +743,7 @@ subroutine cam_export(state,cam_out,pbuf)
    lchnk = state%lchnk
    ncol  = state%ncol
 
-   call phys_getopts(linearize_pbl_winds_out=linearize_pbl_winds, &
-                     export_gustiness_out=export_gustiness)
+   call phys_getopts(linearize_pbl_winds_out=linearize_pbl_winds)
 
    prec_dp_idx = pbuf_get_index('PREC_DP')
    snow_dp_idx = pbuf_get_index('SNOW_DP')
@@ -765,18 +775,9 @@ subroutine cam_export(state,cam_out,pbuf)
 !PMA adds gustiness to surface scheme c20181128
 
    do i=1,ncol
-      if (export_gustiness) then
-         cam_out%ubot(i)  = state%u(i,pver)
-         cam_out%vbot(i)  = state%v(i,pver)
-         cam_out%ugust(i) = vmag_gust(i)
-      else
-         ! If not exporting gustiness as a separate field, we apply it here.
-         umb(i)           = state%u(i,pver)
-         vmb(i)           = state%v(i,pver)
-         vmag(i)          = max(1.e-5_r8,sqrt( umb(i)**2._r8 + vmb(i)**2._r8))
-         cam_out%ubot(i)  = state%u(i,pver) * ((vmag_gust(i)+vmag(i))/vmag(i))
-         cam_out%vbot(i)  = state%v(i,pver) * ((vmag_gust(i)+vmag(i))/vmag(i))
-      end if
+      cam_out%ubot(i)  = state%u(i,pver)
+      cam_out%vbot(i)  = state%v(i,pver)
+      cam_out%ugust(i) = vmag_gust(i)
       cam_out%tbot(i)  = state%t(i,pver)
       cam_out%thbot(i) = state%t(i,pver) * state%exner(i,pver)
       cam_out%zbot(i)  = state%zm(i,pver)

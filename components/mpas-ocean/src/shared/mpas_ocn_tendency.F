@@ -32,6 +32,7 @@ module ocn_tendency
    use ocn_constants
    use ocn_config
    use ocn_mesh
+   use ocn_subgrid
 
    use ocn_surface_bulk_forcing
    use ocn_surface_land_ice_fluxes
@@ -67,6 +68,7 @@ module ocn_tendency
    use ocn_wetting_drying
    use ocn_vel_tidal_potential
    use ocn_vel_self_attraction_loading
+   use ocn_manufactured_solution
 
    implicit none
    private
@@ -127,12 +129,14 @@ contains
       ! pointers for the actual output variables within the pools above
       real (kind=RKIND), dimension(:), pointer, contiguous :: &
          surfaceThicknessFlux,     &! surface thickness flux
-         surfaceThicknessFluxRunoff ! surface thickness flux from runoff
+         surfaceThicknessFluxRunoff, &! surface thickness flux from runoff
+         surfaceThicknessFluxSubglacialRunoff ! surface thickness flux from runoff
 
       real (kind=RKIND), dimension(:,:), pointer, contiguous :: &
          tendThick,        &! accumulated layer thickness tendency
          fractionAbsorbed, &! fraction of sfc flux absorbed
-         fractionAbsorbedRunoff ! fraction of runoff flux absorbed
+         fractionAbsorbedRunoff, &! fraction of sfc flux absorbed
+         fractionAbsorbedSubglacialRunoff ! fraction of subglacial runoff flux absorbed
 
       !-----------------------------------------------------------------
       ! local variables
@@ -153,10 +157,16 @@ contains
                                              surfaceThicknessFlux)
       call mpas_pool_get_array(forcingPool, 'surfaceThicknessFluxRunoff', &
                                              surfaceThicknessFluxRunoff)
+      call mpas_pool_get_array(forcingPool, 'surfaceThicknessFluxSubglacialRunoff', &
+                                             surfaceThicknessFluxSubglacialRunoff)
       call mpas_pool_get_array(forcingPool, 'fractionAbsorbed', &
                                              fractionAbsorbed)
       call mpas_pool_get_array(forcingPool, 'fractionAbsorbedRunoff', &
                                              fractionAbsorbedRunoff)
+      call mpas_pool_get_array(forcingPool, 'fractionAbsorbedSubglacialRunoff', &
+                                             fractionAbsorbedSubglacialRunoff)
+
+
 
       !
       ! layer thickness tendency: 
@@ -184,6 +194,25 @@ contains
       !$omp end parallel
 #endif
 
+      if (trim(config_subglacial_runoff_mode) == 'data') then
+#ifdef MPAS_OPENACC
+      !$acc enter data create(surfaceThicknessFluxSubglacialRunoff)
+
+      !$acc parallel loop &
+      !$acc     present(surfaceThicknessFluxSubglacialRunoff)
+#else
+      !$omp parallel
+      !$omp do schedule(runtime)
+#endif
+         do iCell = 1, nCellsAll
+            surfaceThicknessFluxSubglacialRunoff(iCell) = 0.0_RKIND
+         end do
+#ifndef MPAS_OPENACC
+      !$omp end do
+      !$omp end parallel
+#endif
+      end if
+
       ! If turned off, return with zero fluxes, tendencies
       ! Otherwise, start time and call routines to accumulate
       if (config_disable_thick_all_tend) return
@@ -193,6 +222,11 @@ contains
       call ocn_surface_bulk_forcing_thick(forcingPool, &
                                           surfaceThicknessFlux, &
                                           surfaceThicknessFluxRunoff, err)
+
+      if (trim(config_subglacial_runoff_mode) == 'data') then
+            call ocn_surface_bulk_forcing_thick_subglacial_runoff(forcingPool, &
+                                          surfaceThicknessFluxSubglacialRunoff, err)
+      end if
 
       ! Compute surface thickness flux from land ice
       call ocn_surface_land_ice_fluxes_thick(forcingPool, &
@@ -216,6 +250,11 @@ contains
                                        surfaceThicknessFlux, &
                                        surfaceThicknessFluxRunoff, &
                                        tendThick, err)
+      if (trim(config_subglacial_runoff_mode) == 'data') then
+            call ocn_thick_surface_flux_tend_subglacial_runoff(fractionAbsorbedSubglacialRunoff, &
+                                       surfaceThicknessFluxSubglacialRunoff, &
+                                       tendThick, err)
+      end if
 
       ! Compute contribution from frazil ice formation
       call ocn_frazil_forcing_layer_thickness(forcingPool, &
@@ -225,8 +264,13 @@ contains
       call ocn_tidal_forcing_layer_thickness(forcingPool, &
                                              tendThick, err)
 
+      ! Compute thickness tendency to manufactured solution
+      call ocn_manufactured_solution_tend_thick(forcingPool, &
+                                                tendThick, err)
+
 #ifdef MPAS_OPENACC
-      !$acc exit data copyout(tendThick, surfaceThicknessFlux, surfaceThicknessFluxRunoff)
+      !$acc exit data copyout(tendThick, surfaceThicknessFlux, surfaceThicknessFluxRunoff, &
+      !$acc      surfaceThicknessFluxSubglacialRunoff)
 #endif
 
       call mpas_timer_stop("ocn_tend_thick")
@@ -308,6 +352,9 @@ contains
       real (kind=RKIND), dimension(:,:,:), pointer, contiguous :: &
          activeTracers
 
+      real (kind=RKIND):: hCrit, hRampMin
+      real (kind=RKIND), parameter:: hRampCoef = 4.0_RKIND
+
       ! End preamble
       !-----------------------------------------------------------------
       ! Begin code
@@ -351,7 +398,7 @@ contains
       !$acc               density, normRelVortEdge, montgomeryPotential, pressure, &
       !$acc               thermExpCoeff, salineContractCoeff, tangentialVelocity, &
       !$acc               layerThickEdgeFlux, kineticEnergyCell, sfcFlxAttCoeff, potentialDensity, &
-      !$acc               vertAleTransportTop, vertViscTopOfEdge, wettingVelocity)
+      !$acc               vertAleTransportTop, vertViscTopOfEdge, wettingVelocityFactor)
       !$acc enter data &
       !$acc    copyin(tendVel, sfcStress, sfcStressMag, &
       !$acc    ssh, normalVelocity, &
@@ -397,11 +444,17 @@ contains
       ! Compute bulk forcing surface stress
       call ocn_surface_bulk_forcing_vel( &
                                     forcingPool, sfcStress, &
-                                    sfcStressMag, err)
+                                    sfcStressMag, velocityZonal, &
+                                    velocityMeridional, normalVelocity, err)
 
       ! Add top drag to surface stress
       call ocn_surface_land_ice_fluxes_vel( &
                                        sfcStress, sfcStressMag, err)
+
+      ! Scale surface stress by wet area fraction
+      if (config_use_subgrid_wetting_drying) then
+         call ocn_subgrid_scale_sfcStress(sfcStress)
+      endif
 
       ! Add nonlinear Coriolis term and horizontal advection of
       ! momentum, formulated as grad of kinetic energy
@@ -422,19 +475,21 @@ contains
                                thermExpCoeff, salineContractCoeff, &
                                tendVel, err)
 
-      ! Compute ssh additions due to self-attraction and loading
+      ! Compute pgf additions due to self-attraction and loading
       if(mpas_is_alarm_ringing(domain % clock, 'salComputeAlarm', ierr=err)) then 
 #ifdef MPAS_DEBUG
           call mpas_log_write('       Computing SAL')
 #endif
-          call ocn_compute_self_attraction_loading(domain, forcingPool, dminfo, ssh, err)
+          call ocn_compute_self_attraction_loading(domain, forcingPool, dminfo, &
+                                                   ssh, surfacePressure, err)
           call mpas_reset_clock_alarm(domain % clock, 'salComputeAlarm', ierr=err)
       endif
-      !$acc update device(ssh_sal)
 
       ! Add tidal potential (if needed) 
       call ocn_compute_tidal_potential_forcing(err)
-      if (config_time_integrator == 'RK4') then
+      if ( (config_time_integrator == 'RK4') &
+           .or. (config_time_integrator =='LTS') &
+           .or. (config_time_integrator == 'FB_LTS') ) then
         ! for split explicit, tidal forcing is added in barotropic subcycles
         call ocn_vel_tidal_potential_tend(ssh,surfacePressure, tendVel, err)
       endif
@@ -445,28 +500,65 @@ contains
       ! Add forcing and bottom drag
       call ocn_vel_forcing_tend(normalVelocity, sfcFlxAttCoeff, &
                                 sfcStress, kineticEnergyCell, &
+                                layerThickEdgeDrag, &
                                 layerThickEdgeMean, tendVel, err)
+ 
+      ! Compute tendency term for manufactured solution
+      call ocn_manufactured_solution_tend_vel(forcingPool, &
+                                              tendVel, err)
 
       ! vertical mixing treated implicitly in a later routine
       ! adjust total velocity tendency based on wetting/drying
 
+
+      hCrit = config_drying_min_cell_height + &
+                              config_drying_safety_height
+
+      hRampMin = config_zero_drying_velocity_ramp_hmin
+
 #ifdef MPAS_OPENACC
       !$acc parallel loop collapse(2) &
-      !$acc    present(tendVel, wettingVelocity)
+      !$acc    present(tendVel, wettingVelocityFactor)
 #else
       !$omp parallel
       !$omp do schedule(runtime) private(k)
 #endif
       do iEdge = 1, nEdgesAll
       do k=1,nVertLevels
-         tendVel(k,iEdge) = tendVel(k,iEdge)* &
-                            (1.0_RKIND - wettingVelocity(k,iEdge))
+         tendVel(k,iEdge) = tendVel(k,iEdge) * (1.0_RKIND - wettingVelocityFactor(k,iEdge))
       end do
       end do
 #ifndef MPAS_OPENACC
       !$omp end do
       !$omp end parallel
 #endif
+
+
+      if ( config_use_wetting_drying .AND. config_use_subgrid_wetting_drying ) then
+         k = 1
+#ifdef MPAS_OPENACC
+      !$acc parallel loop present(tendVel, layerThickEdgeFlux)
+#else
+      !$omp parallel
+      !$omp do schedule(runtime)
+#endif
+         do iEdge = 1, nEdgesAll
+            ! Handle dry/drying edges for outgoing edge fluxes
+            if ( layerThickEdgeFlux(k,iEdge) <= hCrit ) then
+               tendVel(k,iEdge) = 0.0_RKIND
+            elseif ( (layerThickEdgeFlux(k,iEdge) > hCrit) .and. &
+               (layerThickEdgeFlux(k,iEdge) <= config_zero_drying_velocity_ramp_hmax) ) then
+               ! Following O'Dea et al. (2021), if total upwinded wct is less than
+               ! 2*critical thickness, apply damping at each edge
+               tendVel(k,iEdge) = tendVel(k,iEdge) * &
+                  tanh(hRampCoef*(layerThickEdgeFlux(k,iEdge) - hRampMin)/hRampMin)
+            endif
+         enddo
+#ifndef MPAS_OPENACC
+      !$omp end do
+      !$omp end parallel
+#endif
+      endif
 
       !*** Transfer any needed data back to host and delete inputs
       !$acc exit data &
@@ -530,6 +622,7 @@ contains
          tendPool        !< [inout] Tendency terms for all variables
 
       integer :: &
+         i,                  &! general loop counter
          iCell, iEdge, k, n, &! loop counters for cell,edge,vert,tracer
          err,                &! internal error flag 
          timeLevel,          &! time level to use for state variables
@@ -557,6 +650,7 @@ contains
          tracersPool,            &! tracer variables
          tracersTendPool,        &! tracer tendencies
          tracersSurfaceFluxPool, &! surface fluxes
+         ecosysFrazilForcingPool, & ! ecosys tracers frazil tendencies
          tracersSurfaceRestoringFieldsPool, &! surface restoring
          tracersInteriorRestoringFieldsPool,&! interior restoring
          tracersExponentialDecayFieldsPool, &! exponential decay
@@ -565,11 +659,12 @@ contains
 
       ! pointers for retrieving data from pools
       integer, pointer :: &
-         indexTemperature, indexSalinity ! tracer index for temp,salt
-      integer, pointer :: &
-         indexCFC11, indexCFC12 ! tracer indicies for CFCs
+         indexTracer,                     &! general tracer index
+         indexTemperature, indexSalinity, &! tracer index for temp,salt
+         indexCFC11, indexCFC12            ! tracer indicies for CFCs
 
       logical, pointer :: & ! option configuration flags
+         config_use_tracerField, &
          config_use_tracerGroup, &
          config_use_tracerGroup_surface_bulk_forcing, &
          config_use_tracerGroup_surface_restoring,    &
@@ -591,9 +686,11 @@ contains
       real (kind=RKIND), dimension(:,:), pointer, contiguous :: &
          layerThickness,               &! layer thickness
          tracerGroupSurfaceFlux,       &! tracer flux at surface
-         fractionAbsorbed,             &! frac sfc flux aborbed
-         fractionAbsorbedRunoff,       &! frac runoff flux aborbed
+         fractionAbsorbed,             &! frac sfc flux absorbed
+         fractionAbsorbedRunoff,       &! frac runoff flux absorbed
+         fractionAbsorbedSubglacialRunoff,       &! frac subglacial runoff flux absorbed
          tracerGroupSurfaceFluxRunoff, &! runoff flux
+         tracerGroupSurfaceFluxSubglacialRunoff, &! subglacial runoff flux
          tracerGroupSurfaceFluxRemoved,&! total sfc flux absorbed
          nonLocalSurfaceTracerFlux      ! non-local fluxes (eg KPP)
 
@@ -608,6 +705,13 @@ contains
       ! Scratch Arrays
       real (kind=RKIND), dimension(:,:), allocatable :: &
          normalThicknessFlux ! Flux of thickness through edge (m^2/s)
+      integer, parameter :: num_fields = 8
+      logical, dimension(:), allocatable :: skipTracer
+      character(len=20), dimension(num_fields) :: &
+            fieldNames = [character(len=20) :: &
+                          'rain', 'snow', &
+                          'riverRunoff', 'iceRunoff', 'subglacialRunoff', &
+                          'seaIceFreshWater', 'icebergFreshWater', 'landIceFreshwater']
 
       ! End preamble
       !-----------------------------------------------------------------
@@ -640,6 +744,8 @@ contains
                                                tracersTendPool)
       call mpas_pool_get_subpool(forcingPool, 'tracersSurfaceFlux', &
                                                tracersSurfaceFluxPool)
+      call mpas_pool_get_subpool(forcingPool, 'ecosysFrazilForcing', &
+                                               ecosysFrazilForcingPool)
       call mpas_pool_get_dimension(tracersPool, 'index_temperature', &
                                                  indexTemperature)
       call mpas_pool_get_dimension(tracersPool, 'index_salinity', &
@@ -655,6 +761,8 @@ contains
                                              fractionAbsorbed)
       call mpas_pool_get_array(forcingPool, 'fractionAbsorbedRunoff', &
                                              fractionAbsorbedRunoff)
+      call mpas_pool_get_array(forcingPool, 'fractionAbsorbedSubglacialRunoff', &
+                                             fractionAbsorbedSubglacialRunoff)
 
       ! allocate and transfer data not specific to tracer groups
       allocate(normalThicknessFlux(nVertLevels, nEdgesAll+1))
@@ -747,7 +855,19 @@ contains
          modifiedConfigName = configBase // '_ttd_forcing'
          call mpas_pool_get_config(ocnConfigs, modifiedConfigName, &
                             config_use_tracerGroup_ttd_forcing)
-
+         if ( groupName == 'freshwaterTracers' ) then
+           if (config_use_tracerGroup_surface_restoring) &
+             call mpas_log_write('surface restoring not supported for freshwaterTracers group', MPAS_LOG_CRIT)
+           if (config_use_tracerGroup_interior_restoring) &
+             call mpas_log_write('interior restoring not supported for freshwaterTracers group', MPAS_LOG_CRIT)
+           if (config_use_tracerGroup_exponential_decay) &
+             call mpas_log_write('exponential decay not supported for freshwaterTracers group', MPAS_LOG_CRIT)
+           if (config_use_tracerGroup_idealAge_forcing) &
+             ! TODO support this
+             call mpas_log_write('idealAge forcing not supported for freshwaterTracers group', MPAS_LOG_CRIT)
+           if (config_use_tracerGroup_ttd_forcing) &
+             call mpas_log_write('TTD forcing not supported for freshwaterTracers group', MPAS_LOG_CRIT)
+         endif
          ! Get tracers from pool, determine number of tracers in group
          call mpas_pool_get_array(tracersPool, groupName, &
                                   tracerGroup, timeLevel)
@@ -764,6 +884,19 @@ contains
          call mpas_pool_get_array(tracersSurfaceFluxPool, &
                                   modifiedGroupName, &
                                   tracerGroupSurfaceFlux)
+         allocate(skipTracer(nTracersGroup))
+         skipTracer(:) = .false.
+         if ( groupName == 'freshwaterTracers' ) then
+            do i = 1, num_fields
+               call mpas_pool_get_dimension( &
+                      tracersSurfaceFluxPool, &
+                      'index_'//trim(fieldNames(i))//'SurfaceFlux', indexTracer)
+               modifiedConfigName = configBase // '_' // trim(fieldNames(i)) // 'Flux'
+               call mpas_pool_get_config(ocnConfigs, modifiedConfigName, &
+                                         config_use_tracerField)
+               skipTracer(indexTracer) = (.not. config_use_tracerField)
+            enddo
+         endif
 
          ! Get Array of total surface temp/salt flux 
          ! (includes thickness tendencies)
@@ -778,6 +911,14 @@ contains
          call mpas_pool_get_array(tracersSurfaceFluxPool, &
                                   modifiedGroupName, &
                                   tracerGroupSurfaceFluxRunoff)
+
+         if (trim(config_subglacial_runoff_mode) == 'data') then
+             ! Get surface flux due to subglacial runoff array
+             modifiedGroupName = groupName // "SurfaceFluxSubglacialRunoff"
+             call mpas_pool_get_array(tracersSurfaceFluxPool, &
+                                      modifiedGroupName, &
+                                      tracerGroupSurfaceFluxSubglacialRunoff)
+         end if
 
          ! Get surface flux removed array to keep track of how much
          ! flux is ignored
@@ -811,17 +952,34 @@ contains
          !$omp end do
          !$omp end parallel
 
+         if (trim(config_subglacial_runoff_mode) == 'data') then
+         !$omp parallel
+         !$omp do schedule(runtime) private(n)
+         do iCell = 1, nCellsAll
+             do n=1,nTracersGroup
+                tracerGroupSurfaceFluxSubglacialRunoff (n,iCell) = 0.0_RKIND
+             end do
+         end do
+         !$omp end do
+         !$omp end parallel
+         end if
+
          !
          ! compute surface tracer flux from bulk forcing
          !
          if (config_use_tracerGroup_surface_bulk_forcing) then
-
+            ! This applies surface fluxes if groupName is activeTracers
             call ocn_surface_bulk_forcing_tracers(meshPool, groupName, &
                                   forcingPool, tracerGroup, &
                                   tracerGroupSurfaceFlux, &
                                   tracerGroupSurfaceFluxRunoff, &
                                   tracerGroupSurfaceFluxRemoved, &
                                   dt, layerThickness, err)
+            if (trim(config_subglacial_runoff_mode) == 'data') then
+                call ocn_surface_bulk_forcing_tracers_subglacial_runoff(meshPool, groupName, &
+                                      forcingPool, &
+                                      tracerGroupSurfaceFluxSubglacialRunoff, err)
+            end if
 
          end if ! sfc bulk forcing
 
@@ -1098,7 +1256,8 @@ contains
          call ocn_tracer_advection_tend(tracerGroup, &
                             normalThicknessFlux, vertAleTransportTop, &
                             layerThickness, dt, tracerGroupTend, &
-                            computeBudgets)
+                            computeBudgets, skipTracer)
+         deallocate(skipTracer)
 
          !$acc update host (activeTracerHorizontalAdvectionEdgeFlux, &
          !$acc              activeTracerHorizontalAdvectionTendency, &
@@ -1135,8 +1294,9 @@ contains
          call ocn_tracer_hmix_tend(meshPool, layerThickEdgeMean, &
                                    layerThickness, zMid, tracerGroup, &
                                    RediKappa, slopeTriadUp, &
-                                   slopeTriadDown, dt, isActiveTracer, &
-                                   RediKappaScaling, rediLimiterCount, &
+                                   slopeTriadDown, limiterUp, &
+                                   limiterDown, dt, isActiveTracer, &
+                                   rediLimiterCount, &
                                    tracerGroupTend, err)
 
          if (computeBudgets) then
@@ -1178,10 +1338,15 @@ contains
          endif ! compute budgets
 
          call ocn_tracer_surface_flux_tend(meshPool, fractionAbsorbed, &
-                               fractionAbsorbedRunoff, layerThickness, &
-                               tracerGroupSurfaceFlux, &
+                               fractionAbsorbedRunoff, &
+                               layerThickness, tracerGroupSurfaceFlux, &
                                tracerGroupSurfaceFluxRunoff,  &
                                tracerGroupTend, err)
+         if (trim(config_subglacial_runoff_mode) == 'data') then
+                call ocn_tracer_surface_flux_tend_subglacial_runoff(meshPool, fractionAbsorbedSubglacialRunoff, &
+                               layerThickness, tracerGroupSurfaceFluxSubglacialRunoff,  &
+                               tracerGroupTend, err)
+         end if
 
          !
          ! Compute shortwave absorption
@@ -1234,11 +1399,8 @@ contains
          ! Compute tracer tendency due to non-local flux computed in KPP
          !
          if (config_use_cvmix_kpp) then
-            call mpas_timer_start("non-local flux from KPP")
+               call mpas_timer_start("non-local flux from KPP")
             if (.not. config_cvmix_kpp_nonlocal_with_implicit_mix) then
-               call ocn_compute_KPP_input_fields(statePool, forcingPool,&
-                                                 meshPool, timeLevel)
-
                if (computeBudgets) then
                   !$omp parallel
                   !$omp do schedule(runtime) private(k,n)
@@ -1288,7 +1450,7 @@ contains
          ! Compute tracer tendency due to production/destruction of
          ! frazil ice
          call ocn_frazil_forcing_tracers(meshPool, tracersPool, &
-                     groupName, forcingPool, tracerGroupTend, err)
+                     groupName, forcingPool, tracerGroupTend, ecosysFrazilForcingPool, err)
 
 
       end if ! config use flag on
@@ -1443,7 +1605,7 @@ contains
          do k = 1, maxLevelCell(iCell)
 
             tend_lowFreqDivergence(k,iCell) = &
-               -2.0*pii/thickness_filter_timescale_sec &
+               -2.0*pi/thickness_filter_timescale_sec &
               *(lowFreqDivergence(k,iCell)  - div_hu(k) &
                 + div_hu_btr * layerThickness(k,iCell)/totalThickness)
 
@@ -1451,7 +1613,7 @@ contains
                   div_hu_btr*layerThickness(k,iCell)/totalThickness + &
                   lowFreqDivergence(k,iCell) + &
                   use_highFreqThick_restore* &
-                  (-2.0*pii/highFreqThick_restore_time_sec* &
+                  (-2.0*pi/highFreqThick_restore_time_sec* &
                    highFreqThickness(k,iCell) )
 
          end do ! vert (k) loop

@@ -6,7 +6,6 @@ module GridcellDataType
   ! -------------------------------------------------------- 
   !
   use shr_kind_mod      , only : r8 => shr_kind_r8
-  use shr_infnan_mod    , only : nan => shr_infnan_nan, assignment(=)
   use elm_varpar        , only : nlevsno, nlevgrnd, nlevlak, nlevurb
   use elm_varcon        , only : spval, ispval
   use elm_varctl        , only : use_fates
@@ -33,6 +32,13 @@ module GridcellDataType
     real(r8), pointer :: heat2                (:)   ! post land cover change total heat content
     real(r8), pointer :: liquid_water_temp1   (:)   ! initial weighted average liquid water temperature (K)
     real(r8), pointer :: liquid_water_temp2   (:)   ! post land cover change weighted average liquid water temperature (K)
+    real(r8), pointer :: beg_hc               (:)   ! grid-level column heat content (snow+soil+lake) at beginning of time step (MJ/m2)
+    real(r8), pointer :: end_hc               (:)   ! grid-level column heat content (snow+soil+lake) at end of time step (MJ/m2)
+    real(r8), pointer :: beg_hc_soi           (:)   ! grid-level column soil-only heat content at beginning of time step (MJ/m2)
+    real(r8), pointer :: end_hc_soi           (:)   ! grid-level column soil-only heat content at end of time step (MJ/m2)
+    real(r8), pointer :: beg_hc_lake          (:)   ! grid-level lake-water heat content at beginning of time step (MJ/m2)
+    real(r8), pointer :: end_hc_lake          (:)   ! grid-level lake-water heat content at end of time step (MJ/m2)
+    real(r8), pointer :: errsoi               (:)   ! grid-level column-level soil/lake energy conservation error (W/m2)
 
   contains
     procedure, public :: Init    => grc_es_init
@@ -44,6 +50,9 @@ module GridcellDataType
   !-----------------------------------------------------------------------
   type, public :: gridcell_energy_flux
     real(r8), pointer :: eflx_dynbal           (:)   ! dynamic land cover change conversion energy flux (W/m**2)
+    real(r8), pointer :: heat_into_grnd        (:)   ! grid-level ground heat flux, p2g of eflx_soil_grnd (W/m**2) [+ = into ground]
+    real(r8), pointer :: heat_phase_corr       (:)   ! grid-level phase-change/h2osfc/building-heat correction (W/m**2)
+    real(r8), pointer :: heat_state_adj        (:)   ! grid-level adjustment from solver flux terms to diagnostic heat-state change (W/m**2)
 
   contains
     procedure, public :: Init    => grc_ef_init
@@ -262,10 +271,17 @@ contains
     !-----------------------------------------------------------------------
     ! allocate for each member of grc_es
     !-----------------------------------------------------------------------
-    allocate(this%heat1                (begg:endg))                      ; this%heat1                (:)   = nan
-    allocate(this%heat2                (begg:endg))                      ; this%heat2                (:)   = nan
-    allocate(this%liquid_water_temp1   (begg:endg))                      ; this%liquid_water_temp1   (:)   = nan
-    allocate(this%liquid_water_temp2   (begg:endg))                      ; this%liquid_water_temp2   (:)   = nan
+    allocate(this%heat1                (begg:endg))                      ; this%heat1                (:)   = spval
+    allocate(this%heat2                (begg:endg))                      ; this%heat2                (:)   = spval
+    allocate(this%liquid_water_temp1   (begg:endg))                      ; this%liquid_water_temp1   (:)   = spval
+    allocate(this%liquid_water_temp2   (begg:endg))                      ; this%liquid_water_temp2   (:)   = spval
+    allocate(this%beg_hc               (begg:endg))                      ; this%beg_hc               (:)   = spval
+    allocate(this%end_hc               (begg:endg))                      ; this%end_hc               (:)   = spval
+    allocate(this%beg_hc_soi           (begg:endg))                      ; this%beg_hc_soi           (:)   = spval
+    allocate(this%end_hc_soi           (begg:endg))                      ; this%end_hc_soi           (:)   = spval
+    allocate(this%beg_hc_lake          (begg:endg))                      ; this%beg_hc_lake          (:)   = spval
+    allocate(this%end_hc_lake          (begg:endg))                      ; this%end_hc_lake          (:)   = spval
+    allocate(this%errsoi               (begg:endg))                      ; this%errsoi               (:)   = spval
 
     !-----------------------------------------------------------------------
     ! initialize history fields for select members of grc_es
@@ -297,6 +313,13 @@ contains
     deallocate(this%heat2)
     deallocate(this%liquid_water_temp1)
     deallocate(this%liquid_water_temp2)
+    deallocate(this%beg_hc)
+    deallocate(this%end_hc)
+    deallocate(this%beg_hc_soi)
+    deallocate(this%end_hc_soi)
+    deallocate(this%beg_hc_lake)
+    deallocate(this%end_hc_lake)
+    deallocate(this%errsoi)
   end subroutine grc_es_clean
   
   !------------------------------------------------------------------------
@@ -312,7 +335,10 @@ contains
     !-----------------------------------------------------------------------
     ! allocate for each member of grc_ef
     !-----------------------------------------------------------------------
-    allocate(this%eflx_dynbal              (begg:endg))                  ; this%eflx_dynbal             (:)   = nan
+    allocate(this%eflx_dynbal              (begg:endg))                  ; this%eflx_dynbal             (:)   = spval
+    allocate(this%heat_into_grnd           (begg:endg))                  ; this%heat_into_grnd          (:)   = spval
+    allocate(this%heat_phase_corr          (begg:endg))                  ; this%heat_phase_corr         (:)   = spval
+    allocate(this%heat_state_adj           (begg:endg))                  ; this%heat_state_adj          (:)   = spval
 
     !-----------------------------------------------------------------------
     ! initialize history fields for select members of grc_ef
@@ -350,6 +376,9 @@ contains
     class(gridcell_energy_flux) :: this
     !------------------------------------------------------------------------
     deallocate(this%eflx_dynbal)
+    deallocate(this%heat_into_grnd)
+    deallocate(this%heat_phase_corr)
+    deallocate(this%heat_state_adj)
   end subroutine grc_ef_clean
   
   !------------------------------------------------------------------------
@@ -365,26 +394,26 @@ contains
     !-----------------------------------------------------------------------
     ! allocate for each member of grc_ws
     !-----------------------------------------------------------------------
-    allocate(this%liq1           (begg:endg))       ; this%liq1           (:)   = nan
-    allocate(this%liq2           (begg:endg))       ; this%liq2           (:)   = nan
-    allocate(this%ice1           (begg:endg))       ; this%ice1           (:)   = nan
-    allocate(this%ice2           (begg:endg))       ; this%ice2           (:)   = nan
-    allocate(this%tws            (begg:endg))       ; this%tws            (:)   = nan
-    allocate(this%tws_month_beg  (begg:endg))       ; this%tws_month_beg  (:)   = nan
-    allocate(this%tws_month_end  (begg:endg))       ; this%tws_month_end  (:)   = nan
-    allocate(this%begwb          (begg:endg))       ; this%begwb          (:)   = nan
-    allocate(this%endwb          (begg:endg))       ; this%endwb          (:)   = nan
-    allocate(this%errh2o         (begg:endg))       ; this%errh2o         (:)   = nan
-    allocate(this%beg_h2ocan     (begg:endg))       ; this%beg_h2ocan     (:)   = nan
-    allocate(this%beg_h2osno     (begg:endg))       ; this%beg_h2osno     (:)   = nan
-    allocate(this%beg_h2osfc     (begg:endg))       ; this%beg_h2osfc     (:)   = nan
-    allocate(this%beg_h2osoi_liq (begg:endg))       ; this%beg_h2osoi_liq (:)   = nan
-    allocate(this%beg_h2osoi_ice (begg:endg))       ; this%beg_h2osoi_ice (:)   = nan
-    allocate(this%end_h2ocan     (begg:endg))       ; this%end_h2ocan     (:)   = nan
-    allocate(this%end_h2osno     (begg:endg))       ; this%end_h2osno     (:)   = nan
-    allocate(this%end_h2osfc     (begg:endg))       ; this%end_h2osfc     (:)   = nan
-    allocate(this%end_h2osoi_liq (begg:endg))       ; this%end_h2osoi_liq (:)   = nan
-    allocate(this%end_h2osoi_ice (begg:endg))       ; this%end_h2osoi_ice (:)   = nan
+    allocate(this%liq1           (begg:endg))       ; this%liq1           (:)   = spval
+    allocate(this%liq2           (begg:endg))       ; this%liq2           (:)   = spval
+    allocate(this%ice1           (begg:endg))       ; this%ice1           (:)   = spval
+    allocate(this%ice2           (begg:endg))       ; this%ice2           (:)   = spval
+    allocate(this%tws            (begg:endg))       ; this%tws            (:)   = spval
+    allocate(this%tws_month_beg  (begg:endg))       ; this%tws_month_beg  (:)   = spval
+    allocate(this%tws_month_end  (begg:endg))       ; this%tws_month_end  (:)   = spval
+    allocate(this%begwb          (begg:endg))       ; this%begwb          (:)   = spval
+    allocate(this%endwb          (begg:endg))       ; this%endwb          (:)   = spval
+    allocate(this%errh2o         (begg:endg))       ; this%errh2o         (:)   = spval
+    allocate(this%beg_h2ocan     (begg:endg))       ; this%beg_h2ocan     (:)   = spval
+    allocate(this%beg_h2osno     (begg:endg))       ; this%beg_h2osno     (:)   = spval
+    allocate(this%beg_h2osfc     (begg:endg))       ; this%beg_h2osfc     (:)   = spval
+    allocate(this%beg_h2osoi_liq (begg:endg))       ; this%beg_h2osoi_liq (:)   = spval
+    allocate(this%beg_h2osoi_ice (begg:endg))       ; this%beg_h2osoi_ice (:)   = spval
+    allocate(this%end_h2ocan     (begg:endg))       ; this%end_h2ocan     (:)   = spval
+    allocate(this%end_h2osno     (begg:endg))       ; this%end_h2osno     (:)   = spval
+    allocate(this%end_h2osfc     (begg:endg))       ; this%end_h2osfc     (:)   = spval
+    allocate(this%end_h2osoi_liq (begg:endg))       ; this%end_h2osoi_liq (:)   = spval
+    allocate(this%end_h2osoi_ice (begg:endg))       ; this%end_h2osoi_ice (:)   = spval
 
     !-----------------------------------------------------------------------
     ! initialize history fields for select members of grc_ws
@@ -444,7 +473,7 @@ contains
     !-----------------------------------------------------------------------
     call restartvar(ncid=ncid, flag=flag, varname='TWS_MONTH_BEGIN', xtype=ncd_double,  &
          dim1name='gridcell', &
-         long_name='surface watertotal water storage at the beginning of a month', units='mm', &
+         long_name='total water storage at the beginning of a month', units='mm', &
           interpinic_flag='interp', readvar=readvar, data=this%tws_month_beg)
   
   end subroutine grc_ws_restart
@@ -476,8 +505,8 @@ contains
     !-----------------------------------------------------------------------
     ! allocate for each member of grc_wf
     !-----------------------------------------------------------------------
-    allocate(this%qflx_liq_dynbal      (begg:endg))              ; this%qflx_liq_dynbal      (:)   = nan
-    allocate(this%qflx_ice_dynbal      (begg:endg))              ; this%qflx_ice_dynbal      (:)   = nan
+    allocate(this%qflx_liq_dynbal      (begg:endg))              ; this%qflx_liq_dynbal      (:)   = spval
+    allocate(this%qflx_ice_dynbal      (begg:endg))              ; this%qflx_ice_dynbal      (:)   = spval
 
     this%qflx_liq_dynbal_dribbler = annual_flux_dribbler_gridcell( &
          bounds = bounds, &
@@ -554,30 +583,30 @@ contains
     !-----------------------------------------------------------------------
     ! allocate for each member of grc_cs
     !-----------------------------------------------------------------------
-    allocate(this%seedc                 (begg:endg));     this%seedc                 (:) = nan
-    allocate(this%tcs_month_beg         (begg:endg));     this%tcs_month_beg         (:) = nan
-    allocate(this%tcs_month_end         (begg:endg));     this%tcs_month_end         (:) = nan
-    allocate(this%begcb                 (begg:endg));     this%begcb                 (:) = nan
-    allocate(this%endcb                 (begg:endg));     this%endcb                 (:) = nan
-    allocate(this%errcb                 (begg:endg));     this%errcb                 (:) = nan
+    allocate(this%seedc                 (begg:endg));     this%seedc                 (:) = spval
+    allocate(this%tcs_month_beg         (begg:endg));     this%tcs_month_beg         (:) = spval
+    allocate(this%tcs_month_end         (begg:endg));     this%tcs_month_end         (:) = spval
+    allocate(this%begcb                 (begg:endg));     this%begcb                 (:) = spval
+    allocate(this%endcb                 (begg:endg));     this%endcb                 (:) = spval
+    allocate(this%errcb                 (begg:endg));     this%errcb                 (:) = spval
 
-    allocate(this%beg_totc              (begg:endg));     this%beg_totc              (:) = nan
-    allocate(this%beg_totpftc           (begg:endg));     this%beg_totpftc           (:) = nan
-    allocate(this%beg_cwdc              (begg:endg));     this%beg_cwdc              (:) = nan
-    allocate(this%beg_totsomc           (begg:endg));     this%beg_totsomc           (:) = nan
-    allocate(this%beg_totlitc           (begg:endg));     this%beg_totlitc           (:) = nan
-    allocate(this%beg_totprodc          (begg:endg));     this%beg_totprodc          (:) = nan
-    allocate(this%beg_ctrunc            (begg:endg));     this%beg_ctrunc            (:) = nan
-    allocate(this%beg_cropseedc_deficit (begg:endg));     this%beg_cropseedc_deficit (:) = nan
+    allocate(this%beg_totc              (begg:endg));     this%beg_totc              (:) = spval
+    allocate(this%beg_totpftc           (begg:endg));     this%beg_totpftc           (:) = spval
+    allocate(this%beg_cwdc              (begg:endg));     this%beg_cwdc              (:) = spval
+    allocate(this%beg_totsomc           (begg:endg));     this%beg_totsomc           (:) = spval
+    allocate(this%beg_totlitc           (begg:endg));     this%beg_totlitc           (:) = spval
+    allocate(this%beg_totprodc          (begg:endg));     this%beg_totprodc          (:) = spval
+    allocate(this%beg_ctrunc            (begg:endg));     this%beg_ctrunc            (:) = spval
+    allocate(this%beg_cropseedc_deficit (begg:endg));     this%beg_cropseedc_deficit (:) = spval
 
-    allocate(this%end_totc              (begg:endg));     this%end_totc              (:) = nan
-    allocate(this%end_totpftc           (begg:endg));     this%end_totpftc           (:) = nan
-    allocate(this%end_cwdc              (begg:endg));     this%end_cwdc              (:) = nan
-    allocate(this%end_totsomc           (begg:endg));     this%end_totsomc           (:) = nan
-    allocate(this%end_totlitc           (begg:endg));     this%end_totlitc           (:) = nan
-    allocate(this%end_totprodc          (begg:endg));     this%end_totprodc          (:) = nan
-    allocate(this%end_ctrunc            (begg:endg));     this%end_ctrunc            (:) = nan
-    allocate(this%end_cropseedc_deficit (begg:endg));     this%end_cropseedc_deficit (:) = nan
+    allocate(this%end_totc              (begg:endg));     this%end_totc              (:) = spval
+    allocate(this%end_totpftc           (begg:endg));     this%end_totpftc           (:) = spval
+    allocate(this%end_cwdc              (begg:endg));     this%end_cwdc              (:) = spval
+    allocate(this%end_totsomc           (begg:endg));     this%end_totsomc           (:) = spval
+    allocate(this%end_totlitc           (begg:endg));     this%end_totlitc           (:) = spval
+    allocate(this%end_totprodc          (begg:endg));     this%end_totprodc          (:) = spval
+    allocate(this%end_ctrunc            (begg:endg));     this%end_ctrunc            (:) = spval
+    allocate(this%end_cropseedc_deficit (begg:endg));     this%end_cropseedc_deficit (:) = spval
 
     !-----------------------------------------------------------------------
     ! initialize history fields for select members of grc_cs
@@ -587,29 +616,29 @@ contains
           this%seedc(begg:endg) = spval
           call hist_addfld1d (fname='SEEDC_GRC', units='gC/m^2', &
                avgflag='A', long_name='pool for seeding new PFTs via dynamic landcover', &
-               ptr_gcell=this%seedc)
+               ptr_gcell=this%seedc, default='inactive')
        end if 
        if (carbon_type == 'c13') then
           this%seedc(begg:endg) = spval
           call hist_addfld1d (fname='C13_SEEDC_GRC', units='gC/m^2', &
                avgflag='A', long_name='pool for seeding new PFTs via dynamic landcover', &
-               ptr_gcell=this%seedc)
+               ptr_gcell=this%seedc, default='inactive')
        end if 
        if (carbon_type == 'c14') then
           this%seedc(begg:endg) = spval
           call hist_addfld1d (fname='C14_SEEDC_GRC', units='gC/m^2', &
                avgflag='A', long_name='pool for seeding new PFTs via dynamic landcover', &
-               ptr_gcell=this%seedc)
+               ptr_gcell=this%seedc, default='inactive')
        end if 
     end if
     
     this%tcs_month_beg(begg:endg) = spval
-    call hist_addfld1d (fname='TCS_MONTH_BEGIN',  units='mm',  &
+    call hist_addfld1d (fname='TCS_MONTH_BEGIN',  units='gC/m^2',  &
          avgflag='I', long_name='total carbon storage at the beginning of a month', &
          ptr_lnd=this%tcs_month_beg)
 
     this%tcs_month_end(begg:endg) = spval
-    call hist_addfld1d (fname='TCS_MONTH_END',  units='mm',  &
+    call hist_addfld1d (fname='TCS_MONTH_END',  units='gC/m^2',  &
          avgflag='I', long_name='total carbon storage at the end of a month', &
          ptr_lnd=this%tcs_month_end)
 
@@ -645,9 +674,13 @@ contains
     !-----------------------------------------------------------------------
     call restartvar(ncid=ncid, flag=flag, varname='TCS_MONTH_BEGIN', xtype=ncd_double,  &
          dim1name='gridcell', &
-         long_name='surface watertotal carbon storage at the beginning of a month', units='mm', &
+         long_name='total carbon storage at the beginning of a month', units='gC/m^2', &
           interpinic_flag='interp', readvar=readvar, data=this%tcs_month_beg)
 
+    call restartvar(ncid=ncid, flag=flag, varname='TCS_MONTH_END', xtype=ncd_double,  &
+         dim1name='gridcell', &
+         long_name='total carbon storage at the end of a month', units='gC/m^2', &
+          interpinic_flag='interp', readvar=readvar, data=this%tcs_month_end)
   end subroutine grc_cs_restart
 
   !------------------------------------------------------------------------
@@ -680,25 +713,25 @@ contains
     !-----------------------------------------------------------------------
     ! allocate for each member of grc_cf
     !-----------------------------------------------------------------------
-    allocate(this%dwt_seedc_to_leaf            (begg:endg)) ; this%dwt_seedc_to_leaf         (:) = nan
-    allocate(this%dwt_seedc_to_deadstem        (begg:endg)) ; this%dwt_seedc_to_deadstem     (:) = nan
-    allocate(this%dwt_conv_cflux               (begg:endg)) ; this%dwt_conv_cflux            (:) = nan
-    allocate(this%dwt_conv_cflux_dribbled      (begg:endg)) ; this%dwt_conv_cflux_dribbled   (:) = nan
-    allocate(this%dwt_prod10c_gain             (begg:endg)) ; this%dwt_prod10c_gain          (:) = nan
-    allocate(this%dwt_prod100c_gain            (begg:endg)) ; this%dwt_prod100c_gain         (:) = nan
-    allocate(this%hrv_deadstemc_to_prod10c     (begg:endg)) ; this%hrv_deadstemc_to_prod10c  (:) = nan
-    allocate(this%hrv_deadstemc_to_prod100c    (begg:endg)) ; this%hrv_deadstemc_to_prod100c (:) = nan
-    allocate(this%cinputs                      (begg:endg)) ; this%cinputs                   (:) = nan
-    allocate(this%coutputs                     (begg:endg)) ; this%coutputs                  (:) = nan
-    allocate(this%gpp                          (begg:endg)) ; this%gpp                       (:) = nan
-    allocate(this%er                           (begg:endg)) ; this%er                        (:) = nan
-    allocate(this%fire_closs                   (begg:endg)) ; this%fire_closs                (:) = nan
-    allocate(this%prod1_loss                   (begg:endg)) ; this%prod1_loss                (:) = nan
-    allocate(this%prod10_loss                  (begg:endg)) ; this%prod10_loss               (:) = nan
-    allocate(this%prod100_loss                 (begg:endg)) ; this%prod100_loss              (:) = nan
-    allocate(this%hrv_xsmrpool_to_atm          (begg:endg)) ; this%hrv_xsmrpool_to_atm       (:) = nan
-    allocate(this%som_c_leached                (begg:endg)) ; this%som_c_leached             (:) = nan
-    allocate(this%somc_yield                   (begg:endg)) ; this%somc_yield                (:) = nan
+    allocate(this%dwt_seedc_to_leaf            (begg:endg)) ; this%dwt_seedc_to_leaf         (:) = spval
+    allocate(this%dwt_seedc_to_deadstem        (begg:endg)) ; this%dwt_seedc_to_deadstem     (:) = spval
+    allocate(this%dwt_conv_cflux               (begg:endg)) ; this%dwt_conv_cflux            (:) = spval
+    allocate(this%dwt_conv_cflux_dribbled      (begg:endg)) ; this%dwt_conv_cflux_dribbled   (:) = spval
+    allocate(this%dwt_prod10c_gain             (begg:endg)) ; this%dwt_prod10c_gain          (:) = spval
+    allocate(this%dwt_prod100c_gain            (begg:endg)) ; this%dwt_prod100c_gain         (:) = spval
+    allocate(this%hrv_deadstemc_to_prod10c     (begg:endg)) ; this%hrv_deadstemc_to_prod10c  (:) = spval
+    allocate(this%hrv_deadstemc_to_prod100c    (begg:endg)) ; this%hrv_deadstemc_to_prod100c (:) = spval
+    allocate(this%cinputs                      (begg:endg)) ; this%cinputs                   (:) = spval
+    allocate(this%coutputs                     (begg:endg)) ; this%coutputs                  (:) = spval
+    allocate(this%gpp                          (begg:endg)) ; this%gpp                       (:) = spval
+    allocate(this%er                           (begg:endg)) ; this%er                        (:) = spval
+    allocate(this%fire_closs                   (begg:endg)) ; this%fire_closs                (:) = spval
+    allocate(this%prod1_loss                   (begg:endg)) ; this%prod1_loss                (:) = spval
+    allocate(this%prod10_loss                  (begg:endg)) ; this%prod10_loss               (:) = spval
+    allocate(this%prod100_loss                 (begg:endg)) ; this%prod100_loss              (:) = spval
+    allocate(this%hrv_xsmrpool_to_atm          (begg:endg)) ; this%hrv_xsmrpool_to_atm       (:) = spval
+    allocate(this%som_c_leached                (begg:endg)) ; this%som_c_leached             (:) = spval
+    allocate(this%somc_yield                   (begg:endg)) ; this%somc_yield                (:) = spval
 
     !-----------------------------------------------------------------------
     ! initialize history fields for select members of grc_cf
@@ -922,10 +955,10 @@ contains
     !-----------------------------------------------------------------------
     ! allocate for each member of grc_ns
     !-----------------------------------------------------------------------
-    allocate(this%seedn   (begg:endg));     this%seedn   (:) = nan
-    allocate(this%begnb   (begg:endg));     this%begnb   (:) = nan
-    allocate(this%endnb   (begg:endg));     this%endnb   (:) = nan
-    allocate(this%errnb   (begg:endg));     this%errnb   (:) = nan
+    allocate(this%seedn   (begg:endg));     this%seedn   (:) = spval
+    allocate(this%begnb   (begg:endg));     this%begnb   (:) = spval
+    allocate(this%endnb   (begg:endg));     this%endnb   (:) = spval
+    allocate(this%errnb   (begg:endg));     this%errnb   (:) = spval
 
     !-----------------------------------------------------------------------
     ! initialize history fields for select members of grc_cf
@@ -970,14 +1003,14 @@ contains
     !-----------------------------------------------------------------------
     ! allocate for each member of grc_nf
     !-----------------------------------------------------------------------
-    allocate(this%dwt_seedn_to_leaf     (begg:endg)) ; this%dwt_seedn_to_leaf     (:) = nan
-    allocate(this%dwt_seedn_to_deadstem (begg:endg)) ; this%dwt_seedn_to_deadstem (:) = nan
-    allocate(this%dwt_conv_nflux        (begg:endg)) ; this%dwt_conv_nflux        (:) = nan
-    allocate(this%dwt_seedn_to_npool    (begg:endg)) ; this%dwt_seedn_to_npool    (:) = nan
-    allocate(this%dwt_prod10n_gain      (begg:endg)) ; this%dwt_prod10n_gain      (:) = nan
-    allocate(this%dwt_prod100n_gain     (begg:endg)) ; this%dwt_prod100n_gain     (:) = nan
-    allocate(this%ninputs               (begg:endg)) ; this%ninputs               (:) = nan
-    allocate(this%noutputs              (begg:endg)) ; this%noutputs              (:) = nan
+    allocate(this%dwt_seedn_to_leaf     (begg:endg)) ; this%dwt_seedn_to_leaf     (:) = spval
+    allocate(this%dwt_seedn_to_deadstem (begg:endg)) ; this%dwt_seedn_to_deadstem (:) = spval
+    allocate(this%dwt_conv_nflux        (begg:endg)) ; this%dwt_conv_nflux        (:) = spval
+    allocate(this%dwt_seedn_to_npool    (begg:endg)) ; this%dwt_seedn_to_npool    (:) = spval
+    allocate(this%dwt_prod10n_gain      (begg:endg)) ; this%dwt_prod10n_gain      (:) = spval
+    allocate(this%dwt_prod100n_gain     (begg:endg)) ; this%dwt_prod100n_gain     (:) = spval
+    allocate(this%ninputs               (begg:endg)) ; this%ninputs               (:) = spval
+    allocate(this%noutputs              (begg:endg)) ; this%noutputs              (:) = spval
     
     !-----------------------------------------------------------------------
     ! initialize history fields for select members of grc_nf
@@ -1072,10 +1105,10 @@ contains
     !-----------------------------------------------------------------------
     ! allocate for each member of grc_ps
     !-----------------------------------------------------------------------
-    allocate(this%seedp   (begg:endg)) ; this%seedp   (:) = nan
-    allocate(this%begpb   (begg:endg)) ; this%begpb   (:) = nan
-    allocate(this%endpb   (begg:endg)) ; this%endpb   (:) = nan
-    allocate(this%errpb   (begg:endg)) ; this%errpb   (:) = nan
+    allocate(this%seedp   (begg:endg)) ; this%seedp   (:) = spval
+    allocate(this%begpb   (begg:endg)) ; this%begpb   (:) = spval
+    allocate(this%endpb   (begg:endg)) ; this%endpb   (:) = spval
+    allocate(this%errpb   (begg:endg)) ; this%errpb   (:) = spval
     
     !-----------------------------------------------------------------------
     ! initialize history fields for select members of grc_ps
@@ -1117,14 +1150,14 @@ contains
     !-----------------------------------------------------------------------
     ! allocate for each member of grc_pf
     !-----------------------------------------------------------------------
-    allocate(this%dwt_seedp_to_leaf      (begg:endg))   ; this%dwt_seedp_to_leaf      (:) = nan
-    allocate(this%dwt_seedp_to_deadstem  (begg:endg))   ; this%dwt_seedp_to_deadstem  (:) = nan
-    allocate(this%dwt_conv_pflux         (begg:endg))   ; this%dwt_conv_pflux         (:) = nan
-    allocate(this%dwt_seedp_to_ppool     (begg:endg))   ; this%dwt_seedp_to_ppool     (:) = nan
-    allocate(this%dwt_prod10p_gain       (begg:endg))   ; this%dwt_prod10p_gain       (:) = nan
-    allocate(this%dwt_prod100p_gain      (begg:endg))   ; this%dwt_prod100p_gain      (:) = nan
-    allocate(this%pinputs                (begg:endg))   ; this%pinputs                (:) = nan
-    allocate(this%poutputs               (begg:endg))   ; this%poutputs               (:) = nan
+    allocate(this%dwt_seedp_to_leaf      (begg:endg))   ; this%dwt_seedp_to_leaf      (:) = spval
+    allocate(this%dwt_seedp_to_deadstem  (begg:endg))   ; this%dwt_seedp_to_deadstem  (:) = spval
+    allocate(this%dwt_conv_pflux         (begg:endg))   ; this%dwt_conv_pflux         (:) = spval
+    allocate(this%dwt_seedp_to_ppool     (begg:endg))   ; this%dwt_seedp_to_ppool     (:) = spval
+    allocate(this%dwt_prod10p_gain       (begg:endg))   ; this%dwt_prod10p_gain       (:) = spval
+    allocate(this%dwt_prod100p_gain      (begg:endg))   ; this%dwt_prod100p_gain      (:) = spval
+    allocate(this%pinputs                (begg:endg))   ; this%pinputs                (:) = spval
+    allocate(this%poutputs               (begg:endg))   ; this%poutputs               (:) = spval
     
     !-----------------------------------------------------------------------
     ! initialize history fields for select members of grc_pf

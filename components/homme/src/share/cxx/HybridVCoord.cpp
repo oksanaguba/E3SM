@@ -93,10 +93,10 @@ void HybridVCoord::random_init(int seed) {
   // without violating eta(i+1)>eta(i). For instance, let da+db<delta_eta/2,
   // which is true if da<delta_eta/4 and db<delta_eta/4.
 
-  decltype(hybrid_ai)::HostMirror host_hybrid_ai("Host hybrid ai coefs");
-  decltype(hybrid_bi)::HostMirror host_hybrid_bi("Host hybrid bi coefs");
-  decltype(hybrid_am)::HostMirror host_hybrid_am("Host hybrid am coefs");
-  decltype(hybrid_bm)::HostMirror host_hybrid_bm("Host hybrid bm coefs");
+  decltype(hybrid_ai)::host_mirror_type host_hybrid_ai("Host hybrid ai coefs");
+  decltype(hybrid_bi)::host_mirror_type host_hybrid_bi("Host hybrid bi coefs");
+  decltype(hybrid_am)::host_mirror_type host_hybrid_am("Host hybrid am coefs");
+  decltype(hybrid_bm)::host_mirror_type host_hybrid_bm("Host hybrid bm coefs");
 
   // This somewhat odd expression ensures that deta (below) is smaller
   // than eta_min, so that eta_min + eps*deta is always positive
@@ -158,8 +158,8 @@ void HybridVCoord::random_init(int seed) {
 
     Errors::runtime_check(curr>prev,"Error! hybrid_a+hybrid_b is not increasing.\n", -1);
 
-    host_hybrid_am_real(i-1) = (host_hybrid_ai(i) + host_hybrid_ai(i))/2.0;
-    host_hybrid_bm_real(i-1) = (host_hybrid_bi(i) + host_hybrid_bi(i))/2.0;
+    host_hybrid_am_real(i-1) = (host_hybrid_ai(i) + host_hybrid_ai(i-1))/2.0;
+    host_hybrid_bm_real(i-1) = (host_hybrid_bi(i) + host_hybrid_bi(i-1))/2.0;
   }
 
   Kokkos::deep_copy(hybrid_ai, host_hybrid_ai);

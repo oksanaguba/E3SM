@@ -1,0 +1,101 @@
+#ifndef P3_BACK_TO_CELL_AVERAGE_IMPL_HPP
+#define P3_BACK_TO_CELL_AVERAGE_IMPL_HPP
+
+#include "p3_functions.hpp" // for ETI only but harmless for GPU
+
+namespace scream {
+namespace p3 {
+
+/*
+ * Implementation of p3 cell averaging function.
+ * Clients should NOT #include this file, but include p3_functions.hpp instead.
+ */
+
+template <typename S, typename D>
+KOKKOS_FUNCTION
+void Functions<S,D>
+::back_to_cell_average(
+  const Pack& cld_frac_l, const Pack& cld_frac_r,
+  const Pack& cld_frac_i, Pack& qc2qr_accret_tend, Pack& qr2qv_evap_tend,
+  Pack& qc2qr_autoconv_tend, Pack& nc_accret_tend, Pack& nc_selfcollect_tend,
+  Pack& nc2nr_autoconv_tend, Pack& nr_selfcollect_tend, Pack& nr_evap_tend,
+  Pack& ncautr,
+  Pack& qi2qv_sublim_tend, Pack& nr_ice_shed_tend, Pack& qc2qi_hetero_freeze_tend,
+  Pack& qr2qi_collect_tend, Pack& qc2qr_ice_shed_tend, Pack& qi2qr_melt_tend,
+  Pack& qc2qi_collect_tend, Pack& qr2qi_immers_freeze_tend, Pack& ni2nr_melt_tend,
+  Pack& nc_collect_tend, Pack& ncshdc, Pack& nc2ni_immers_freeze_tend,
+  Pack& nr_collect_tend, Pack& ni_selfcollect_tend, Pack& qv2qi_vapdep_tend,
+  Pack& nr2ni_immers_freeze_tend, Pack& ni_sublim_tend, Pack& qv2qi_nucleat_tend,
+  Pack& ni_nucleat_tend, Pack& qc2qi_berg_tend,
+  Pack& ncheti_cnt, Pack& qcheti_cnt, Pack& nicnt, Pack& qicnt, Pack& ninuc_cnt,
+  Pack& qinuc_cnt, const Mask& context, const P3Runtime& runtime_options)
+{
+  Pack ir_cldm, il_cldm, lr_cldm, cld_frac_glaciated;
+  ir_cldm = min(cld_frac_i,cld_frac_r); // Intersection of ICE and RAIN cloud
+  il_cldm = min(cld_frac_i,cld_frac_l); // Intersection of ICE and LIQUID cloud
+  lr_cldm = min(cld_frac_l,cld_frac_r); // Intersection of LIQUID and RAIN cloud
+  cld_frac_glaciated = max(0.0001,cld_frac_i - il_cldm); // Fraction (if any) of cell that is occupied by only ice and not liquid cloud
+
+  // Some process rates take place within the intersection of liquid, rain and
+  // ice cloud fractions. We calculate the intersection as the minimum between
+  // combinations of cloud fractions and use these values to map back to
+  // cell-average quantities where applicable.
+
+  // map warm-phase process rates to cell-avg
+  qc2qr_accret_tend.set(context, qc2qr_accret_tend * lr_cldm);  // Accretion of liquid to rain
+  qr2qv_evap_tend.set(context, qr2qv_evap_tend * cld_frac_r);    // Evaporation of rain
+  qc2qr_autoconv_tend.set(context, qc2qr_autoconv_tend * cld_frac_l);    // Autoconversion of liquid
+  nc_accret_tend.set(context, nc_accret_tend * lr_cldm);  // Number change due to accretion
+  nc_selfcollect_tend.set(context, nc_selfcollect_tend * cld_frac_l);    // Self collection occurs locally in liq. cloud
+  nc2nr_autoconv_tend.set(context, nc2nr_autoconv_tend * cld_frac_l);   // Impact of autoconversion on number
+  nr_selfcollect_tend.set(context, nr_selfcollect_tend * cld_frac_r);    // Self collection occurs locally in rain cloud
+  nr_evap_tend.set(context, nr_evap_tend * cld_frac_r);    // Change in rain number due to evaporation
+  ncautr.set(context, ncautr * lr_cldm); // Autoconversion of rain drops within rain/liq cloud
+
+  // map ice-phase  process rates to cell-avg
+    if (runtime_options.use_separate_ice_liq_frac) {
+       qi2qv_sublim_tend.set(context, qi2qv_sublim_tend * cld_frac_glaciated);
+    } else {
+       qi2qv_sublim_tend.set(context, qi2qv_sublim_tend * cld_frac_i); // Sublimation of ice in ice cloud
+    }
+  nr_ice_shed_tend.set(context, nr_ice_shed_tend * il_cldm); // Rain # increase due to shedding from rain-ice collisions, occurs when ice and liquid interact
+  qc2qi_hetero_freeze_tend.set(context, qc2qi_hetero_freeze_tend * il_cldm); // Immersion freezing of cloud drops
+  qr2qi_collect_tend.set(context, qr2qi_collect_tend * ir_cldm);  // Collection of rain mass by ice
+  qc2qr_ice_shed_tend.set(context, qc2qr_ice_shed_tend * il_cldm);  // Rain mass growth due to shedding of rain drops after collisions with ice, occurs when ice and liquid interact
+  qi2qr_melt_tend.set(context, qi2qr_melt_tend * cld_frac_i);    // Melting of ice
+  qc2qi_collect_tend.set(context, qc2qi_collect_tend * il_cldm);  // Collection of water by ice
+  qr2qi_immers_freeze_tend.set(context, qr2qi_immers_freeze_tend * cld_frac_r);   // Immersion freezing of rain
+  ni2nr_melt_tend.set(context, ni2nr_melt_tend * cld_frac_i);    // Change in number due to melting
+  nc_collect_tend.set(context, nc_collect_tend * il_cldm);  // Cloud # change due to collection of cld water by ice
+  ncshdc.set(context, ncshdc * il_cldm); // Number change due to shedding, occurs when ice and liquid interact
+  nc2ni_immers_freeze_tend.set(context, nc2ni_immers_freeze_tend * cld_frac_l);   // Number change associated with freezing of cloud drops
+  nr_collect_tend.set(context, nr_collect_tend * ir_cldm);  // Rain number change due to collection from ice
+  ni_selfcollect_tend.set(context, ni_selfcollect_tend * cld_frac_i);    // Ice self collection
+  if (runtime_options.use_separate_ice_liq_frac) {
+    qv2qi_vapdep_tend.set(context, qv2qi_vapdep_tend * cld_frac_glaciated);    // Vapor deposition to ice phase
+  } else {
+    qv2qi_vapdep_tend.set(context, qv2qi_vapdep_tend * cld_frac_i);    // Vapor deposition to ice phase
+  }
+  nr2ni_immers_freeze_tend.set(context, nr2ni_immers_freeze_tend * cld_frac_r);   // Change in number due to immersion freezing of rain
+  if (runtime_options.use_separate_ice_liq_frac) {
+     ni_sublim_tend.set(context, ni_sublim_tend * cld_frac_glaciated);
+  } else {  
+     ni_sublim_tend.set(context, ni_sublim_tend * cld_frac_i); // Number change due to sublimation of ice
+   }
+  qc2qi_berg_tend.set(context, qc2qi_berg_tend * il_cldm); // Bergeron process
+  ncheti_cnt.set(context,ncheti_cnt*cld_frac_l);
+  qcheti_cnt.set(context, qcheti_cnt*cld_frac_l);
+  nicnt.set(context, nicnt*cld_frac_l);
+  qicnt.set(context, qicnt*cld_frac_l);
+  ninuc_cnt.set(context, ninuc_cnt*cld_frac_l);
+  qinuc_cnt.set(context, qinuc_cnt*cld_frac_l);
+
+  // Pass-through tendencies: already cell-averaged before this routine.
+  // qv2qi_nucleat_tend: deposition and condensation-freezing nucleation mass.
+  // ni_nucleat_tend: number tendency paired with nucleation.
+}
+
+} // namespace p3
+} // namespace scream
+
+#endif

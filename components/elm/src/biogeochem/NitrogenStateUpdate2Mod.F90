@@ -14,7 +14,7 @@ module NitrogenStateUpdate2Mod
   use ColumnDataType      , only : col_ns, col_nf
   use VegetationType      , only : veg_pp
   use VegetationDataType  , only : veg_ns, veg_nf
-  use pftvarcon           , only : npcropmin
+  use pftvarcon           , only : iscft
   ! bgc interface & pflotran:
   use elm_varctl          , only : use_pflotran, pf_cmode
   !
@@ -39,7 +39,6 @@ contains
     ! no science equations. This increases readability and maintainability
     !
       !$acc routine seq
-    use tracer_varcon, only : is_active_betr_bgc
     ! !ARGUMENTS:
     integer                  , intent(in)    :: num_soilc       ! number of soil columns in filter
     integer                  , intent(in)    :: filter_soilc(:) ! filter for soil columns
@@ -54,8 +53,7 @@ contains
     !-----------------------------------------------------------------------
       
     ! column-level nitrogen fluxes from gap-phase mortality
-      if ( .not. is_active_betr_bgc .and. &
-           .not.(use_pflotran .and. pf_cmode)) then
+      if (.not.(use_pflotran .and. pf_cmode)) then
          do j = 1, nlevdecomp
             do fc = 1,num_soilc
                c = filter_soilc(fc)
@@ -118,7 +116,6 @@ contains
     ! no science equations. This increases readability and maintainability
     !
       !$acc routine seq
-    use tracer_varcon, only : is_active_betr_bgc
     ! !ARGUMENTS:
     integer                  , intent(in)    :: num_soilc       ! number of soil columns in filter
     integer                  , intent(in)    :: filter_soilc(:) ! filter for soil columns
@@ -136,8 +133,7 @@ contains
          ivt => veg_pp%itype        & ! Input:  [integer  (:) ]  pft vegetation type
          )
 
-      if (.not. is_active_betr_bgc .and. &
-           .not.(use_pflotran .and. pf_cmode)) then
+      if (.not.(use_pflotran .and. pf_cmode)) then
          ! column-level nitrogen fluxes from harvest mortality
 
          do j = 1,nlevdecomp
@@ -172,7 +168,7 @@ contains
          veg_ns%retransn(p)   = veg_ns%retransn(p)   - veg_nf%hrv_retransn_to_litter(p)   * dt
          veg_ns%npool(p)      = veg_ns%npool(p)      - veg_nf%hrv_npool_to_litter(p)     * dt
 
-       if (ivt(p) >= npcropmin) then ! skip 2 generic crops
+       if (iscft(ivt(p))) then ! skip 2 generic crops
            veg_ns%livestemn(p)= veg_ns%livestemn(p)  - veg_nf%hrv_livestemn_to_prod1n(p)  * dt
            veg_ns%leafn(p)    = veg_ns%leafn(p)      - veg_nf%hrv_leafn_to_prod1n(p)      * dt
            veg_ns%grainn(p)   = veg_ns%grainn(p)     - veg_nf%hrv_grainn_to_prod1n(p)     * dt

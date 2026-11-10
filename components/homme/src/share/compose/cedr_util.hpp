@@ -4,10 +4,11 @@
 #ifndef INCLUDE_CEDR_UTIL_HPP
 #define INCLUDE_CEDR_UTIL_HPP
 
-#include <sstream>
-
 #include "cedr_kokkos.hpp"
 #include "cedr_mpi.hpp"
+
+#include <sstream>  // For std::stringstream
+#include <iostream> // For std::cerr
 
 namespace cedr {
 namespace util {
@@ -96,7 +97,7 @@ struct RawArrayRaft {
     : a_(a), n_(n)
   {
     a_d_ = List("RawArrayRaft::a_d_", n_);
-    a_h_ = typename List::HostMirror(a_, n_);
+    a_h_ = typename List::host_mirror_type(a_, n_);
   }
 
   const List& sync_device () {
@@ -115,7 +116,7 @@ private:
   T* a_;
   Int n_;
   List a_d_;
-  typename List::HostMirror a_h_;
+  typename List::host_mirror_type a_h_;
 };
 
 }

@@ -185,7 +185,7 @@ RemapStateAndThicknessProvider<true> {
     if (m_state_provider.num_states_preprocess()>0) {
       m_np1 = np1;
       Kokkos::parallel_for("Pre-process states",m_policy_pre,*this);
-      ExecSpace::impl_static_fence();
+      Kokkos::fence();
     }
   }
 
@@ -203,7 +203,7 @@ RemapStateAndThicknessProvider<true> {
     if (m_state_provider.num_states_postprocess()>0) {
       m_np1 = np1;
       Kokkos::parallel_for("Post-process states",m_policy_post,*this);
-      ExecSpace::impl_static_fence();
+      Kokkos::fence();
     }
   }
 
@@ -286,7 +286,7 @@ struct RemapFunctor : public Remapper {
   ExecViewManaged<Scalar*[Q_NUM_TIME_LEVELS][QSIZE_D][NP][NP][NUM_LEV]> m_qdp;
 
   ExecViewManaged<bool *> valid_layer_thickness;
-  typename decltype(valid_layer_thickness)::HostMirror host_valid_input;
+  typename decltype(valid_layer_thickness)::host_mirror_type host_valid_input;
 
   RemapType m_remap;
 
@@ -572,7 +572,7 @@ private:
     GPTLstart(functor_name.c_str());
     profiling_resume();
     Kokkos::parallel_for("vertical remap", policy, *this);
-    ExecSpace::impl_static_fence();
+    Kokkos::fence();
     profiling_pause();
     GPTLstop(functor_name.c_str());
   }

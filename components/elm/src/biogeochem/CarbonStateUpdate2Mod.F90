@@ -9,10 +9,9 @@ module CarbonStateUpdate2Mod
   use shr_log_mod      , only : errMsg => shr_log_errMsg
   use abortutils       , only : endrun
   use elm_varpar       , only : nlevdecomp, i_met_lit, i_cel_lit, i_lig_lit, i_cwd
-  use pftvarcon        , only : npcropmin
+  use pftvarcon        , only : iscft
   use elm_varctl       , only : use_pflotran, pf_cmode
   use VegetationType           , only : veg_pp
-  use tracer_varcon    , only : is_active_betr_bgc
   use VegetationType        , only : veg_pp
   use ColumnDataType         , only : column_carbon_state, column_carbon_flux
   use VegetationDataType     , only : vegetation_carbon_state, vegetation_carbon_flux
@@ -37,7 +36,6 @@ contains
     ! variables affected by gap-phase mortality fluxes
     !
       !$acc routine seq
-    use tracer_varcon, only : is_active_betr_bgc
     ! !ARGUMENTS:
     integer                , intent(in)    :: num_soilc       ! number of soil columns in filter
     integer                , intent(in)    :: filter_soilc(:) ! filter for soil columns
@@ -57,8 +55,7 @@ contains
 
 
 
-     if (  .not. is_active_betr_bgc          .and. &
-          (.not.(use_pflotran .and. pf_cmode))) then
+     if ((.not.(use_pflotran .and. pf_cmode))) then
          ! column level carbon fluxes from gap-phase mortality
          do j = 1,nlevdecomp
             ! column loop
@@ -123,7 +120,6 @@ contains
     ! variables affected by harvest mortality fluxes
     !
       !$acc routine seq
-    use tracer_varcon,  only : is_active_betr_bgc
     ! !ARGUMENTS:
     integer                , intent(in)    :: num_soilc       ! number of soil columns in filter
     integer                , intent(in)    :: filter_soilc(:) ! filter for soil columns
@@ -147,8 +143,7 @@ contains
 
       ! set time steps
 
-      if ( (.not. is_active_betr_bgc) .and. &
-           .not.(use_pflotran .and. pf_cmode)) then
+      if (.not.(use_pflotran .and. pf_cmode)) then
          ! column level carbon fluxes from harvest mortality
          do j = 1, nlevdecomp
             ! column loop
@@ -186,7 +181,7 @@ contains
          veg_cs%deadcrootc(p)          = veg_cs%deadcrootc(p)         - veg_cf%hrv_deadcrootc_to_litter(p)         * dt
 
          ! crops
-         if (ivt(p) >= npcropmin) then ! skip 2 generic crops
+         if (iscft(ivt(p))) then ! skip 2 generic crops
              veg_cs%livestemc(p)       = veg_cs%livestemc(p)          - veg_cf%hrv_livestemc_to_prod1c(p)          *dt
              veg_cs%leafc(p)           = veg_cs%leafc(p)              - veg_cf%hrv_leafc_to_prod1c(p)              *dt
              veg_cs%grainc(p)          = veg_cs%grainc(p)             - veg_cf%hrv_grainc_to_prod1c(p)             *dt

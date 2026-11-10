@@ -1,6 +1,7 @@
 #ifndef INCLUDE_COMPOSE_SLMM_DEPARTURE_POINT_HPP
 #define INCLUDE_COMPOSE_SLMM_DEPARTURE_POINT_HPP
 
+#include "compose.hpp"
 #include "compose_slmm.hpp"
 
 namespace slmm {
@@ -44,6 +45,16 @@ struct LocalMesh {
   SLMM_KIF bool is_sphere () const { return geometry == Geometry::Type::sphere; }
 };
 
+template <typename ES>
+void nullify (LocalMesh<ES>& m) {
+  m.p = decltype(m.p)(nullptr, 0);
+  m.nml = decltype(m.nml)(nullptr, 0);
+  m.e = decltype(m.e)(nullptr, 0, 0);
+  m.en = decltype(m.en)(nullptr, 0, 0);
+  m.perimp = decltype(m.perimp)(nullptr, 0);
+  m.perimnml = decltype(m.perimnml)(nullptr, 0);
+}
+
 // Inward-oriented normal. In practice, we want to form high-quality normals
 // using information about the cubed-sphere mesh. This is a low-quality
 // brute-force calculation.
@@ -55,9 +66,10 @@ void fill_normals (LocalMesh<ko::MachineTraits::HES>& m) {
     for (Int iv = 0; iv < szslice(m.e); ++iv)
       if (m.e(ip,iv) == -1) break; else ++ne;
   // Fill.
-  siqk::Idxs::HostMirror en("en", nslices(m.e), szslice(m.e));
+  // Use LocalMesh types directly to avoid HIPSpace/HostSpace mismatch on APU.
+  typename LocalMesh<ko::MachineTraits::HES>::IntArray en("en", nslices(m.e), szslice(m.e));
   ko::deep_copy(en, -1);
-  siqk::Vec3s::HostMirror nml("nml", ne);
+  typename LocalMesh<ko::MachineTraits::HES>::RealArray nml("nml", ne);
   Int ie = 0;
   for (Int ip = 0; ip < nslices(m.e); ++ip)
     for (Int iv = 0; iv < szslice(m.e); ++iv)

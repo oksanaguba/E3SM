@@ -1331,6 +1331,7 @@ module mpas_timekeeping
       character(len=16) :: fmtString
       integer :: iwidth
       integer :: idecimals
+      logical :: dt_negative
 
 !      if (present(DD)) then
 !         days = DD
@@ -1396,7 +1397,7 @@ module mpas_timekeeping
 
 !      call ESMF_TimeIntervalSet(interval % ti, D=days, S=seconds, Sn=S_n, Sd=S_d, rc=ierr)
 
-
+      dt_negative = .false.
       if (present(timeString) .or. present(dt)) then
 
 
@@ -1416,16 +1417,18 @@ module mpas_timekeeping
                iwidth = idecimals + 2
             end if
 
-            ! Add an extra character for a minus sign if needed
+            ! Flag for negative values
             if (dt < 0.0_RKIND) then
-               iwidth = iwidth + 1
+               dt_negative = .true. 
             end if
 
             write(fmtString, '(a,i2.2,a,i2.2,a)') '(a,f', iwidth, '.', idecimals, ')'
-            write(timeString_,trim(fmtString)) '00:00:', dt
+            write(timeString_,trim(fmtString)) '00:00:', abs(dt)
          else
             timeString_ = timeString
          end if
+
+         !call mpas_log_write('timeString_ '//trim(timeString_))
 
          numerator = 0
          denominator = 1
@@ -1518,6 +1521,13 @@ module mpas_timekeeping
             call mpas_log_write('Invalid TimeInterval string (invalid time substring) ' // trim(timeString), MPAS_LOG_ERR)
             return
          end if
+
+         if (dt_negative) then
+            sec = -sec
+            numerator = -numerator
+         end if
+
+         !call mpas_log_write('sec $i, num $i, denom $i', intArgs=(/int(sec),numerator,denominator/))
 
          call ESMF_TimeIntervalSet(interval % ti, YY=year, MM=month, D=day, H=hour, M=min, S_i8=sec, Sn=numerator, Sd=denominator, rc=ierr)
 

@@ -2,7 +2,6 @@ module VegetationPropertiesType
 
   ! !USES:
   use shr_kind_mod   , only : r8 => shr_kind_r8
-  use shr_infnan_mod  , only : nan => shr_infnan_nan, assignment(=)
   use elm_varpar     , only : nlevdecomp
   use elm_varpar     , only : nsoilorder
   use elm_varctl     , only : nu_com
@@ -18,7 +17,7 @@ module VegetationPropertiesType
   ! !PUBLIC TYPES:
   type, public :: vegetation_properties_type
      integer , pointer :: noveg         (:)   => null() ! value for not vegetated
-     integer , pointer :: tree          (:)   => null() ! tree or not?
+     !integer , pointer :: tree          (:)   => null() ! tree or not?
      real(r8), pointer :: smpso         (:)   => null() ! soil water potential at full stomatal opening (mm)
      real(r8), pointer :: smpsc         (:)   => null() ! soil water potential at full stomatal closure (mm)
      real(r8), pointer :: fnitr         (:)   => null() ! foliage nitrogen limitation factor (-)
@@ -44,7 +43,7 @@ module VegetationPropertiesType
      real(r8), pointer :: dsladlai      (:) => null()  ! dSLA/dLAI, projected area basis [m^2/gC]
      real(r8), pointer :: leafcn        (:) => null()  ! leaf C:N (gC/gN)
      real(r8), pointer :: flnr          (:) => null()  ! fraction of leaf N in the Rubisco enzyme (gN Rubisco / gN leaf)
-     real(r8), pointer :: woody         (:) => null()  ! binary flag for woody lifeform (1=woody, 0=not woody)
+     real(r8), pointer :: woody         (:) => null()  ! woody lifeform flag (0 = non-woody, 1 = tree, 2 = shrub)
      real(r8), pointer :: lflitcn       (:) => null()  ! leaf litter C:N (gC/gN)
      real(r8), pointer :: frootcn       (:) => null()  ! fine root C:N (gC/gN)
      real(r8), pointer :: livewdcn      (:) => null()  ! live wood (phloem and ray parenchyma) C:N (gC/gN)
@@ -79,7 +78,7 @@ module VegetationPropertiesType
      real(r8), pointer :: fm_root       (:) => null()  ! fire-related mortality factor for fine roots (0 to 1)
      real(r8), pointer :: fm_lroot      (:) => null()  ! fire-related mortality factor for live roots (0 to 1)
      real(r8), pointer :: fm_droot      (:) => null()  ! fire-related mortality factor for dead roots (0 to 1)
-     real(r8), pointer :: fertnitro     (:) => null()  ! fertilizer applied (crop)
+     real(r8), pointer :: manunitro     (:) => null()  ! manure nitrogen applied (crop)
      real(r8), pointer :: fleafcn       (:) => null()  ! C:N during grain fill; leaf (crop)
      real(r8), pointer :: ffrootcn      (:) => null()  ! C:N during grain fill; froot (crop)
      real(r8), pointer :: fstemcn       (:) => null()  ! C:N during grain fill; stem (crop)
@@ -116,7 +115,7 @@ module VegetationPropertiesType
      real(r8), pointer :: lamda_ptase              => null()! critical value that incur biochemical production
      real(r8), pointer :: i_vc(:)          => null()        ! intercept of photosynthesis vcmax ~ leaf n content regression model
      real(r8), pointer :: s_vc(:)          => null()        ! slope of photosynthesis vcmax ~ leaf n content regression model
-     real(r8), pointer :: nsc_rtime(:)     => null()        ! non-structural carbon residence time 
+     real(r8), pointer :: nsc_rtime(:)     => null()        ! non-structural carbon residence time
      real(r8), pointer :: pinit_beta1(:)   => null()        ! shaping parameter for P initialization
      real(r8), pointer :: pinit_beta2(:)   => null()        ! shaping parameter for P initialization
      real(r8), pointer :: alpha_nfix(:)    => null()        ! fraction of fixed N goes directly to plant
@@ -144,7 +143,19 @@ module VegetationPropertiesType
      real(r8), pointer :: nstor(:)         => null()   !Nitrogen storage pool timescale
      real(r8), pointer :: br_xr(:)         => null()   !Base rate for excess respiration
      real(r8), pointer :: tc_stress        => null()   !Critial temperature for moisture stress
+     ! new properties for flexible PFT
+     real(r8), pointer :: climatezone(:)   => null()   !climate zone adapted
+     real(r8), pointer :: nonvascular(:)   => null()   !nonvascular type or vascular
+     real(r8), pointer :: graminoid(:)     => null()   !graminoid or not
+     logical,  pointer :: iscft(:)         => null()   !.false. = generic crop, .true. = prognostic crop
+     real(r8), pointer :: needleleaf(:)    => null()   !needleleaf or broadleaf
+     real(r8), pointer :: nfixer(:)        => null()   !cablity of nitrogen fixation from atm. N2
 
+     ! NGEE Arctic snow-vegetation interactions
+     real(r8), pointer :: bendresist(:)       ! vegetation resistance to bending under snow loading, 0 to 1 (e.g., Liston and Hiemstra 2011)
+     real(r8), pointer :: vegshape(:)         ! shape parameter to modify shrub burial by snow (1 = parabolic, 2 = hemispheric)
+     real(r8), pointer :: stocking(:)         ! stocking density for pft (stems / hectare)
+     real(r8), pointer :: taper(:)            ! ratio of height:radius_breast_height (woody vegetation allometry)
 
    contains
    procedure, public :: Init => veg_vp_init
@@ -160,13 +171,13 @@ contains
     !
     ! !USES:
     use elm_varpar, only : numrad, numpft
-    use pftvarcon , only : ntree, smpso, smpsc, fnitr
+    use pftvarcon , only : smpso, smpsc, fnitr
     use pftvarcon , only : z0mr, displar, dleaf, rhol, rhos, taul, taus, xl
     use pftvarcon , only : c3psn, slatop, dsladlai, leafcn, flnr, woody
     use pftvarcon , only : lflitcn, frootcn, livewdcn, deadwdcn, froot_leaf, stem_leaf, croot_stem
     use pftvarcon , only : flivewd, fcur, lf_flab, lf_fcel, lf_flig, fr_flab, fr_fcel, fr_flig
     use pftvarcon , only : leaf_long, froot_long, evergreen, stress_decid, season_decid
-    use pftvarcon , only : fertnitro, graincn, fleafcn, ffrootcn, fstemcn, dwood
+    use pftvarcon , only : manunitro, graincn, fleafcn, ffrootcn, fstemcn, dwood
     use pftvarcon , only : presharv, convfact, fyield
     use pftvarcon , only : leafcp,lflitcp, frootcp, livewdcp, deadwdcp,graincp
     use pftvarcon , only : vmax_plant_nh4, vmax_plant_no3, vmax_plant_p, vmax_minsurf_p_vr
@@ -182,6 +193,10 @@ contains
     use pftvarcon , only : fnr, act25, kcha, koha, cpha, vcmaxha, jmaxha, tpuha
     use pftvarcon , only : lmrha, vcmaxhd, jmaxhd, tpuhd, lmrse, qe, theta_cj
     use pftvarcon , only : bbbopt, mbbopt, nstor, br_xr, tc_stress, lmrhd
+    ! new properties for flexible PFT (NGEE Arctic IM4)
+    use pftvarcon , only : climatezone, nonvascular, graminoid, iscft,needleleaf, nfixer
+    ! snow/vegetation interactions (NGEE Arctic IM3)
+    use pftvarcon , only : bendresist, stocking, vegshape, taper
     !
 
     class (vegetation_properties_type) :: this
@@ -191,109 +206,109 @@ contains
     !------------------------------------------------------------------------
 
     allocate(this%noveg         (0:numpft))        ; this%noveg        (:)   =huge(1)
-    allocate(this%tree          (0:numpft))        ; this%tree         (:)   =huge(1)
-    allocate(this%smpso         (0:numpft))        ; this%smpso        (:)   =nan
-    allocate(this%smpsc         (0:numpft))        ; this%smpsc        (:)   =nan
-    allocate(this%fnitr         (0:numpft))        ; this%fnitr        (:)   =nan
-    allocate(this%foln          (0:numpft))        ; this%foln         (:)   =nan
-    allocate(this%dleaf         (0:numpft))        ; this%dleaf        (:)   =nan
-    allocate(this%c3psn         (0:numpft))        ; this%c3psn        (:)   =nan
-    allocate(this%xl            (0:numpft))        ; this%xl           (:)   =nan
-    allocate(this%rhol          (0:numpft,numrad)) ; this%rhol         (:,:) =nan
-    allocate(this%rhos          (0:numpft,numrad)) ; this%rhos         (:,:) =nan
-    allocate(this%taul          (0:numpft,numrad)) ; this%taul         (:,:) =nan
-    allocate(this%taus          (0:numpft,numrad)) ; this%taus         (:,:) =nan
-    allocate(this%z0mr          (0:numpft))        ; this%z0mr         (:)   =nan
-    allocate(this%displar       (0:numpft))        ; this%displar      (:)   =nan
-    allocate(this%roota_par     (0:numpft))        ; this%roota_par    (:)   =nan
-    allocate(this%rootb_par     (0:numpft))        ; this%rootb_par    (:)   =nan
-    allocate(this%slatop        (0:numpft))        ; this%slatop       (:)   =nan
-    allocate(this%dsladlai      (0:numpft))        ; this%dsladlai     (:)   =nan
-    allocate(this%leafcn        (0:numpft))        ; this%leafcn       (:)   =nan
-    allocate(this%flnr          (0:numpft))        ; this%flnr         (:)   =nan
-    allocate(this%woody         (0:numpft))        ; this%woody        (:)   =nan
-    allocate(this%lflitcn       (0:numpft))        ; this%lflitcn      (:)   =nan
-    allocate(this%frootcn       (0:numpft))        ; this%frootcn      (:)   =nan
-    allocate(this%livewdcn      (0:numpft))        ; this%livewdcn     (:)   =nan
-    allocate(this%deadwdcn      (0:numpft))        ; this%deadwdcn     (:)   =nan
-    allocate(this%graincn       (0:numpft))        ; this%graincn      (:)   =nan
-    allocate(this%froot_leaf    (0:numpft))        ; this%froot_leaf   (:)   =nan
-    allocate(this%stem_leaf     (0:numpft))        ; this%stem_leaf    (:)   =nan
-    allocate(this%croot_stem    (0:numpft))        ; this%croot_stem   (:)   =nan
-    allocate(this%flivewd       (0:numpft))        ; this%flivewd      (:)   =nan
-    allocate(this%fcur          (0:numpft))        ; this%fcur         (:)   =nan
-    allocate(this%lf_flab       (0:numpft))        ; this%lf_flab      (:)   =nan
-    allocate(this%lf_fcel       (0:numpft))        ; this%lf_fcel      (:)   =nan
-    allocate(this%lf_flig       (0:numpft))        ; this%lf_flig      (:)   =nan
-    allocate(this%fr_flab       (0:numpft))        ; this%fr_flab      (:)   =nan
-    allocate(this%fr_fcel       (0:numpft))        ; this%fr_fcel      (:)   =nan
-    allocate(this%fr_flig       (0:numpft))        ; this%fr_flig      (:)   =nan
-    allocate(this%leaf_long     (0:numpft))        ; this%leaf_long    (:)   =nan
-    allocate(this%froot_long    (0:numpft))        ; this%froot_long   (:)   =nan
-    allocate(this%evergreen     (0:numpft))        ; this%evergreen    (:)   =nan
-    allocate(this%stress_decid  (0:numpft))        ; this%stress_decid (:)   =nan
-    allocate(this%season_decid  (0:numpft))        ; this%season_decid (:)   =nan
-    allocate(this%dwood         (0:numpft))        ; this%dwood        (:)   =nan
-    allocate(this%root_radius   (0:numpft))        ; this%root_radius  (:)   =nan
-    allocate(this%root_density  (0:numpft))        ; this%root_density (:)   =nan
-    allocate(this%rootprof_beta (0:numpft))        ; this%rootprof_beta(:)   =nan
-    allocate(this%fertnitro     (0:numpft))        ; this%fertnitro    (:)   =nan
-    allocate(this%fleafcn       (0:numpft))        ; this%fleafcn      (:)   =nan
-    allocate(this%ffrootcn      (0:numpft))        ; this%ffrootcn     (:)   =nan
-    allocate(this%fstemcn       (0:numpft))        ; this%fstemcn      (:)   =nan
-    allocate(this%presharv      (0:numpft))        ; this%presharv     (:)   =nan
-    allocate(this%convfact      (0:numpft))        ; this%convfact     (:)   =nan
-    allocate(this%fyield        (0:numpft))        ; this%fyield       (:)   =nan
+    !allocate(this%tree          (0:numpft))        ; this%tree         (:)   =huge(1)
+    allocate(this%smpso         (0:numpft))        ; this%smpso        (:)   =spval
+    allocate(this%smpsc         (0:numpft))        ; this%smpsc        (:)   =spval
+    allocate(this%fnitr         (0:numpft))        ; this%fnitr        (:)   =spval
+    allocate(this%foln          (0:numpft))        ; this%foln         (:)   =spval
+    allocate(this%dleaf         (0:numpft))        ; this%dleaf        (:)   =spval
+    allocate(this%c3psn         (0:numpft))        ; this%c3psn        (:)   =spval
+    allocate(this%xl            (0:numpft))        ; this%xl           (:)   =spval
+    allocate(this%rhol          (0:numpft,numrad)) ; this%rhol         (:,:) =spval
+    allocate(this%rhos          (0:numpft,numrad)) ; this%rhos         (:,:) =spval
+    allocate(this%taul          (0:numpft,numrad)) ; this%taul         (:,:) =spval
+    allocate(this%taus          (0:numpft,numrad)) ; this%taus         (:,:) =spval
+    allocate(this%z0mr          (0:numpft))        ; this%z0mr         (:)   =spval
+    allocate(this%displar       (0:numpft))        ; this%displar      (:)   =spval
+    allocate(this%roota_par     (0:numpft))        ; this%roota_par    (:)   =spval
+    allocate(this%rootb_par     (0:numpft))        ; this%rootb_par    (:)   =spval
+    allocate(this%slatop        (0:numpft))        ; this%slatop       (:)   =spval
+    allocate(this%dsladlai      (0:numpft))        ; this%dsladlai     (:)   =spval
+    allocate(this%leafcn        (0:numpft))        ; this%leafcn       (:)   =spval
+    allocate(this%flnr          (0:numpft))        ; this%flnr         (:)   =spval
+    allocate(this%woody         (0:numpft))        ; this%woody        (:)   =spval
+    allocate(this%lflitcn       (0:numpft))        ; this%lflitcn      (:)   =spval
+    allocate(this%frootcn       (0:numpft))        ; this%frootcn      (:)   =spval
+    allocate(this%livewdcn      (0:numpft))        ; this%livewdcn     (:)   =spval
+    allocate(this%deadwdcn      (0:numpft))        ; this%deadwdcn     (:)   =spval
+    allocate(this%graincn       (0:numpft))        ; this%graincn      (:)   =spval
+    allocate(this%froot_leaf    (0:numpft))        ; this%froot_leaf   (:)   =spval
+    allocate(this%stem_leaf     (0:numpft))        ; this%stem_leaf    (:)   =spval
+    allocate(this%croot_stem    (0:numpft))        ; this%croot_stem   (:)   =spval
+    allocate(this%flivewd       (0:numpft))        ; this%flivewd      (:)   =spval
+    allocate(this%fcur          (0:numpft))        ; this%fcur         (:)   =spval
+    allocate(this%lf_flab       (0:numpft))        ; this%lf_flab      (:)   =spval
+    allocate(this%lf_fcel       (0:numpft))        ; this%lf_fcel      (:)   =spval
+    allocate(this%lf_flig       (0:numpft))        ; this%lf_flig      (:)   =spval
+    allocate(this%fr_flab       (0:numpft))        ; this%fr_flab      (:)   =spval
+    allocate(this%fr_fcel       (0:numpft))        ; this%fr_fcel      (:)   =spval
+    allocate(this%fr_flig       (0:numpft))        ; this%fr_flig      (:)   =spval
+    allocate(this%leaf_long     (0:numpft))        ; this%leaf_long    (:)   =spval
+    allocate(this%froot_long    (0:numpft))        ; this%froot_long   (:)   =spval
+    allocate(this%evergreen     (0:numpft))        ; this%evergreen    (:)   =spval
+    allocate(this%stress_decid  (0:numpft))        ; this%stress_decid (:)   =spval
+    allocate(this%season_decid  (0:numpft))        ; this%season_decid (:)   =spval
+    allocate(this%dwood         (0:numpft))        ; this%dwood        (:)   =spval
+    allocate(this%root_radius   (0:numpft))        ; this%root_radius  (:)   =spval
+    allocate(this%root_density  (0:numpft))        ; this%root_density (:)   =spval
+    allocate(this%rootprof_beta (0:numpft))        ; this%rootprof_beta(:)   =spval
+    allocate(this%manunitro     (0:numpft))        ; this%manunitro    (:)   =spval
+    allocate(this%fleafcn       (0:numpft))        ; this%fleafcn      (:)   =spval
+    allocate(this%ffrootcn      (0:numpft))        ; this%ffrootcn     (:)   =spval
+    allocate(this%fstemcn       (0:numpft))        ; this%fstemcn      (:)   =spval
+    allocate(this%presharv      (0:numpft))        ; this%presharv     (:)   =spval
+    allocate(this%convfact      (0:numpft))        ; this%convfact     (:)   =spval
+    allocate(this%fyield        (0:numpft))        ; this%fyield       (:)   =spval
 
 
-    allocate(this%leafcp        (0:numpft))        ; this%leafcp       (:)   =nan
-    allocate(this%lflitcp       (0:numpft))        ; this%lflitcp      (:)   =nan
-    allocate(this%frootcp       (0:numpft))        ; this%frootcp      (:)   =nan
-    allocate(this%livewdcp      (0:numpft))        ; this%livewdcp     (:)   =nan
-    allocate(this%deadwdcp      (0:numpft))        ; this%deadwdcp     (:)   =nan
-    allocate(this%graincp       (0:numpft))        ; this%graincp      (:)   =nan
+    allocate(this%leafcp        (0:numpft))        ; this%leafcp       (:)   =spval
+    allocate(this%lflitcp       (0:numpft))        ; this%lflitcp      (:)   =spval
+    allocate(this%frootcp       (0:numpft))        ; this%frootcp      (:)   =spval
+    allocate(this%livewdcp      (0:numpft))        ; this%livewdcp     (:)   =spval
+    allocate(this%deadwdcp      (0:numpft))        ; this%deadwdcp     (:)   =spval
+    allocate(this%graincp       (0:numpft))        ; this%graincp      (:)   =spval
 
-    allocate( this%alpha_nfix    (0:numpft))                     ; this%alpha_nfix    (:)        =nan
-    allocate( this%alpha_ptase   (0:numpft))                     ; this%alpha_ptase   (:)        =nan
-    allocate( this%ccost_nfix    (0:numpft))                     ; this%ccost_nfix    (:)        =nan
-    allocate( this%ccost_ptase   (0:numpft))                     ; this%ccost_ptase   (:)        =nan
-    allocate( this%vmax_plant_nh4(0:numpft))                     ; this%vmax_plant_nh4(:)        =nan
-    allocate( this%vmax_plant_no3(0:numpft))                     ; this%vmax_plant_no3(:)        =nan
-    allocate( this%vmax_plant_p(0:numpft))                       ; this%vmax_plant_p(:)          =nan
-    allocate( this%vmax_minsurf_p_vr(0:nsoilorder,1:nlevdecomp)) ; this%vmax_minsurf_p_vr(:,:)   =nan
-    allocate( this%km_plant_nh4(0:numpft))                       ; this%km_plant_nh4(:)          =nan
-    allocate( this%km_plant_no3(0:numpft))                       ; this%km_plant_no3(:)          =nan
-    allocate( this%km_plant_p(0:numpft))                         ; this%km_plant_p(:)            =nan
-    allocate( this%km_minsurf_p_vr(0:nsoilorder,1:nlevdecomp))   ; this%km_minsurf_p_vr(:,:)     =nan
-    allocate( this%decompmicc_patch_vr(0:numpft,1:nlevdecomp))   ; this%decompmicc_patch_vr(:,:) =nan
-    allocate( this%vmax_ptase(0:numpft))                         ; this%vmax_ptase(:)            =nan
-    allocate( this%i_vc(0:numpft))                               ; this%i_vc(:)                  =nan
-    allocate( this%s_vc(0:numpft))                               ; this%s_vc(:)                  =nan
-    allocate( this%nsc_rtime(0:numpft))                          ; this%nsc_rtime(:)             =nan
-    allocate( this%pinit_beta1(0:nsoilorder))                    ; this%pinit_beta1(:)           =nan
-    allocate( this%pinit_beta2(0:nsoilorder))                    ; this%pinit_beta2(:)           =nan
-    allocate( this%vmax_nfix(0:numpft))                          ; this%vmax_nfix(:)             =nan
-    allocate( this%km_nfix(0:numpft))                            ; this%km_nfix(:)               =nan
-    allocate( this%fnr(0:numpft))                                ; this%fnr(:)                   =nan
-    allocate( this%act25(0:numpft))                              ; this%act25(:)                 =nan
-    allocate( this%kcha(0:numpft))                               ; this%kcha(:)                  =nan
-    allocate( this%koha(0:numpft))                               ; this%koha(:)                  =nan
-    allocate( this%cpha(0:numpft))                               ; this%cpha(:)                  =nan
-    allocate( this%vcmaxha(0:numpft))                            ; this%vcmaxha(:)               =nan
-    allocate( this%jmaxha(0:numpft))                             ; this%jmaxha(:)                =nan
-    allocate( this%tpuha(0:numpft))                              ; this%tpuha(:)                 =nan
-    allocate( this%lmrha(0:numpft))                              ; this%lmrha(:)                 =nan
-    allocate( this%vcmaxhd(0:numpft))                            ; this%vcmaxhd(:)               =nan
-    allocate( this%jmaxhd(0:numpft))                             ; this%jmaxhd(:)                =nan
-    allocate( this%tpuhd(0:numpft))                              ; this%tpuhd(:)                 =nan
-    allocate( this%lmrhd(0:numpft))                              ; this%lmrhd(:)                 =nan
-    allocate( this%lmrse(0:numpft))                              ; this%lmrse(:)                 =nan
-    allocate( this%qe(0:numpft))                                 ; this%qe(:)                    =nan
-    allocate( this%theta_cj(0:numpft))                           ; this%theta_cj(:)              =nan
-    allocate( this%bbbopt(0:numpft))                             ; this%bbbopt(:)                =nan
-    allocate( this%mbbopt(0:numpft))                             ; this%mbbopt(:)                =nan
-    allocate( this%nstor(0:numpft))                              ; this%nstor(:)                 =nan
-    allocate( this%br_xr(0:numpft))                              ; this%br_xr(:)                 =nan
+    allocate( this%alpha_nfix    (0:numpft))                     ; this%alpha_nfix    (:)        =spval
+    allocate( this%alpha_ptase   (0:numpft))                     ; this%alpha_ptase   (:)        =spval
+    allocate( this%ccost_nfix    (0:numpft))                     ; this%ccost_nfix    (:)        =spval
+    allocate( this%ccost_ptase   (0:numpft))                     ; this%ccost_ptase   (:)        =spval
+    allocate( this%vmax_plant_nh4(0:numpft))                     ; this%vmax_plant_nh4(:)        =spval
+    allocate( this%vmax_plant_no3(0:numpft))                     ; this%vmax_plant_no3(:)        =spval
+    allocate( this%vmax_plant_p(0:numpft))                       ; this%vmax_plant_p(:)          =spval
+    allocate( this%vmax_minsurf_p_vr(0:nsoilorder,1:nlevdecomp)) ; this%vmax_minsurf_p_vr(:,:)   =spval
+    allocate( this%km_plant_nh4(0:numpft))                       ; this%km_plant_nh4(:)          =spval
+    allocate( this%km_plant_no3(0:numpft))                       ; this%km_plant_no3(:)          =spval
+    allocate( this%km_plant_p(0:numpft))                         ; this%km_plant_p(:)            =spval
+    allocate( this%km_minsurf_p_vr(0:nsoilorder,1:nlevdecomp))   ; this%km_minsurf_p_vr(:,:)     =spval
+    allocate( this%decompmicc_patch_vr(0:numpft,1:nlevdecomp))   ; this%decompmicc_patch_vr(:,:) =spval
+    allocate( this%vmax_ptase(0:numpft))                         ; this%vmax_ptase(:)            =spval
+    allocate( this%i_vc(0:numpft))                               ; this%i_vc(:)                  =spval
+    allocate( this%s_vc(0:numpft))                               ; this%s_vc(:)                  =spval
+    allocate( this%nsc_rtime(0:numpft))                          ; this%nsc_rtime(:)             =spval
+    allocate( this%pinit_beta1(0:nsoilorder))                    ; this%pinit_beta1(:)           =spval
+    allocate( this%pinit_beta2(0:nsoilorder))                    ; this%pinit_beta2(:)           =spval
+    allocate( this%vmax_nfix(0:numpft))                          ; this%vmax_nfix(:)             =spval
+    allocate( this%km_nfix(0:numpft))                            ; this%km_nfix(:)               =spval
+    allocate( this%fnr(0:numpft))                                ; this%fnr(:)                   =spval
+    allocate( this%act25(0:numpft))                              ; this%act25(:)                 =spval
+    allocate( this%kcha(0:numpft))                               ; this%kcha(:)                  =spval
+    allocate( this%koha(0:numpft))                               ; this%koha(:)                  =spval
+    allocate( this%cpha(0:numpft))                               ; this%cpha(:)                  =spval
+    allocate( this%vcmaxha(0:numpft))                            ; this%vcmaxha(:)               =spval
+    allocate( this%jmaxha(0:numpft))                             ; this%jmaxha(:)                =spval
+    allocate( this%tpuha(0:numpft))                              ; this%tpuha(:)                 =spval
+    allocate( this%lmrha(0:numpft))                              ; this%lmrha(:)                 =spval
+    allocate( this%vcmaxhd(0:numpft))                            ; this%vcmaxhd(:)               =spval
+    allocate( this%jmaxhd(0:numpft))                             ; this%jmaxhd(:)                =spval
+    allocate( this%tpuhd(0:numpft))                              ; this%tpuhd(:)                 =spval
+    allocate( this%lmrhd(0:numpft))                              ; this%lmrhd(:)                 =spval
+    allocate( this%lmrse(0:numpft))                              ; this%lmrse(:)                 =spval
+    allocate( this%qe(0:numpft))                                 ; this%qe(:)                    =spval
+    allocate( this%theta_cj(0:numpft))                           ; this%theta_cj(:)              =spval
+    allocate( this%bbbopt(0:numpft))                             ; this%bbbopt(:)                =spval
+    allocate( this%mbbopt(0:numpft))                             ; this%mbbopt(:)                =spval
+    allocate( this%nstor(0:numpft))                              ; this%nstor(:)                 =spval
+    allocate( this%br_xr(0:numpft))                              ; this%br_xr(:)                 =spval
 
     !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!1
     allocate(this%km_decomp_nh4)
@@ -306,14 +321,28 @@ contains
     allocate(this%tc_stress    )
     !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
+    ! new properties for flexible PFT
+    allocate( this%climatezone(0:numpft))                        ; this%climatezone(:)           =spval
+    allocate( this%nonvascular(0:numpft))                        ; this%nonvascular(:)           =spval
+    allocate( this%graminoid(0:numpft))                          ; this%graminoid(:)             =spval
+    allocate( this%iscft(0:numpft))                              ; this%iscft(:)                 =.false.
+    allocate( this%needleleaf(0:numpft))                         ; this%needleleaf(:)            =spval
+    allocate( this%nfixer(0:numpft))                             ; this%nfixer(:)                =spval
+    ! -----------------------------------------------------------------------------------------------------------
+    ! NGEE Arctic snow-vegetation interactions
+    allocate(this%bendresist(0:numpft))                          ; this%bendresist(:)            =spval
+    allocate(this%vegshape(0:numpft))                            ; this%vegshape(:)              =spval
+    allocate(this%stocking(0:numpft))                            ; this%stocking(:)              =spval
+    allocate(this%taper(0:numpft))                               ; this%taper(:)                 =spval
 
     do m = 0,numpft
 
-       if (m <= ntree) then
-          this%tree(m) = 1
-       else
-          this%tree(m) = 0
-       end if
+       ! not needed anymore: woody(m)=1 for tree, 2 for shrub, or 0 for any other
+       !if (woody(m) == 1) then
+       !   this%tree(m) = 1
+       !else
+       !   this%tree(m) = 0
+       !end if
 
        do ib = 1,numrad
           this%rhol(m,ib)   = rhol(m,ib)
@@ -359,7 +388,7 @@ contains
        this%dwood(m)        = dwood
        this%root_radius(m)  = 0.29e-03_r8 !(m)
        this%root_density(m) = 0.31e06_r8 !(g biomass / m3 root)
-       this%fertnitro(m)    = fertnitro(m)
+       this%manunitro(m)    = manunitro(m)
        this%fleafcn(m)      = fleafcn(m)
        this%ffrootcn(m)     = ffrootcn(m)
        this%fstemcn(m)      = fstemcn(m)
@@ -393,6 +422,13 @@ contains
        this%mbbopt(m)       = mbbopt(m)
        this%nstor(m)        = nstor(m)
        this%br_xr(m)        = br_xr(m)
+       ! new properties for flexible PFT
+       this%climatezone(m)  = climatezone(m)
+       this%nonvascular(m)  = nonvascular(m)
+       this%graminoid(m)    = graminoid(m)
+       this%iscft(m)        = iscft(m)
+       this%needleleaf(m)   = needleleaf(m)
+       this%nfixer(m)       = nfixer(m)
 
     end do
 
@@ -448,6 +484,13 @@ contains
     this%lamda_ptase   = lamda_ptase
     this%tc_stress     = tc_stress
 
+    ! NGEE Arctic - snow/vegetation interactions
+    do m = 0, numpft ! RPF - move up to earlier pft loops?
+      this%bendresist(m)  = bendresist(m)
+      this%vegshape(m)    = vegshape(m)
+      this%stocking(m)    = stocking(m)
+      this%taper(m)       = taper(m)
+    end do
   end subroutine veg_vp_init
 
 end module VegetationPropertiesType

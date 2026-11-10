@@ -10,7 +10,7 @@ module initSubgridMod
   use shr_log_mod    , only : errMsg => shr_log_errMsg
   use spmdMod        , only : masterproc
   use abortutils     , only : endrun
-  use elm_varctl     , only : iulog
+  use elm_varctl     , only : iulog, use_polygonal_tundra
   use elm_varcon     , only : namep, namec, namel, namet
   use decompMod      , only : bounds_type
   use GridcellType   , only : grc_pp                
@@ -29,6 +29,7 @@ module initSubgridMod
   public :: elm_ptrs_check    ! checks and writes out a summary of subgrid data
   public :: add_topounit      ! add an entry in the topounit-level arrays
   public :: add_landunit      ! add an entry in the landunit-level arrays
+  public :: add_polygon_landunit ! adds an entry in the landunit-level arrays for the special type of polygonal ground.
   public :: add_column        ! add an entry in the column-level arrays
   public :: add_patch         ! add an entry in the patch-level arrays
   !
@@ -61,6 +62,7 @@ contains
     ! !USES
     use elm_varcon, only : ispval
     use topounit_varcon, only : max_topounits
+    use landunit_varcon, only : max_non_poly_lunit, istsoil
     !
     ! !ARGUMENTS
     implicit none
@@ -147,6 +149,9 @@ contains
     grc_pp%landunit_indices(:,bounds%begg:bounds%endg) = ispval
     do l = bounds%begl,bounds%endl
        ltype = lun_pp%itype(l)
+       if (use_polygonal_tundra .and. ltype == istsoil .and. lun_pp%ispolygon(l)) then
+         ltype = lun_pp%polygontype(l) + max_non_poly_lunit
+       endif
        curg = lun_pp%gridcell(l)
        if (curg < bounds%begg .or. curg > bounds%endg) then
           write(iulog,*) 'elm_ptrs_compdown ERROR: gridcell landunit_indices ', l,curg,bounds%begg,bounds%endg
@@ -170,6 +175,9 @@ contains
     top_pp%landunit_indices(:,bounds%begt:bounds%endt) = ispval
     do l = bounds%begl,bounds%endl
        ltype = lun_pp%itype(l)
+       if (use_polygonal_tundra .and. ltype == istsoil .and. lun_pp%ispolygon(l)) then
+         ltype = lun_pp%polygontype(l) + max_non_poly_lunit
+       endif
        curt = lun_pp%topounit(l)
        if (curt < bounds%begt .or. curg > bounds%endt) then
           write(iulog,*) 'elm_ptrs_compdown ERROR: topounit landunit_indices ', l,curt,bounds%begt,bounds%endt
@@ -195,7 +203,7 @@ contains
     !
     ! !USES
     use elm_varcon, only : ispval
-    use landunit_varcon, only : max_lunit
+    use landunit_varcon, only : max_lunit, istsoil
     use topounit_varcon, only : max_topounits
     !
     ! !ARGUMENTS
@@ -349,7 +357,10 @@ contains
 
           ! skip l == ispval, which implies that this landunit type doesn't exist on this grid cell
           if (l /= ispval) then
-             if (lun_pp%itype(l) /= ltype) error = .true.
+             if (lun_pp%itype(l) /= ltype) then
+               if (lun_pp%ispolygon(l) .and. lun_pp%itype(l) /= istsoil) error = .true.
+               if (.not.lun_pp%ispolygon(l)) error = .true.
+             endif
              if (lun_pp%topounit(l) /= t) error = .true.
              if (lun_pp%gridcell(l) /= g) error = .true.
              if (error) then
@@ -417,6 +428,7 @@ contains
     top_pp%aspect(ti) = asp
     top_pp%topo_grc_ind(ti) = topo_ind    
     top_pp%active(ti) = is_tpu_active
+    top_pp%downhill_ti(ti) = -1   ! initialized to no downhill neighbor state (-1)
     
   end subroutine add_topounit
 
@@ -476,8 +488,56 @@ contains
 
   end subroutine add_landunit
 
+!-----------------------------------------------------------------------
+  subroutine add_polygon_landunit(li, ti, ltype, wttopounit, polytype)
+   !
+   ! !DESCRIPTION:
+   ! Add an entry in the landunit-level arrays. li gives the index of the last landunit
+   ! added; the new landunit is added at li+1, and the li argument is incremented
+   ! accordingly.
+   !
+   ! This verison of add_landunit is specific to polygonal tundra.
+   !
+   ! !USES:
+   use landunit_varcon , only : istsoil
+   !
+   ! !ARGUMENTS:
+   integer  , intent(inout) :: li         ! input value is index of last landunit added; output value is index of this newly-added landunit
+   integer  , intent(in)    :: ti         ! topounit index on which this landunit should be placed
+   integer  , intent(in)    :: ltype      ! landunit type
+   real(r8) , intent(in)    :: wttopounit ! weight of the landunit relative to the topounit
+   integer  , intent(in)    :: polytype   ! defines the type of ice wedge polygon this landunit corresponds to
+   !
+   ! !LOCAL VARIABLES:
+
+   character(len=*), parameter :: subname = 'add_polygon_landunit'
+   !-----------------------------------------------------------------------
+
+   li = li + 1
+
+   lun_pp%topounit(li) = ti
+   lun_pp%gridcell(li) = top_pp%gridcell(ti)
+
+   lun_pp%wttopounit(li) = wttopounit
+   lun_pp%itype(li) = ltype
+
+   if (ltype == istsoil) then
+      lun_pp%ifspecial(li) = .false.
+      lun_pp%ispolygon(li) = .true.
+      lun_pp%polygontype(li) = polytype
+      lun_pp%urbpoi(li) = .false.
+      lun_pp%lakpoi(li) = .false.
+      lun_pp%glcmecpoi(li) = .false.
+   else
+      write (iulog, *) "ERROR: attempting to assign polygonal tundra landunit to special or crop landunit type"
+      call endrun(msg=errMsg(__FILE__, __LINE__))
+   end if
+
+ end subroutine add_polygon_landunit
+
+
   !-----------------------------------------------------------------------
-  subroutine add_column(ci, li, ctype, wtlunit)
+  subroutine add_column(ci, li, ctype, wtlunit, is_soil, is_crop, is_lake)
     !
     ! !DESCRIPTION:
     ! Add an entry in the column-level arrays. ci gives the index of the last column
@@ -489,6 +549,9 @@ contains
     integer  , intent(in)    :: li      ! landunit index on which this column should be placed (assumes this landunit has already been created)
     integer  , intent(in)    :: ctype   ! column type
     real(r8) , intent(in)    :: wtlunit ! weight of the column relative to the landunit
+    logical  , optional      :: is_soil ! true for a soil column
+    logical  , optional      :: is_crop ! true for a crop column
+    logical  , optional      :: is_lake ! true for a lake column
     !
     ! !LOCAL VARIABLES:
     character(len=*), parameter :: subname = 'add_column'
@@ -502,11 +565,15 @@ contains
     
     col_pp%wtlunit(ci) = wtlunit
     col_pp%itype(ci) = ctype
-    
+
+    if (present(is_soil)) col_pp%is_soil(ci) = is_soil
+    if (present(is_crop)) col_pp%is_crop(ci) = is_crop
+    if (present(is_lake)) col_pp%is_lake(ci) = is_lake
+
   end subroutine add_column
 
   !-----------------------------------------------------------------------
-  subroutine add_patch(pi, ci, ptype, wtcol)
+  subroutine add_patch(pi, ci, ptype, wtcol, is_on_soil_col, is_on_crop_col)
     !
     ! !DESCRIPTION:
     ! Add an entry in the patch-level arrays. pi gives the index of the last patch added; the
@@ -522,6 +589,8 @@ contains
     integer  , intent(in)    :: ci    ! column index on which this patch should be placed (assumes this column has already been created)
     integer  , intent(in)    :: ptype ! patch type
     real(r8) , intent(in)    :: wtcol ! weight of the patch relative to the column
+    logical,   optional      :: is_on_soil_col
+    logical,   optional      :: is_on_crop_col
     !
     ! !LOCAL VARIABLES:
     integer :: li  ! landunit index, for convenience
@@ -547,6 +616,9 @@ contains
     else
        veg_pp%mxy(pi) = ispval
     end if
+
+    if (present(is_on_soil_col)) veg_pp%is_on_soil_col(pi) = is_on_soil_col
+    if (present(is_on_crop_col)) veg_pp%is_on_crop_col(pi) = is_on_crop_col
 
   end subroutine add_patch
 

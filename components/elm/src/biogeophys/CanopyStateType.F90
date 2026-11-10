@@ -10,6 +10,7 @@ module CanopyStateType
   use elm_varcon      , only : spval,ispval
   use elm_varpar      , only : nlevcan, nvegwcs
   use elm_varctl      , only : iulog, use_cn, use_fates, use_hydrstress, use_fates_sp
+  use elm_varctl      , only : use_polygonal_tundra
   use LandunitType    , only : lun_pp
   use ColumnType      , only : col_pp
   use VegetationType       , only : veg_pp
@@ -64,6 +65,10 @@ module CanopyStateType
      real(r8) , pointer :: altmax_lastyear_col      (:)   ! col prior year maximum annual depth of thaw
      integer  , pointer :: altmax_indx_col          (:)   ! col maximum annual depth of thaw
      integer  , pointer :: altmax_lastyear_indx_col (:)   ! col prior year maximum annual depth of thaw
+     real(r8) , pointer :: altmax_1989_col          (:)   ! col maximum annual thaw depth in 1989 RF note: temporary for IM1!
+     real(r8) , pointer :: altmax_ever_col          (:)   ! col maximum thaw depth from beginning of simulation
+     integer  , pointer :: altmax_1989_indx_col     (:)   ! col 1989 maximum thaw depth RF note: temporary for IM1!
+     integer  , pointer :: altmax_ever_indx_col     (:)   ! col maximum thaw depth from beginning of simulation
 
      real(r8) , pointer :: dewmx_patch              (:)   ! patch maximum allowed dew [mm]
 
@@ -118,33 +123,37 @@ contains
 
     allocate(this%frac_veg_nosno_patch     (begp:endp))           ; this%frac_veg_nosno_patch     (:)   = ispval
     allocate(this%frac_veg_nosno_alb_patch (begp:endp))           ; this%frac_veg_nosno_alb_patch (:)   = 0
-    allocate(this%tlai_patch               (begp:endp))           ; this%tlai_patch               (:)   = nan
-    allocate(this%tsai_patch               (begp:endp))           ; this%tsai_patch               (:)   = nan
-    allocate(this%tlai_hist_patch          (begp:endp))           ; this%tlai_hist_patch          (:)   = nan
-    allocate(this%tsai_hist_patch          (begp:endp))           ; this%tsai_hist_patch          (:)   = nan
-    allocate(this%htop_hist_patch          (begp:endp))           ; this%htop_hist_patch          (:)   = nan
-    allocate(this%elai_patch               (begp:endp))           ; this%elai_patch               (:)   = nan
-    allocate(this%elai240_patch            (begp:endp))           ; this%elai240_patch            (:)   = nan
-    allocate(this%esai_patch               (begp:endp))           ; this%esai_patch               (:)   = nan
-    allocate(this%laisun_patch             (begp:endp))           ; this%laisun_patch             (:)   = nan
-    allocate(this%laisha_patch             (begp:endp))           ; this%laisha_patch             (:)   = nan
-    allocate(this%laisun_z_patch           (begp:endp,1:nlevcan)) ; this%laisun_z_patch           (:,:) = nan
-    allocate(this%laisha_z_patch           (begp:endp,1:nlevcan)) ; this%laisha_z_patch           (:,:) = nan
-    allocate(this%mlaidiff_patch           (begp:endp))           ; this%mlaidiff_patch           (:)   = nan
-    allocate(this%annlai_patch          (12,begp:endp))           ; this%annlai_patch             (:,:) = nan
-    allocate(this%htop_patch               (begp:endp))           ; this%htop_patch               (:)   = nan
-    allocate(this%hbot_patch               (begp:endp))           ; this%hbot_patch               (:)   = nan
-    allocate(this%displa_patch             (begp:endp))           ; this%displa_patch             (:)   = nan
-    allocate(this%fsun_patch               (begp:endp))           ; this%fsun_patch               (:)   = nan
-    allocate(this%fsun24_patch             (begp:endp))           ; this%fsun24_patch             (:)   = nan
-    allocate(this%fsun240_patch            (begp:endp))           ; this%fsun240_patch            (:)   = nan
+    allocate(this%tlai_patch               (begp:endp))           ; this%tlai_patch               (:)   = spval
+    allocate(this%tsai_patch               (begp:endp))           ; this%tsai_patch               (:)   = spval
+    allocate(this%tlai_hist_patch          (begp:endp))           ; this%tlai_hist_patch          (:)   = spval
+    allocate(this%tsai_hist_patch          (begp:endp))           ; this%tsai_hist_patch          (:)   = spval
+    allocate(this%htop_hist_patch          (begp:endp))           ; this%htop_hist_patch          (:)   = spval
+    allocate(this%elai_patch               (begp:endp))           ; this%elai_patch               (:)   = spval
+    allocate(this%elai240_patch            (begp:endp))           ; this%elai240_patch            (:)   = spval
+    allocate(this%esai_patch               (begp:endp))           ; this%esai_patch               (:)   = spval
+    allocate(this%laisun_patch             (begp:endp))           ; this%laisun_patch             (:)   = spval
+    allocate(this%laisha_patch             (begp:endp))           ; this%laisha_patch             (:)   = spval
+    allocate(this%laisun_z_patch           (begp:endp,1:nlevcan)) ; this%laisun_z_patch           (:,:) = spval
+    allocate(this%laisha_z_patch           (begp:endp,1:nlevcan)) ; this%laisha_z_patch           (:,:) = spval
+    allocate(this%mlaidiff_patch           (begp:endp))           ; this%mlaidiff_patch           (:)   = spval
+    allocate(this%annlai_patch          (12,begp:endp))           ; this%annlai_patch             (:,:) = spval
+    allocate(this%htop_patch               (begp:endp))           ; this%htop_patch               (:)   = spval
+    allocate(this%hbot_patch               (begp:endp))           ; this%hbot_patch               (:)   = spval
+    allocate(this%displa_patch             (begp:endp))           ; this%displa_patch             (:)   = spval
+    allocate(this%fsun_patch               (begp:endp))           ; this%fsun_patch               (:)   = spval
+    allocate(this%fsun24_patch             (begp:endp))           ; this%fsun24_patch             (:)   = spval
+    allocate(this%fsun240_patch            (begp:endp))           ; this%fsun240_patch            (:)   = spval
 
     allocate(this%alt_col                  (begc:endc))           ; this%alt_col                  (:)   = spval;
     allocate(this%altmax_col               (begc:endc))           ; this%altmax_col               (:)   = spval
     allocate(this%altmax_lastyear_col      (begc:endc))           ; this%altmax_lastyear_col      (:)   = spval
+    allocate(this%altmax_1989_col          (begc:endc))           ; this%altmax_1989_col          (:)   = spval
+    allocate(this%altmax_ever_col          (begc:endc))           ; this%altmax_ever_col          (:)   = spval
     allocate(this%alt_indx_col             (begc:endc))           ; this%alt_indx_col             (:)   = huge(1)
     allocate(this%altmax_indx_col          (begc:endc))           ; this%altmax_indx_col          (:)   = huge(1)
     allocate(this%altmax_lastyear_indx_col (begc:endc))           ; this%altmax_lastyear_indx_col (:)   = huge(1)
+    allocate(this%altmax_1989_indx_col     (begc:endc))           ; this%altmax_1989_indx_col     (:)   = huge(1)
+    allocate(this%altmax_ever_indx_col     (begc:endc))           ; this%altmax_ever_indx_col     (:)   = huge(1)
 
     allocate(this%dewmx_patch              (begp:endp))           ; this%dewmx_patch              (:)   = spval
     allocate(this%dleaf_patch              (begp:endp))           ; this%dleaf_patch              (:)   = spval
@@ -277,6 +286,18 @@ contains
        call hist_addfld1d (fname='ALTMAX_LASTYEAR', units='m', &
             avgflag='A', long_name='maximum prior year active layer thickness', &
             ptr_col=this%altmax_lastyear_col)
+
+       if (use_polygonal_tundra) then
+          this%altmax_1989_col(begc:endc) = spval
+          call hist_addfld1d (fname='ALTMAX_1989', units='m', &
+               avgflag='A', long_name='maximum 1989 active layer thickness', &
+               ptr_col=this%altmax_1989_col)
+
+          this%altmax_ever_col(begc:endc) = spval
+          call hist_addfld1d (fname='ALTMAX_EVER', units='m', &
+               avgflag='A', long_name='maximum ever active layer thickness throughout simulation', &
+               ptr_col=this%altmax_ever_col)
+       end if
     end if
 
     ! Allow active layer fields to be optionally output even if not running CN
@@ -296,6 +317,18 @@ contains
        call hist_addfld1d (fname='ALTMAX_LASTYEAR', units='m', &
             avgflag='A', long_name='maximum prior year active layer thickness', &
             ptr_col=this%altmax_lastyear_col, default='inactive')
+
+       if (use_polygonal_tundra) then
+          this%altmax_1989_col(begc:endc) = spval
+          call hist_addfld1d (fname='ALTMAX_1989', units='m', &
+               avgflag='A', long_name='maximum 1989 active layer thickness', &
+               ptr_col=this%altmax_1989_col, default='inactive')
+
+          this%altmax_ever_col(begc:endc) = spval
+          call hist_addfld1d (fname='ALTMAX_EVER', units='m', &
+               avgflag='A', long_name='maximum ever active layer thickness throughout simulation', &
+               ptr_col=this%altmax_ever_col, default='inactive')
+       end if
     end if
 
     ! Accumulated fields
@@ -368,7 +401,7 @@ contains
     !
     ! !USES
     use accumulMod       , only : extract_accum_field
-    use clm_time_manager , only : get_nstep
+    use elm_time_manager , only : get_nstep
     !
     ! !ARGUMENTS:
     class(canopystate_type) :: this
@@ -414,7 +447,7 @@ contains
   subroutine UpdateAccVars (this, bounds)
     !
     ! USES
-    use clm_time_manager, only : get_nstep
+    use elm_time_manager, only : get_nstep
     use accumulMod      , only : update_accum_field, extract_accum_field
     use abortutils      , only : endrun
     !
@@ -481,7 +514,7 @@ contains
        this%dewmx_patch(p)      = 0.1_r8
        this%vegwp_patch(p,:)    = -2.5e4_r8
 
-       if (lun_pp%itype(l) == istsoil .or. lun_pp%itype(l) == istcrop) then
+       if (veg_pp%is_on_soil_col(p) .or. veg_pp%is_on_crop_col(p)) then
           this%laisun_patch(p) = 0._r8
           this%laisha_patch(p) = 0._r8
        end if
@@ -498,13 +531,17 @@ contains
     do c = bounds%begc, bounds%endc
        l = col_pp%landunit(c)
 
-       if (lun_pp%itype(l) == istsoil .or. lun_pp%itype(l) == istcrop) then
-          this%alt_col(c)               = 0._r8 !iniitialized to spval for all columns
-          this%altmax_col(c)            = 0._r8 !iniitialized to spval for all columns
-          this%altmax_lastyear_col(c)   = 0._r8 !iniitialized to spval for all columns
-          this%alt_indx_col(c)          = 0     !initiialized to huge  for all columns
-          this%altmax_indx_col(c)       = 0     !initiialized to huge  for all columns
-          this%altmax_lastyear_indx_col = 0     !initiialized to huge  for all columns
+       if (col_pp%is_soil(c) .or. col_pp%is_crop(c)) then
+          this%alt_col(c)                  = 0._r8
+          this%altmax_col(c)               = 0._r8
+          this%altmax_lastyear_col(c)      = 0._r8
+          this%altmax_1989_col(c)          = 0._r8
+          this%altmax_ever_col(c)          = 0._r8
+          this%alt_indx_col(c)             = 0
+          this%altmax_indx_col(c)          = 0
+          this%altmax_lastyear_indx_col(c) = 0
+          this%altmax_1989_indx_col(c)     = 0
+          this%altmax_ever_indx_col(c)     = 0
        end if
     end do
 
@@ -532,19 +569,19 @@ contains
 
     begp = bounds%begp; endp = bounds%endp
     call restartvar(ncid=ncid, flag=flag, varname='FRAC_VEG_NOSNO_ALB', xtype=ncd_int,  &
-         dim1name='pft', long_name='fraction of vegetation not covered by snow (0 or 1)', units='', &
+         dim1name='pft', long_name='fraction of vegetation not covered by snow (0 or 1)', units='fraction', &
          interpinic_flag='interp', readvar=readvar, data=this%frac_veg_nosno_alb_patch)
     call restartvar(ncid=ncid, flag=flag, varname='tlai', xtype=ncd_double,  &
-         dim1name='pft', long_name='one-sided leaf area index, no burying by snow', units='', &
+         dim1name='pft', long_name='one-sided leaf area index, no burying by snow', units='1', &
          interpinic_flag='interp', readvar=readvar, data=this%tlai_patch)
     call restartvar(ncid=ncid, flag=flag, varname='tsai', xtype=ncd_double,  &
-         dim1name='pft', long_name='one-sided stem area index, no burying by snow', units='', &
+         dim1name='pft', long_name='one-sided stem area index, no burying by snow', units='1', &
          interpinic_flag='interp', readvar=readvar, data=this%tsai_patch)
     call restartvar(ncid=ncid, flag=flag, varname='elai', xtype=ncd_double,  &
-         dim1name='pft', long_name='one-sided leaf area index, with burying by snow', units='', &
+         dim1name='pft', long_name='one-sided leaf area index, with burying by snow', units='m^2/m^2', &
          interpinic_flag='interp', readvar=readvar, data=this%elai_patch)
     call restartvar(ncid=ncid, flag=flag, varname='esai', xtype=ncd_double,  &
-         dim1name='pft', long_name='one-sided stem area index, with burying by snow', units='', &
+         dim1name='pft', long_name='one-sided stem area index, with burying by snow', units='m^2/m^2', &
          interpinic_flag='interp', readvar=readvar, data=this%esai_patch)
     call restartvar(ncid=ncid, flag=flag, varname='htop', xtype=ncd_double,  &
          dim1name='pft', long_name='canopy top', units='m', &
@@ -553,10 +590,10 @@ contains
          dim1name='pft', long_name='canopy botton', units='m', &
          interpinic_flag='interp', readvar=readvar, data=this%hbot_patch)
     call restartvar(ncid=ncid, flag=flag, varname='mlaidiff', xtype=ncd_double,  &
-         dim1name='pft', long_name='difference between lai month one and month two', units='', &
+         dim1name='pft', long_name='difference between lai month one and month two', units='m^2/m^2', &
          interpinic_flag='interp', readvar=readvar, data=this%mlaidiff_patch)
     call restartvar(ncid=ncid, flag=flag, varname='fsun', xtype=ncd_double,  &
-         dim1name='pft', long_name='sunlit fraction of canopy', units='', &
+         dim1name='pft', long_name='sunlit fraction of canopy', units='proportion', &
          interpinic_flag='interp', readvar=readvar, data=this%fsun_patch)
     if (flag=='read' )then
        do p = bounds%begp,bounds%endp
@@ -567,18 +604,32 @@ contains
     end if
     if (use_cn .or. use_fates) then
        call restartvar(ncid=ncid, flag=flag, varname='altmax', xtype=ncd_double,  &
-            dim1name='column', long_name='', units='', &
+            dim1name='column', long_name='', units='m', &
             interpinic_flag='interp', readvar=readvar, data=this%altmax_col)
        call restartvar(ncid=ncid, flag=flag, varname='altmax_lastyear', xtype=ncd_double,  &
-            dim1name='column', long_name='', units='', &
+            dim1name='column', long_name='', units='m', &
             interpinic_flag='interp', readvar=readvar, data=this%altmax_lastyear_col)
        call restartvar(ncid=ncid, flag=flag, varname='altmax_indx', xtype=ncd_int,  &
-            dim1name='column', long_name='', units='', &
+            dim1name='column', long_name='', units='integer value', &
             interpinic_flag='interp', readvar=readvar, data=this%altmax_indx_col)
        call restartvar(ncid=ncid, flag=flag, varname='altmax_lastyear_indx', xtype=ncd_int,  &
-            dim1name='column', long_name='', units='', &
+            dim1name='column', long_name='', units='integer value', &
             interpinic_flag='interp', readvar=readvar, data=this%altmax_lastyear_indx_col)
-    end if
+       if (use_polygonal_tundra) then
+          call restartvar(ncid=ncid, flag=flag, varname='altmax_1989_indx', xtype=ncd_double,  &
+               dim1name='column', long_name='', units='', &
+               interpinic_flag='interp', readvar=readvar, data=this%altmax_1989_indx_col)
+          call restartvar(ncid=ncid, flag=flag, varname='altmax_ever_indx', xtype=ncd_int,  &
+               dim1name='column', long_name='', units='', &
+               interpinic_flag='interp', readvar=readvar, data=this%altmax_ever_indx_col)
+          call restartvar(ncid=ncid, flag=flag, varname='altmax_1989', xtype=ncd_double,  &
+               dim1name='column', long_name='', units='', &
+               interpinic_flag='interp', readvar=readvar, data=this%altmax_1989_col)
+          call restartvar(ncid=ncid, flag=flag, varname='altmax_ever', xtype=ncd_double,  &
+               dim1name='column', long_name='', units='', &
+               interpinic_flag='interp', readvar=readvar, data=this%altmax_ever_col)
+       end if ! polygonal tundra
+    end if ! cn or fates
     if ( use_hydrstress ) then
        call restartvar(ncid=ncid, flag=flag, varname='vegwp', xtype=ncd_double, &
             dim1name='pft', dim2name='vegwcs', switchdim=.true., &

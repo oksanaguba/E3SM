@@ -4,10 +4,20 @@ module prep_ice_mod
   use shr_kind_mod    , only: cs => SHR_KIND_CS
   use shr_kind_mod    , only: cl => SHR_KIND_CL
   use shr_sys_mod     , only: shr_sys_abort, shr_sys_flush
+  use shr_moab_mod    , only: mbGetnCells, mbGetEntityType
   use seq_comm_mct    , only: num_inst_atm, num_inst_ocn, num_inst_glc
   use seq_comm_mct    , only: num_inst_ice, num_inst_frc, num_inst_rof
+  use seq_comm_mct    , only: num_inst_wav
   use seq_comm_mct    , only: CPLID, ICEID, logunit
   use seq_comm_mct    , only: seq_comm_getData=>seq_comm_setptrs
+  use seq_comm_mct    , only: mboxid   ! iMOAB id for MPAS-O migrated mesh to coupler PEs
+  use seq_comm_mct    , only: mbrxid   ! iMOAB id of moab ROF read on couple PEs
+  use seq_comm_mct    , only: mbixid   ! iMOAB for SEA-ICE migrated to coupler PEs
+  use seq_comm_mct    , only: mbintxri ! iMOAB id for intx mesh between ROF and ICE
+  use seq_comm_mct    , only: num_moab_exports
+
+  use seq_comm_mct    , only: seq_comm_getinfo => seq_comm_setptrs
+
   use seq_infodata_mod, only: seq_infodata_type, seq_infodata_getdata
   use seq_map_type_mod
   use seq_map_mod
@@ -16,7 +26,8 @@ module prep_ice_mod
   use mct_mod
   use perf_mod
   use component_type_mod, only: component_get_x2c_cx, component_get_c2x_cx
-  use component_type_mod, only: ice, atm, ocn, glc, rof
+  use component_type_mod, only: ice, atm, ocn, glc, rof, wav
+  use iso_c_binding
 
   implicit none
   save
@@ -27,29 +38,30 @@ module prep_ice_mod
   !--------------------------------------------------------------------------
 
   public :: prep_ice_init
-  public :: prep_ice_mrg
+  public :: prep_ice_mrg_moab
 
   public :: prep_ice_calc_a2x_ix
   public :: prep_ice_calc_o2x_ix
   public :: prep_ice_calc_r2x_ix
   public :: prep_ice_calc_g2x_ix
   public :: prep_ice_shelf_calc_g2x_ix
+  public :: prep_ice_calc_w2x_ix
 
   public :: prep_ice_get_a2x_ix
   public :: prep_ice_get_o2x_ix
   public :: prep_ice_get_g2x_ix
   public :: prep_ice_get_r2x_ix
+  public :: prep_ice_get_w2x_ix
 
   public :: prep_ice_get_mapper_SFo2i
   public :: prep_ice_get_mapper_Rg2i
   public :: prep_ice_get_mapper_Sg2i
   public :: prep_ice_get_mapper_Fg2i
+  public :: prep_ice_get_mapper_Sw2i
 
   !--------------------------------------------------------------------------
   ! Private interfaces
   !--------------------------------------------------------------------------
-
-  private :: prep_ice_merge
 
   !--------------------------------------------------------------------------
   ! Private data
@@ -61,23 +73,37 @@ module prep_ice_mod
   type(seq_map), pointer :: mapper_Sg2i
   type(seq_map), pointer :: mapper_Fg2i
   type(seq_map), pointer :: mapper_Rr2i
+  type(seq_map), pointer :: mapper_Sw2i
 
   ! attribute vectors
   type(mct_aVect), pointer :: a2x_ix(:) ! Atm export, ice grid, cpl pes - allocated in driver
   type(mct_aVect), pointer :: o2x_ix(:) ! Ocn export, ice grid, cpl pes - allocated in driver
   type(mct_aVect), pointer :: g2x_ix(:) ! Glc export, ice grid, cpl pes - allocated in driver
   type(mct_aVect), pointer :: r2x_ix(:) ! Rof export, ice grid, cpl pes - allocated in driver
+  type(mct_aVect), pointer :: w2x_ix(:) ! Wav export, ice grid, cpl pes - allocated in driver
 
+! MOAB arrays
+  real (kind=r8) , allocatable, private :: x2i_im (:,:)
+  real (kind=r8) , allocatable, private :: a2x_im (:,:)
+  real (kind=r8) , allocatable, private :: r2x_im (:,:)
   ! seq_comm_getData variables
   integer :: mpicom_CPLID                         ! MPI cpl communicator
+
+  logical :: no_match ! used to force a new mapper
+  logical :: compute_maps_online_r2i
+  character*32             :: wgtIdSr2i
+
   !================================================================================================
 
 contains
 
   !================================================================================================
 
-  subroutine prep_ice_init(infodata, ocn_c2_ice, glc_c2_ice, glcshelf_c2_ice, rof_c2_ice)
+  subroutine prep_ice_init(infodata, ocn_c2_ice, glc_c2_ice, glcshelf_c2_ice, rof_c2_ice, &
+                           wav_c2_ice)
 
+    use iMOAB, only: iMOAB_RegisterApplication, &
+      iMOAB_WriteMesh, iMOAB_DefineTagStorage, iMOAB_ComputeCommGraph
     !---------------------------------------------------------------
     ! Description
     ! Initialize module attribute vectors and all other non-mapping
@@ -89,22 +115,40 @@ contains
     logical,                   intent(in)    :: glc_c2_ice ! .true.  => glc to ice coupling on
     logical,                   intent(in)    :: glcshelf_c2_ice ! .true.  => glc ice shelf to ice coupling on
     logical,                   intent(in)    :: rof_c2_ice ! .true.  => rof to ice coupling on
+    logical,                   intent(in)    :: wav_c2_ice ! .true. => wav to ice coupling on
     !
     ! Local Variables
     integer                          :: lsize_i
-    integer                          :: eai, eoi, egi, eri
+    integer                          :: eai, eoi, egi, eri, ewi
     logical                          :: iamroot_CPLID ! .true. => CPLID masterproc
     logical                          :: samegrid_ig   ! samegrid glc and ice
     logical                          :: samegrid_ro   ! samegrid rof and ice/ocn
+    logical                          :: samegrid_iw   ! samegrid ice and wav
     logical                          :: ice_present   ! .true. => ice is present
     logical                          :: esmf_map_flag ! .true. => use esmf for mapping
     character(CL)                    :: ice_gnam      ! ice grid
     character(CL)                    :: ocn_gnam      ! ocn grid
     character(CL)                    :: glc_gnam      ! glc grid
     character(CL)                    :: rof_gnam      ! rof grid
+    character(CL)                    :: wav_gnam      ! wav grid
     type(mct_avect), pointer         :: i2x_ix
     character(*), parameter          :: subname = '(prep_ice_init)'
+    logical                          :: no_match      ! to force a new map between ocean and ice, always
     character(*), parameter          :: F00 = "('"//subname//" : ', 4A )"
+!MOAB stuff
+    ! MOAB stuff
+    integer                  :: ierr, idintx, rank
+    character*32             :: appname, outfile, wopts, lnum
+    integer                  :: orderS, orderT, volumetric, noConserve, validate, fInverseDistanceMap
+    integer                  :: fNoBubble, monotonicity
+! will do comm graph over coupler PES, in 2-hop strategy
+    integer                  :: mpigrp_CPLID ! coupler pes group, used for comm graph phys <-> atm-ocn
+
+    integer                  :: type1, type2 ! type for computing graph; should be the same type for ocean, 3 (FV)
+    integer                  :: arearead
+    integer                  :: tagtype, numco, tagindex
+    character(CXX)           :: tagName
+
     !---------------------------------------------------------------
 
     call seq_infodata_getData(infodata, &
@@ -113,13 +157,20 @@ contains
          ice_gnam=ice_gnam            , &
          ocn_gnam=ocn_gnam            , &
          rof_gnam=rof_gnam            , &
+         wav_gnam=wav_gnam            , &
          glc_gnam=glc_gnam)
+
+    ! C_NULL_CHAR is added at each iMOAB C API call site; keep variable clean for diagnostics.
+    wgtIdSr2i = 'scalar_r2i'
+    compute_maps_online_r2i = .false. ! force read from disk
+    no_match = .true. ! force to create a new mapper object
 
     allocate(mapper_SFo2i)
     allocate(mapper_Rg2i)
     allocate(mapper_Sg2i)
     allocate(mapper_Fg2i)
     allocate(mapper_Rr2i)
+    allocate(mapper_Sw2i)
 
     if (ice_present) then
 
@@ -149,18 +200,69 @@ contains
           call mct_aVect_init(r2x_ix(eri), rList=seq_flds_r2x_fields, lsize=lsize_i)
           call mct_aVect_zero(r2x_ix(eri))
        end do
+       allocate(w2x_ix(num_inst_wav))
+       do ewi = 1,num_inst_wav
+          call mct_aVect_init(w2x_ix(ewi), rList=seq_flds_w2x_fields, lsize=lsize_i)
+          call mct_aVect_zero(w2x_ix(ewi))
+       end do
 
        samegrid_ig = .true.
        samegrid_ro = .true.
+       samegrid_iw = .true.
        if (trim(ice_gnam) /= trim(glc_gnam)) samegrid_ig = .false.
        if (trim(rof_gnam) /= trim(ocn_gnam)) samegrid_ro = .false.
+       if (trim(ice_gnam) /= trim(wav_gnam)) samegrid_iw = .false.
 
        if (ocn_c2_ice) then
           if (iamroot_CPLID) then
              write(logunit,*) ' '
              write(logunit,F00) 'Initializing mapper_SFo2i'
           end if
-          call seq_map_init_rearrolap(mapper_SFo2i, ocn(1), ice(1), 'mapper_SFo2i')
+          call seq_map_mapinit(mapper_SFo2i, mpicom_CPLID)
+          mapper_SFo2i%rearrange_only = .true.
+          mapper_SFo2i%strategy = "rearrange"
+
+          if ( (mbixid .ge. 0) .and. (mboxid .ge. 0)) then
+            if (iamroot_CPLID) then
+               write(logunit,*) ' '
+               write(logunit,F00) 'Initializing MOAB mapper_SFo2i'
+            end if
+            ! MOAB will do just a rearrange, based on the comm graph that is computed here
+            call seq_comm_getinfo(CPLID ,mpigrp=mpigrp_CPLID)   !  second group, the coupler group CPLID is global variable
+
+            type1 = 3
+            type2 = 3 ! FV-FV graph
+            ! iMOAB compute comm graph ICE-OCN, based on the same global ID
+            ! This will be a simple migration from ICE mesh directly to OCN, using the comm graph computed here
+            ierr = iMOAB_ComputeCommGraph( mboxid, mbixid, mpicom_CPLID, mpigrp_CPLID, mpigrp_CPLID, &
+               type1, type2, ocn(1)%cplcompid, ice(1)%cplcompid)
+            if (ierr .ne. 0) then
+                  write(logunit,*) subname,' error in computing graph ocn - ice x '
+                  call shr_sys_abort(subname//' ERROR  in computing graph ocn -ice x ')
+            endif
+
+            ! define tags according to the seq_flds_i2x_fields
+            tagtype = 1  ! dense, double
+            numco = 1 !  one value per cell / entity
+            tagname = trim(seq_flds_o2x_fields)//C_NULL_CHAR
+            ierr = iMOAB_DefineTagStorage(mbixid, tagname, tagtype, numco,  tagindex )
+            if ( ierr == 1 ) then
+               call shr_sys_abort( subname//' ERROR: cannot define tags for ice proj to ocn' )
+            end if
+            if ( mapper_SFo2i%src_mbid .gt. -1 ) then
+                if (iamroot_CPLID) then
+                     write(logunit,F00) 'overwriting '//trim(mapper_SFo2i%mbname) &
+                             //' mapper_SFo2i'
+                endif
+            endif
+
+            mapper_SFo2i%src_mbid = mboxid
+            mapper_SFo2i%tgt_mbid = mbixid
+            ! no intersection, so will have to transform data without it
+            mapper_SFo2i%src_context = ocn(1)%cplcompid
+            mapper_SFo2i%intx_context = ice(1)%cplcompid
+            mapper_SFo2i%mbname = 'mapper_SFo2i'
+         endif
        endif
 
        if (glc_c2_ice) then
@@ -196,9 +298,54 @@ contains
              write(logunit,*) ' '
              write(logunit,F00) 'Initializing mapper_Rr2i'
           end if
-          call seq_map_init_rcfile(mapper_Rr2i, rof(1), ice(1), &
-               'seq_maps.rc','rof2ice_rmapname:','rof2ice_rmaptype:',samegrid_ro, &
-               'mapper_Rr2i initialization', esmf_map_flag)
+          call seq_map_mapinit(mapper_Rr2i, mpicom_CPLID)
+          if (samegrid_ro) then
+             mapper_Rr2i%rearrange_only = .true.
+             mapper_Rr2i%strategy = "rearrange"
+          endif
+          if ((mbrxid .ge. 0) .and.  (mbixid .ge. 0)) then
+            ! now take care of the mapper
+            if (iamroot_CPLID) then
+               write(logunit,*) ' '
+               write(logunit,F00) 'Initializing MOAB mapper_Rr2i'
+            end if
+
+            appname = "ROF_ICE_COU"
+            ! idintx is a unique number of MOAB app that takes care of intx between lnd and rof mesh
+            idintx = 100*rof(1)%cplcompid + ice(1)%cplcompid ! something different, to differentiate it
+            ierr = iMOAB_RegisterApplication(trim(appname)//C_NULL_CHAR, mpicom_CPLID, idintx, mbintxri)
+            if (ierr .ne. 0) then
+              write(logunit,*) subname,' error in registering ROF-ICE intersection'
+              call shr_sys_abort(subname//' ERROR in registering ROF-ICE intersection')
+            endif
+
+            mapper_Rr2i%src_mbid = mbrxid
+            mapper_Rr2i%tgt_mbid = mbixid
+            mapper_Rr2i%intx_mbid = mbintxri
+            ! If loading map from disk, then load the scalar map as well
+            if (.not. compute_maps_online_r2i) then
+               type1 = 3 ! this is type of grid
+               arearead = 0
+               call moab_map_init_rcfile( mapper_Rr2i, type1, &
+                     'seq_maps.rc', 'rof2ice_rmapname:', 'rof2ice_rmaptype:', samegrid_ro, &
+                     arearead, wgtIdSr2i, 'mapper_Rr2i MOAB initialization', esmf_map_flag )
+            end if
+            mapper_Rr2i%src_context = rof(1)%cplcompid
+            mapper_Rr2i%intx_context = idintx
+            mapper_Rr2i%weight_identifier = wgtIdSr2i
+            mapper_Rr2i%mbname = 'mapper_Rr2i'
+          end if ! if ((mbrxid .ge. 0) .and.  (mbixid .ge. 0)) then
+       endif
+       call shr_sys_flush(logunit)
+
+       if (wav_c2_ice) then
+          if (iamroot_CPLID) then
+             write(logunit,*) ' '
+             write(logunit,F00) 'Initializing mapper_Sw2i'
+          end if
+          call seq_map_init_rcfile(mapper_Sw2i, wav(1), ice(1), &
+               'seq_maps.rc','wav2ice_smapname:','wav2ice_smaptype:',samegrid_iw, &
+               'mapper_Sw2i initialization', esmf_map_flag)
        endif
        call shr_sys_flush(logunit)
 
@@ -208,60 +355,22 @@ contains
 
   !================================================================================================
 
-  subroutine prep_ice_mrg(infodata, timer_mrg)
-
-    !---------------------------------------------------------------
-    ! Description
-    ! Prepare run phase, including running the merge
-    !
-    ! Arguments
-    type(seq_infodata_type) , intent(in)    :: infodata
-    character(len=*)        , intent(in)    :: timer_mrg
-    !
-    ! Local Variables
-    integer                  :: eoi, eai, egi, eii, eri
-    real(r8)                 :: flux_epbalfact ! adjusted precip factor
-    type(mct_avect), pointer :: x2i_ix
-    character(*), parameter  :: subname = '(prep_ice_mrg)'
-    !---------------------------------------------------------------
-
-    call seq_infodata_GetData(infodata, &
-         flux_epbalfact=flux_epbalfact)
-
-    call t_drvstartf (trim(timer_mrg),barrier=mpicom_CPLID)
-    do eii = 1,num_inst_ice
-       ! Use fortran mod to address ensembles in merge
-       eai = mod((eii-1),num_inst_atm) + 1
-       eoi = mod((eii-1),num_inst_ocn) + 1
-       eri = mod((eii-1),num_inst_rof) + 1
-       egi = mod((eii-1),num_inst_glc) + 1
-
-       ! Apply correction to precipitation of requested driver namelist
-       x2i_ix   => component_get_x2c_cx(ice(eii))  ! This is actually modifying x2i_ix
-       call prep_ice_merge(flux_epbalfact, a2x_ix(eai), o2x_ix(eoi), r2x_ix(eri), g2x_ix(egi), &
-            x2i_ix)
-    enddo
-    call t_drvstopf (trim(timer_mrg))
-
-  end subroutine prep_ice_mrg
-
-  !================================================================================================
-
-  subroutine prep_ice_merge(flux_epbalfact, a2x_i, o2x_i, r2x_i, g2x_i, x2i_i )
+  subroutine prep_ice_mrg_moab(infodata, rof_c2_ice, timer_mrg)
+    use iMOAB , only : iMOAB_GetDoubleTagStorage, &
+    iMOAB_SetDoubleTagStorage, iMOAB_WriteMesh
 
     !-----------------------------------------------------------------------
     !
     ! Arguments
-    real(r8)        , intent(inout) :: flux_epbalfact
-    type(mct_aVect) , intent(in)    :: a2x_i
-    type(mct_aVect) , intent(in)    :: o2x_i
-    type(mct_aVect) , intent(in)    :: r2x_i
-    type(mct_aVect) , intent(in)    :: g2x_i
-    type(mct_aVect) , intent(inout) :: x2i_i
+    type(seq_infodata_type) , intent(in)    :: infodata
+    logical,                   intent(in)    :: rof_c2_ice ! .true.  => rof to ice coupling on
+    character(len=*)        , intent(in)    :: timer_mrg
     !
     ! Local variables
-    integer       :: i,i1,o1,lsize
-    integer       :: niflds
+    real(r8)        :: flux_epbalfact
+    integer       :: i,i1,o1, arrsize
+    integer,save  :: niflds,naflds,nrflds
+    integer       :: lsize
     integer, save :: index_a2x_Faxa_rainc
     integer, save :: index_a2x_Faxa_rainl
     integer, save :: index_a2x_Faxa_snowc
@@ -292,19 +401,55 @@ contains
     integer, save :: index_x2i_Faxa_snow_HDO
     logical, save :: first_time = .true.
     logical       :: iamroot
+
+    character(CXX) ::tagname, mct_field
     character(CL),allocatable :: mrgstr(:)   ! temporary string
+
     character(CL) :: field   ! string converted to char
-    type(mct_aVect_sharedindices),save :: o2x_sharedindices
-    type(mct_aVect_sharedindices),save :: a2x_sharedindices
-    type(mct_aVect_sharedindices),save :: g2x_sharedindices
-    character(*), parameter   :: subname = '(prep_ice_merge) '
+
+    type(mct_avect) , pointer, save   :: a2x_i
+    type(mct_avect) , pointer, save   :: x2i_i
+    type(mct_avect) , pointer, save   :: r2x_i
+    type(mct_avect) , pointer, save   :: o2x_i
+    type(mct_avect) , pointer, save   :: g2x_i
+    type(mct_aVect_sharedindices),save :: o2x_SharedIndices
+    type(mct_aVect_sharedindices),save :: a2x_SharedIndices
+    type(mct_aVect_sharedindices),save :: g2x_SharedIndices
+
+    integer ent_type, ierr,n
+#ifdef MOABDEBUG
+    character*32             :: outfile, wopts, lnum
+#endif
+
+
+    character(*), parameter   :: subname = '(prep_ice_mrg_moab) '
     !-----------------------------------------------------------------------
+    call t_drvstartf (trim(timer_mrg),barrier=mpicom_CPLID)
+    call seq_infodata_GetData(infodata, &
+         flux_epbalfact=flux_epbalfact)
 
     call seq_comm_getdata(CPLID, iamroot=iamroot)
-    lsize = mct_aVect_lsize(x2i_i)
+
+    ! SCM data ice is represented by vertices, while regular sea-ice meshes
+    ! store fields on elements. Use the shared helpers for both cases.
+    lsize = mbGetnCells(mbixid)
 
     if (first_time) then
-       niflds = mct_aVect_nRattr(x2i_i)
+      a2x_i => a2x_ix(1)
+      r2x_i => r2x_ix(1)
+      o2x_i => o2x_ix(1)
+      g2x_i => g2x_ix(1)
+      x2i_i => component_get_x2c_cx(ice(1))
+
+      niflds = mct_aVect_nRattr(x2i_i)
+      naflds = mct_aVect_nRattr(a2x_i)
+      nrflds = mct_aVect_nRattr(r2x_i)
+
+
+       allocate(x2i_im(lsize,niflds))
+       allocate(a2x_im(lsize,naflds))
+       allocate(r2x_im(lsize,nrflds))
+       r2x_im = 0._r8 ! should we zero out all of them ?
 
        allocate(mrgstr(niflds))
        index_a2x_Faxa_snowc = mct_aVect_indexRA(a2x_i,'Faxa_snowc')
@@ -354,18 +499,30 @@ contains
           o1=o2x_SharedIndices%shared_real%aVindices2(i)
           field = mct_aVect_getRList2c(i1, o2x_i)
           mrgstr(o1) = trim(mrgstr(o1))//' = o2x%'//trim(field)
+#ifdef MOABDEBUG
+          write(lnum, "(I3, A18, I3)" )i1, ' in o2x_ix, x2i_ix ', o1
+          mrgstr(o1) = trim(mrgstr(o1))//trim(lnum)
+#endif
        enddo
        do i=1,a2x_SharedIndices%shared_real%num_indices
           i1=a2x_SharedIndices%shared_real%aVindices1(i)
           o1=a2x_SharedIndices%shared_real%aVindices2(i)
           field = mct_aVect_getRList2c(i1, a2x_i)
           mrgstr(o1) = trim(mrgstr(o1))//' = a2x%'//trim(field)
+#ifdef MOABDEBUG
+          write(lnum, "(I3, A18, I3)" )i1, ' in a2x_ix, x2i_ix', o1
+          mrgstr(o1) = trim(mrgstr(o1))//trim(lnum)
+#endif
        enddo
        do i=1,g2x_SharedIndices%shared_real%num_indices
           i1=g2x_SharedIndices%shared_real%aVindices1(i)
           o1=g2x_SharedIndices%shared_real%aVindices2(i)
           field = mct_aVect_getRList2c(i1, g2x_i)
           mrgstr(o1) = trim(mrgstr(o1))//' = g2x%'//trim(field)
+#ifdef MOABDEBUG
+          write(lnum, "(I3, A18, I3)" )i1, ' in g2x_ix, x2i_ix ', o1
+          mrgstr(o1) = trim(mrgstr(o1))//trim(lnum)
+#endif
        enddo
 
        !--- document manual merges ---
@@ -398,62 +555,99 @@ contains
 
     endif
 
-    !    call mct_aVect_copy(aVin=o2x_i, aVout=x2i_i, vector=mct_usevector)
-    !    call mct_aVect_copy(aVin=a2x_i, aVout=x2i_i, vector=mct_usevector)
-    !    call mct_aVect_copy(aVin=g2x_i, aVout=x2i_i, vector=mct_usevector)
-    call mct_aVect_copy(aVin=o2x_i, aVout=x2i_i, vector=mct_usevector, sharedIndices=o2x_SharedIndices)
-    call mct_aVect_copy(aVin=a2x_i, aVout=x2i_i, vector=mct_usevector, sharedIndices=a2x_SharedIndices)
-    call mct_aVect_copy(aVin=g2x_i, aVout=x2i_i, vector=mct_usevector, sharedIndices=g2x_SharedIndices)
+    !call mct_aVect_copy(aVin=o2x_i, aVout=x2i_i, vector=mct_usevector, sharedIndices=o2x_SharedIndices)
+    !call mct_aVect_copy(aVin=a2x_i, aVout=x2i_i, vector=mct_usevector, sharedIndices=a2x_SharedIndices)
+    !call mct_aVect_copy(aVin=g2x_i, aVout=x2i_i, vector=mct_usevector, sharedIndices=g2x_SharedIndices)
+
+    ! get data that needs custom merges
+    ent_type = mbGetEntityType(mbixid)
+
+   ! git the x2i_im field which has been mostly filled out by mapping calls.
+    tagname = trim(seq_flds_x2i_fields)//C_NULL_CHAR
+    arrsize = niflds * lsize
+    ierr = iMOAB_GetDoubleTagStorage ( mbixid, tagname, arrsize , ent_type, x2i_im)
+    if (ierr .ne. 0) then
+      call shr_sys_abort(subname//' error in getting x2i_im array ')
+    endif
+
+! get the a2x data that was mapped to i
+    tagname = trim(seq_flds_a2x_fields)//C_NULL_CHAR
+    arrsize = naflds * lsize !        allocate (a2x_om (lsize, naflds))
+    ierr = iMOAB_GetDoubleTagStorage ( mbixid, tagname, arrsize , ent_type, a2x_im)
+    if (ierr .ne. 0) then
+      write(logunit, *) 'MOAB error ', ierr
+      call shr_sys_abort(subname//' error in getting a2x_im array ')
+    endif
+
+! get the r2x data that was mapped to i
+    tagname = trim(seq_flds_r2x_fields)//C_NULL_CHAR
+    arrsize = nrflds * lsize !        allocate (a2x_om (lsize, naflds))
+    ierr = iMOAB_GetDoubleTagStorage ( mbixid, tagname, arrsize , ent_type, r2x_im)
+    if (ierr .ne. 0) then
+      call shr_sys_abort(subname//' error in getting r2x_im array ')
+    endif
 
     ! Merge total snow and precip for ice input
     ! Scale total precip and runoff by flux_epbalfact
 
-    do i = 1,lsize
-       x2i_i%rAttr(index_x2i_Faxa_rain,i) = a2x_i%rAttr(index_a2x_Faxa_rainc,i) + &
-            a2x_i%rAttr(index_a2x_Faxa_rainl,i)
-       x2i_i%rAttr(index_x2i_Faxa_snow,i) = a2x_i%rAttr(index_a2x_Faxa_snowc,i) + &
-            a2x_i%rAttr(index_a2x_Faxa_snowl,i)
-       x2i_i%rAttr(index_x2i_Fixx_rofi,i) = g2x_i%rAttr(index_g2x_Figg_rofi,i) + &
-            r2x_i%rAttr(index_r2x_Firr_rofi,i)
 
-       x2i_i%rAttr(index_x2i_Faxa_rain,i) = x2i_i%rAttr(index_x2i_Faxa_rain,i) * flux_epbalfact
-       x2i_i%rAttr(index_x2i_Faxa_snow,i) = x2i_i%rAttr(index_x2i_Faxa_snow,i) * flux_epbalfact
-       x2i_i%rAttr(index_x2i_Fixx_rofi,i) = x2i_i%rAttr(index_x2i_Fixx_rofi,i) * flux_epbalfact
+    do n = 1,lsize
+       x2i_im(n,index_x2i_Faxa_rain) = a2x_im(n,index_a2x_Faxa_rainc) + a2x_im(n,index_a2x_Faxa_rainl)
+       x2i_im(n,index_x2i_Faxa_snow) = a2x_im(n,index_a2x_Faxa_snowc) + a2x_im(n,index_a2x_Faxa_snowl)
+
+! no glacier yet
+!       x2i_im(n,index_x2i_Fixx_rofi) = g2x_im(n,index_g2x_Figg_rofi) + &
+!            r2x_im(n,index_r2x_Firr_rofi)
+        if(rof_c2_ice) then
+            x2i_im(n,index_x2i_Fixx_rofi) = r2x_im(n,index_r2x_Firr_rofi)
+        else
+            x2i_im(n,index_x2i_Fixx_rofi) = 0._r8
+        endif
+
+       x2i_im(n,index_x2i_Faxa_rain) = x2i_im(n,index_x2i_Faxa_rain) * flux_epbalfact
+       x2i_im(n,index_x2i_Faxa_snow) = x2i_im(n,index_x2i_Faxa_snow) * flux_epbalfact
+       x2i_im(n,index_x2i_Fixx_rofi) = x2i_im(n,index_x2i_Fixx_rofi) * flux_epbalfact
 
        ! For water isotopes
        if ( index_x2i_Faxa_rain_16O /= 0 ) then
-          x2i_i%rAttr(index_x2i_Faxa_rain_16O,i) = a2x_i%rAttr(index_a2x_Faxa_rainc_16O,i) + &
-               a2x_i%rAttr(index_a2x_Faxa_rainl_16O,i)
-          x2i_i%rAttr(index_x2i_Faxa_snow_16O,i) = a2x_i%rAttr(index_a2x_Faxa_snowc_16O,i) + &
-               a2x_i%rAttr(index_a2x_Faxa_snowl_16O,i)
+          x2i_im(n,index_x2i_Faxa_rain_16O) = a2x_im(n,index_a2x_Faxa_rainc_16O) + &
+               a2x_im(n,index_a2x_Faxa_rainl_16O)
+          x2i_im(n,index_x2i_Faxa_snow_16O) = a2x_im(n,index_a2x_Faxa_snowc_16O) + &
+               a2x_im(n,index_a2x_Faxa_snowl_16O)
 
-          x2i_i%rAttr(index_x2i_Faxa_rain_16O,i) = x2i_i%rAttr(index_x2i_Faxa_rain_16O,i) * flux_epbalfact
-          x2i_i%rAttr(index_x2i_Faxa_snow_16O,i) = x2i_i%rAttr(index_x2i_Faxa_snow_16O,i) * flux_epbalfact
+          x2i_im(n,index_x2i_Faxa_rain_16O) = x2i_im(n,index_x2i_Faxa_rain_16O) * flux_epbalfact
+          x2i_im(n,index_x2i_Faxa_snow_16O) = x2i_im(n,index_x2i_Faxa_snow_16O) * flux_epbalfact
        end if
        if ( index_x2i_Faxa_rain_18O /= 0 ) then
-          x2i_i%rAttr(index_x2i_Faxa_rain_18O,i) = a2x_i%rAttr(index_a2x_Faxa_rainc_18O,i) + &
-               a2x_i%rAttr(index_a2x_Faxa_rainl_18O,i)
-          x2i_i%rAttr(index_x2i_Faxa_snow_18O,i) = a2x_i%rAttr(index_a2x_Faxa_snowc_18O,i) + &
-               a2x_i%rAttr(index_a2x_Faxa_snowl_18O,i)
+          x2i_im(n,index_x2i_Faxa_rain_18O) = a2x_im(n,index_a2x_Faxa_rainc_18O) + &
+               a2x_im(n,index_a2x_Faxa_rainl_18O)
+          x2i_im(n,index_x2i_Faxa_snow_18O) = a2x_im(n,index_a2x_Faxa_snowc_18O) + &
+               a2x_im(n,index_a2x_Faxa_snowl_18O)
 
-          x2i_i%rAttr(index_x2i_Faxa_rain_18O,i) = x2i_i%rAttr(index_x2i_Faxa_rain_18O,i) * flux_epbalfact
-          x2i_i%rAttr(index_x2i_Faxa_snow_18O,i) = x2i_i%rAttr(index_x2i_Faxa_snow_18O,i) * flux_epbalfact
+          x2i_im(n,index_x2i_Faxa_rain_18O) = x2i_im(n,index_x2i_Faxa_rain_18O) * flux_epbalfact
+          x2i_im(n,index_x2i_Faxa_snow_18O) = x2i_im(n,index_x2i_Faxa_snow_18O) * flux_epbalfact
        end if
        if ( index_x2i_Faxa_rain_HDO /= 0 ) then
-          x2i_i%rAttr(index_x2i_Faxa_rain_HDO,i) = a2x_i%rAttr(index_a2x_Faxa_rainc_HDO,i) + &
-               a2x_i%rAttr(index_a2x_Faxa_rainl_HDO,i)
-          x2i_i%rAttr(index_x2i_Faxa_snow_HDO,i) = a2x_i%rAttr(index_a2x_Faxa_snowc_HDO,i) + &
-               a2x_i%rAttr(index_a2x_Faxa_snowl_HDO,i)
+          x2i_im(n,index_x2i_Faxa_rain_HDO) = a2x_im(n,index_a2x_Faxa_rainc_HDO) + &
+               a2x_im(n,index_a2x_Faxa_rainl_HDO)
+          x2i_im(n,index_x2i_Faxa_snow_HDO) = a2x_im(n,index_a2x_Faxa_snowc_HDO) + &
+               a2x_im(n,index_a2x_Faxa_snowl_HDO)
 
-          x2i_i%rAttr(index_x2i_Faxa_rain_HDO,i) = x2i_i%rAttr(index_x2i_Faxa_rain_HDO,i) * flux_epbalfact
-          x2i_i%rAttr(index_x2i_Faxa_snow_HDO,i) = x2i_i%rAttr(index_x2i_Faxa_snow_HDO,i) * flux_epbalfact
+          x2i_im(n,index_x2i_Faxa_rain_HDO) = x2i_im(n,index_x2i_Faxa_rain_HDO) * flux_epbalfact
+          x2i_im(n,index_x2i_Faxa_snow_HDO) = x2i_im(n,index_x2i_Faxa_snow_HDO) * flux_epbalfact
        end if
 
     end do
+    tagname = trim(seq_flds_x2i_fields)//C_NULL_CHAR
+    arrsize = niflds * lsize
+    ierr = iMOAB_SetDoubleTagStorage ( mbixid, tagname, arrsize , ent_type, x2i_im)
+    if (ierr .ne. 0) then
+      call shr_sys_abort(subname//' error in setting x2i_im array ')
+    endif
 
     if (first_time) then
        if (iamroot) then
-          write(logunit,'(A)') subname//' Summary:'
+          write(logunit,'(A)') subname//' Summary MOAB:'
           do i = 1,niflds
              write(logunit,'(A)') trim(mrgstr(i))
           enddo
@@ -461,13 +655,24 @@ contains
        deallocate(mrgstr)
     endif
 
+
+
     first_time = .false.
+#ifdef MOABDEBUG
+    if (mbixid .ge. 0 ) then !  we are on coupler pes, for sure
+       write(lnum,"(I0.2)")num_moab_exports
+       outfile = 'IceCplAftMm'//trim(lnum)//'.h5m'//C_NULL_CHAR
+       wopts   = ';PARALLEL=WRITE_PART'//C_NULL_CHAR !
+       ierr = iMOAB_WriteMesh(mbixid, trim(outfile), trim(wopts))
+    endif
+#endif
 
-  end subroutine prep_ice_merge
+    call t_drvstopf (trim(timer_mrg))
 
-  !================================================================================================
+  end subroutine prep_ice_mrg_moab
 
   subroutine prep_ice_calc_a2x_ix(a2x_ox, timer)
+    use iMOAB , only : iMOAB_WriteMesh
     !---------------------------------------------------------------
     ! Description
     ! Create a2x_ix (note that a2x_ix is a local module variable)
@@ -503,6 +708,7 @@ contains
     integer :: eoi
     type(mct_aVect) , pointer :: o2x_ox
     character(*), parameter :: subname = '(prep_ice_calc_o2x_ix)'
+
     !---------------------------------------------------------------
 
     call t_drvstartf (trim(timer),barrier=mpicom_CPLID)
@@ -595,6 +801,31 @@ contains
 
   !================================================================================================
 
+  subroutine prep_ice_calc_w2x_ix(timer)
+    !---------------------------------------------------------------
+    ! Description
+    ! Create w2x_ix (note that w2x_ix is a local module variable)
+    !
+    ! Arguments
+    character(len=*), intent(in) :: timer
+    !
+    ! Local Variables
+    integer :: ewi
+    type(mct_aVect), pointer :: w2x_wx
+    character(*), parameter :: subname = '(prep_ice_calc_w2x_ix)'
+    !---------------------------------------------------------------
+
+    call t_drvstartf (trim(timer),barrier=mpicom_CPLID)
+    do ewi = 1,num_inst_wav
+       w2x_wx => component_get_c2x_cx(wav(ewi))
+       call seq_map_map(mapper_Sw2i, w2x_wx, w2x_ix(ewi), fldlist=seq_flds_w2x_states, norm=.true.)
+    enddo
+    call t_drvstopf  (trim(timer))
+
+  end subroutine prep_ice_calc_w2x_ix
+
+  !================================================================================================
+
   function prep_ice_get_a2x_ix()
     type(mct_aVect), pointer :: prep_ice_get_a2x_ix(:)
     prep_ice_get_a2x_ix => a2x_ix(:)
@@ -615,6 +846,11 @@ contains
     prep_ice_get_r2x_ix => r2x_ix(:)
   end function prep_ice_get_r2x_ix
 
+  function prep_ice_get_w2x_ix()
+    type(mct_aVect), pointer :: prep_ice_get_w2x_ix(:)
+    prep_ice_get_w2x_ix => w2x_ix(:)
+  end function prep_ice_get_w2x_ix
+
   function prep_ice_get_mapper_SFo2i()
     type(seq_map), pointer :: prep_ice_get_mapper_SFo2i
     prep_ice_get_mapper_SFo2i => mapper_SFo2i
@@ -634,5 +870,10 @@ contains
     type(seq_map), pointer :: prep_ice_get_mapper_Fg2i
     prep_ice_get_mapper_Fg2i => mapper_Fg2i
   end function prep_ice_get_mapper_Fg2i
+
+  function prep_ice_get_mapper_Sw2i()
+    type(seq_map), pointer :: prep_ice_get_mapper_Sw2i
+    prep_ice_get_mapper_Sw2i => mapper_Sw2i
+  end function prep_ice_get_mapper_Sw2i
 
 end module prep_ice_mod

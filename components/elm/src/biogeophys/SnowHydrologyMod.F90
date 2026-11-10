@@ -18,7 +18,7 @@ module SnowHydrologyMod
   use decompMod       , only : bounds_type
   use abortutils      , only : endrun
   use elm_varpar      , only : nlevsno
-  use elm_varctl      , only : iulog, use_extrasnowlayers
+  use elm_varctl      , only : iulog, use_extrasnowlayers, use_firn_percolation_and_compaction
   use elm_varcon      , only : namec, h2osno_max
   use atm2lndType     , only : atm2lnd_type
   use AerosolType     , only : aerosol_type
@@ -134,7 +134,6 @@ contains
     use elm_varcon        , only : denh2o, denice, wimp, ssi
     use landunit_varcon   , only : istsoil
     use AerosolMod        , only : AerosolFluxes
-    use elm_varctl        , only : use_vsfm
     !
     ! !ARGUMENTS:
     type(bounds_type)     , intent(in)    :: bounds
@@ -233,7 +232,7 @@ contains
          c = filter_snowc(fc)
          l=col_pp%landunit(c)
 
-         if (do_capsnow(c) .and. .not. use_extrasnowlayers) then
+         if (do_capsnow(c) .and. .not. use_firn_percolation_and_compaction) then
             wgdif = h2osoi_ice(c,snl(c)+1) - frac_sno_eff(c)*qflx_sub_snow(c)*dtime
             h2osoi_ice(c,snl(c)+1) = wgdif
             if (wgdif < 0._r8) then
@@ -260,11 +259,7 @@ contains
                wgdif=h2osoi_liq(c,j)
                if (wgdif >= 0._r8) exit
                h2osoi_liq(c,j) = 0._r8
-               if (.not.(j+1 > 0 .and. use_vsfm)) then
-                  h2osoi_liq(c,j+1) = h2osoi_liq(c,j+1) + wgdif
-               else
-                  mflx_neg_snow_col_1d(c-bounds%begc+1) = wgdif/dtime
-               endif
+               h2osoi_liq(c,j+1) = h2osoi_liq(c,j+1) + wgdif
             enddo
          end if
       end do
@@ -568,17 +563,18 @@ contains
      !
      ! !LOCAL VARIABLES:
      integer :: j, l, c, fc, t                   ! indices
+     ! (urbpoi / lakpoi used for CLM-consistent fractional melt compaction gate)
      ! parameters
      real(r8), parameter :: c2 = 23.e-3_r8       ! [m3/kg]
      real(r8), parameter :: c3 = 2.777e-6_r8     ! [1/s]
-     real(r8), parameter :: c3_ams = 5.8e-7_r8   ! Schneider et al., 2020 [1/s]
+     real(r8), parameter :: c3_ams = 0.83e-6_r8   ! Schneider et al.,(2021),Table 2 [1/s]
      real(r8), parameter :: c4 = 0.04_r8         ! [1/K]
      real(r8), parameter :: c5 = 2.0_r8          !
      real(r8), parameter :: dm = 100.0_r8        ! Upper Limit on Destructive Metamorphism Compaction [kg/m3]
-     real(r8), parameter :: rho_dm = 150.0_r8    ! Upper limit on destructive metamorphism compaction [kg/m3] (Anderson, 1976; Schneider et al., 2020)
+     real(r8), parameter :: rho_dm = 150.0_r8    ! Upper limit on destructive metamorphism compaction [kg/m3] (Anderson, 1976;Schneider et al., 2021)
      real(r8), parameter :: eta0 = 9.e+5_r8      ! The Viscosity Coefficient Eta0 [kg-s/m2]
-     real(r8), parameter :: k_creep_snow = 1.4e-9_r8 ! Creep coefficient for snow (bi < 550 kg / m3) [m3-s/kg]
-     real(r8), parameter :: k_creep_firn = 1.2e-9_r8 ! Creep coefficient for firn (bi > 550 kg / m3)
+     real(r8), parameter :: k_creep_snow = 9.2e-9_r8 ! Creep coefficient for snow (bi < 550 kg / m3) [m3-s/kg]
+     real(r8), parameter :: k_creep_firn = 3.7e-9_r8 ! Creep coefficient for firn (bi > 550 kg / m3) [m3-s/kg]
      !
      real(r8) :: p_gls                           ! grain load stress [kg / m-s2]
      real(r8) :: burden(bounds%begc:bounds%endc) ! pressure of overlying snow [kg/m2]
@@ -605,6 +601,8 @@ contains
           snl          => col_pp%snl                          , & ! Input:  [integer (:)    ] number of snow layers
           n_melt       => col_pp%n_melt                       , & ! Input:  [real(r8) (:)   ] SCA shape parameter
           ltype        => lun_pp%itype                        , & ! Input:  [integer (:)    ] landunit type
+          urbpoi       => lun_pp%urbpoi                       , & ! Input:  [logical (:)    ] true => landunit is an urban point
+          lakpoi       => lun_pp%lakpoi                       , & ! Input:  [logical (:)    ] true => landunit is a lake point
 
           forc_wind    => top_as_inst%windbot                 , & ! Input:  [real(r8) (:) ]  atmospheric wind speed (m/s)
           t_soisno     => col_es%t_soisno    , & ! Input:  [real(r8) (:,:) ] soil temperature (Kelvin)
@@ -623,7 +621,7 @@ contains
 
        ! Begin calculation - note that the following column loops are only invoked if snl(c) < 0
 
-       if (use_extrasnowlayers) then
+       if (use_firn_percolation_and_compaction) then
           do fc = 1, num_snowc
              c = filter_snowc(fc)
              burden(c) = 0._r8
@@ -637,7 +635,7 @@ contains
        do j = -nlevsno+1, 0
           do fc = 1, num_snowc
              c = filter_snowc(fc)
-             if (use_extrasnowlayers) then
+             if (use_firn_percolation_and_compaction) then
                 t = col_pp%topounit(c)
              end if
              if (j >= snl(c)+1) then
@@ -647,10 +645,10 @@ contains
                 ! If void is negative, then increase dz such that void = 0.
                 ! This should be done for any landunit, but for now is done only for glacier_mec 1andunits.
                 
-                if (.not. use_extrasnowlayers) then
+                if (.not. use_firn_percolation_and_compaction) then
                    ! I don't think the next 5 lines are necessary (removed in CLMv5)
                    l = col_pp%landunit(c)
-                   if (ltype(l)==istice_mec .and. void < 0._r8) then
+                   if (ltype(l) == istice_mec .and. void < 0._r8) then
                       dz(c,j) = h2osoi_ice(c,j)/denice + h2osoi_liq(c,j)/denh2o
                       void = 0._r8
                    endif
@@ -665,12 +663,12 @@ contains
                    dexpf = exp(-c4*td)
 
                    ! Settling as a result of destructive metamorphism
-                   if (.not. use_extrasnowlayers) then
+                   if (.not. use_firn_percolation_and_compaction) then
                       ddz1 = -c3*dexpf 
                       if (bi > dm) ddz1 = ddz1*exp(-46.0e-3_r8*(bi-dm))
                    else
                       ddz1_fresh = (-grav * (burden(c) + wx/2._r8)) / &
-                                   (0.007_r8 * bi**(4.75_r8 + td/40._r8))
+                                   (0.007_r8 * min(max(bi,dm),denice)**(4.75_r8 + min(td,0._r8)/40._r8))
                       snw_ssa = 3.e6_r8 / (denice * snw_rds(c,j))
                       if (snw_ssa < 50._r8) then
                           ddz1_fresh = ddz1_fresh * exp(-46.e-2_r8 * (50._r8 - snw_ssa))
@@ -685,7 +683,7 @@ contains
                    if (h2osoi_liq(c,j) > 0.01_r8*dz(c,j)*frac_sno(c)) ddz1=ddz1*c5
 
                    ! Compaction due to overburden
-                   if (.not. use_extrasnowlayers) then
+                   if (.not. use_firn_percolation_and_compaction) then
                       ddz2 = -(burden(c)+wx/2._r8)*exp(-0.08_r8*td - c2*bi)/eta0 
                    else
                       p_gls = max(denice / bi, 1._r8) * grav * (burden(c) + wx/2._r8)
@@ -693,19 +691,23 @@ contains
                          ddz2 = (-k_creep_snow * (max(denice / bi, 1._r8) - 1._r8) * &
                                  exp(-60.e6_r8 / (rgas * t_soisno(c,j))) * p_gls) / &
                                  (snw_rds(c,j) * 1.e-6_r8 * snw_rds(c,j) * 1.e-6_r8) - &
-                                 2.02e-10_r8
+                                 1.0e-10_r8
                       else ! High density, i.e. firn
                          ddz2 = (-k_creep_firn * (max(denice / bi, 1._r8) - 1._r8) * &
                                  exp(-60.e6_r8 / (rgas * t_soisno(c,j))) * p_gls) / &
                                  (snw_rds(c,j) * 1.e-6_r8 * snw_rds(c,j) * 1.e-6_r8) - &
-                                 2.7e-11_r8
+                                 1.0e-10_r8
                       endif
                    endif
 
                    ! Compaction occurring during melt
+                   ! Port of CLM fractional-snow melt compaction fix: use the
+                   ! fractional ddz3 form for all non-lake, non-urban columns when
+                   ! subgridflag is on (includes glacier and wetland).
 
                    if (imelt(c,j) == 1) then
-                      if(subgridflag==1 .and. (ltype(col_pp%landunit(c)) == istsoil .or. ltype(col_pp%landunit(c)) == istcrop)) then
+                      l = col_pp%landunit(c)
+                      if (subgridflag == 1 .and. (.not. lakpoi(l) .and. .not. urbpoi(l))) then
                          ! first term is delta mass over mass
                          ddz3 = max(0._r8,min(1._r8,(swe_old(c,j) - wx)/wx))
 
@@ -724,7 +726,7 @@ contains
                       ddz3 = 0._r8
                    end if
                    
-                   if (use_extrasnowlayers) then
+                   if (use_firn_percolation_and_compaction) then
                       ! Compaction occurring due to wind drift
                       call WindDriftCompaction( &
                            bi = bi, &
@@ -858,7 +860,7 @@ contains
        if (num_snowc > 0) then
           c = filter_snowc(1)
           l = col_pp%landunit(c)
-          if (ltype(l) == istdlak) then ! Called from LakeHydrology
+          if (col_pp%is_lake(c)) then ! Called from LakeHydrology
             if (.not. use_extrasnowlayers) then
                dzminloc(:) = dzmin(:) + lsadz
             else
@@ -884,7 +886,7 @@ contains
           do j = msn_old(c)+1,0
              ! use 0.01 to avoid runaway ice buildup
              if (h2osoi_ice(c,j) <= .01_r8) then
-                if (ltype(l) == istsoil .or. urbpoi(l) .or. ltype(l) == istcrop) then
+                if (col_pp%is_soil(c) .or. urbpoi(l) .or. col_pp%is_crop(c)) then
                    h2osoi_liq(c,j+1) = h2osoi_liq(c,j+1) + h2osoi_liq(c,j)
                    h2osoi_ice(c,j+1) = h2osoi_ice(c,j+1) + h2osoi_ice(c,j)
 
@@ -911,7 +913,7 @@ contains
                       mss_dst4(c,j+1)  = mss_dst4(c,j+1)   + mss_dst4(c,j)
                    end if
 
-                else if (ltype(l) /= istsoil .and. .not. urbpoi(l) .and. ltype(l) /= istcrop .and. j /= 0) then
+                else if (.not.col_pp%is_soil(c) .and. .not. urbpoi(l) .and. .not.col_pp%is_crop(c) .and. j /= 0) then
 
                    h2osoi_liq(c,j+1) = h2osoi_liq(c,j+1) + h2osoi_liq(c,j)
                    h2osoi_ice(c,j+1) = h2osoi_ice(c,j+1) + h2osoi_ice(c,j)
@@ -935,7 +937,7 @@ contains
                       ! urban, soil or crop, the h2osoi_liq and h2osoi_ice associated with this layer is sent
                       ! to qflx_qrgwl later on in the code.  To keep track of this for the snow balance
                       ! error check, we add this to qflx_sl_top_soil here
-                      if (ltype(l) /= istsoil .and. ltype(l) /= istcrop .and. .not. urbpoi(l) .and. i == 0) then
+                      if (.not.col_pp%is_soil(c) .and. .not.col_pp%is_crop(c) .and. .not. urbpoi(l) .and. i == 0) then
                          qflx_sl_top_soil(c) = (h2osoi_liq(c,i) + h2osoi_ice(c,i))/dtime
                       end if
 
@@ -987,7 +989,7 @@ contains
           c = filter_snowc(fc)
           l = col_pp%landunit(c)
           if (snow_depth(c) > 0._r8) then
-             if ((ltype(l) == istdlak .and. snow_depth(c) < 0.01_r8 + lsadz ) .or. &
+             if ((col_pp%is_lake(c) .and. snow_depth(c) < 0.01_r8 + lsadz ) .or. &
                   ((ltype(l) /= istdlak) .and. ((frac_sno_eff(c)*snow_depth(c) < 0.01_r8)  &
                   .or. (h2osno(c)/(frac_sno_eff(c)*snow_depth(c)) < 50._r8)))) then
 
@@ -1005,7 +1007,7 @@ contains
 
                 if (h2osno(c) <= 0._r8) snow_depth(c) = 0._r8
                 ! this is where water is transfered from layer 0 (snow) to layer 1 (soil)
-                if (ltype(l) == istsoil .or. urbpoi(l) .or. ltype(l) == istcrop) then
+                if (col_pp%is_soil(c) .or. urbpoi(l) .or. col_pp%is_crop(c)) then
                    h2osoi_liq(c,0) = 0.0_r8
                    h2osoi_liq(c,1) = h2osoi_liq(c,1) + zwliq(c)
                    qflx_snow2topsoi(c) = zwliq(c)/dtime
@@ -1014,7 +1016,7 @@ contains
                 if (ltype(l) == istwet) then
                    h2osoi_liq(c,0) = 0.0_r8
                 endif
-                if (ltype(l) == istice .or. ltype(l)==istice_mec) then
+                if (ltype(l) == istice .or. ltype(l) == istice_mec) then
                    h2osoi_liq(c,0) = 0.0_r8
                 endif
              endif
@@ -2273,6 +2275,7 @@ contains
      associate( &
          qflx_snwcp_ice     => col_wf%qflx_snwcp_ice               , & ! Output: [real(r8) (:)   ]  excess solid h2o due to snow capping (outgoing) (mm H2O /s) [+]
          qflx_snwcp_liq     => col_wf%qflx_snwcp_liq               , & ! Output: [real(r8) (:)   ]  excess liquid h2o due to snow capping (outgoing) (mm H2O /s) [+]
+         qflx_ice_runoff_xs =>    col_wf%qflx_ice_runoff_xs        , & ! Input:  [real(r8) (:)   ] 
          h2osoi_ice         => col_ws%h2osoi_ice                   , & ! In/Out: [real(r8) (:,:) ] ice lens (kg/m2)                       
          h2osoi_liq         => col_ws%h2osoi_liq                   , & ! In/Out: [real(r8) (:,:) ] liquid water (kg/m2)                   
          h2osno             => col_ws%h2osno                       , & ! Input:  [real(r8) (:)   ] snow water (mm H2O)
@@ -2294,6 +2297,7 @@ contains
         c = filter_initc(fc)
         qflx_snwcp_ice(c) = 0.0_r8
         qflx_snwcp_liq(c) = 0.0_r8
+        qflx_ice_runoff_xs(c) = 0.0_r8
      end do
 
      loop_columns: do fc = 1, num_snowc

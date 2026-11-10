@@ -21,10 +21,10 @@ use asp_tests,            only: asp_tracer, asp_baroclinic, asp_rossby, asp_moun
 use baroclinic_inst_mod,  only: binst_init_state, jw_baroclinic
 use dcmip12_wrapper,      only: dcmip2012_test1_1, dcmip2012_test1_2, dcmip2012_test1_3,&
                                 dcmip2012_test2_0, dcmip2012_test2_x, dcmip2012_test3,  &
-                                dcmip2012_test4_init, mtest_init, dcmip2012_test1_1_conv
+                                dcmip2012_test4_init, mtest_init, dcmip2012_test1_conv
 use dcmip16_wrapper,      only: dcmip2016_test1, dcmip2016_test2, dcmip2016_test3, &
                                 dcmip2016_test1_forcing, dcmip2016_test2_forcing, dcmip2016_test3_forcing, &
-                                dcmip2016_test1_pg, dcmip2016_test1_pg_forcing, dcmip2016_init, &
+                                dcmip2016_pg_init, dcmip2016_test1_pg, dcmip2016_test1_pg_forcing, dcmip2016_init, &
                                 bubble_new_forcing
 use held_suarez_mod,      only: hs0_init_state
 
@@ -33,6 +33,7 @@ use dry_planar_tests,     only: planar_hydro_mountain_wave_init, planar_nonhydro
 use dry_planar_tests,     only: planar_rising_bubble_init, planar_density_current_init, planar_baroclinic_instab_init
 use moist_planar_tests,   only: planar_moist_rising_bubble_init, planar_moist_density_current_init, planar_moist_baroclinic_instab_init
 use moist_planar_tests,   only: planar_tropical_cyclone_init, planar_supercell_init
+use planar_transport_tests, only: test_conv_planar_advection
 
 use p3phys
 
@@ -60,6 +61,8 @@ subroutine set_test_initial_conditions(elem, deriv, hybrid, hvcoord, tl, nets, n
   type(hvcoord_t),    intent(inout)         :: hvcoord                  ! hybrid vertical coordinates
   type(timelevel_t),  intent(in)            :: tl                       ! time level sctructure
   integer,            intent(in)            :: nets,nete                ! start, end element index
+
+  integer :: ie
  
 !which ones are with forcing????
 
@@ -72,7 +75,8 @@ subroutine set_test_initial_conditions(elem, deriv, hybrid, hvcoord, tl, nets, n
     case('asp_tracer');
     case('baroclinic');
     case('dcmip2012_test1_1');
-    case('dcmip2012_test1_1_conv');
+    case('dcmip2012_test1_3a_conv', 'dcmip2012_test1_3b_conv', 'dcmip2012_test1_3c_conv', &
+         'dcmip2012_test1_3d_conv', 'dcmip2012_test1_3e_conv', 'dcmip2012_test1_3f_conv');
     case('dcmip2012_test1_2');
     case('dcmip2012_test1_3');
     case('dcmip2012_test2_0');
@@ -80,8 +84,8 @@ subroutine set_test_initial_conditions(elem, deriv, hybrid, hvcoord, tl, nets, n
     case('dcmip2012_test2_2'); test_with_forcing = .true. ;
     case('dcmip2012_test3');
     case('dcmip2012_test4');
-    case('dcmip2016_test1');    call dcmip2016_init();  test_with_forcing = .true. ;
-    case('dcmip2016_test1_pg1', 'dcmip2016_test1_pg2', 'dcmip2016_test1_pg3', 'dcmip2016_test1_pg4')
+    case('dcmip2016_test1', &
+         'dcmip2016_test1_pg1', 'dcmip2016_test1_pg2', 'dcmip2016_test1_pg3', 'dcmip2016_test1_pg4')
        call dcmip2016_init();  test_with_forcing = .true. ;
     case('dcmip2016_test2');    call dcmip2016_init();  test_with_forcing = .true. ;
     case('dcmip2016_test3');    call dcmip2016_init();  test_with_forcing = .true. ;
@@ -96,26 +100,24 @@ subroutine set_test_initial_conditions(elem, deriv, hybrid, hvcoord, tl, nets, n
     case('planar_nonhydro_mtn_wave');
     case('planar_schar_mtn_wave');
     case('planar_rising_bubble');
-       !if (bubble_moist) then 
-       !   call dcmip2016_init();
        test_with_forcing = .true. ;
-       !pi type was incompatible
-!    rho_h2o   = rhoh2o ! Density of liquid water (STP) !997.
-!    ep_2   = mwh2o/mwdry  ! ratio of molecular mass of water to the molecular mass of dry air !0.622
-       ! call micro_p3_utils_init(1005.0d0,287.04d0,461.50d0,997.0d0,18.016d0,28.966d0,9.80616d0,2.501d6,3.337d5, &
-       !                         4188.0d0,273.0d0,3.14159265d0,0,hybrid%par%masterproc)
        call micro_p3_utils_init(Cp,Rgas,Rwater_vapor,rho_liquidH20,MWliquidH20,MWDAIR,g,latvap,latice,Cl,&
              bubble_const3,DD_PI,0,hybrid%par%masterproc)
 
        call p3_init('.','4.1.1');
-       !endif
+    case('planar_rising_bubble_pg2')
+       if (bubble_moist) then
+          call dcmip2016_init();
+          test_with_forcing = .true. ;
+       endif
     case('planar_density_current');
     case('planar_baroclinic_instab');
     case('planar_moist_rising_bubble');
     case('planar_moist_density_current');
     case('planar_moist_baroclinic_instab'); 
     case('planar_tropical_cyclone'); 
-    case('planar_supercell'); 
+    case('planar_supercell');
+    case('planar_transport_a');
     case default;               call abortmp('unrecognized test case')
   endselect
 
@@ -131,9 +133,10 @@ subroutine set_test_initial_conditions(elem, deriv, hybrid, hvcoord, tl, nets, n
       case('asp_tracer');         call asp_tracer       (elem,hybrid,hvcoord,nets,nete)
       case('baroclinic');         call binst_init_state (elem,hybrid, nets, nete, hvcoord)
       case('dcmip2012_test1_1');  call dcmip2012_test1_1(elem,hybrid,hvcoord,nets,nete,0.0d0,1,timelevels)
-      case('dcmip2012_test1_1_conv')
+      case('dcmip2012_test1_3a_conv', 'dcmip2012_test1_3b_conv', 'dcmip2012_test1_3c_conv', &
+           'dcmip2012_test1_3d_conv', 'dcmip2012_test1_3e_conv', 'dcmip2012_test1_3f_conv')
          midpoint_eta_dot_dpdn = .true.
-         call dcmip2012_test1_1_conv(elem,hybrid,hvcoord,nets,nete,0.0d0,1,timelevels)
+         call dcmip2012_test1_conv(test_case,elem,hybrid,hvcoord,deriv,nets,nete,0.0d0,1,timelevels)
       case('dcmip2012_test1_2');  call dcmip2012_test1_2(elem,hybrid,hvcoord,nets,nete,0.0d0,1,timelevels)
       case('dcmip2012_test1_3');  call dcmip2012_test1_3(elem,hybrid,hvcoord,nets,nete,0.0d0,1,timelevels,deriv)
       case('dcmip2012_test2_0');  call dcmip2012_test2_0(elem,hybrid,hvcoord,nets,nete)
@@ -159,6 +162,9 @@ subroutine set_test_initial_conditions(elem, deriv, hybrid, hvcoord, tl, nets, n
       case('planar_nonhydro_mtn_wave');             call planar_nonhydro_mountain_wave_init(elem,hybrid,hvcoord,nets,nete)
       case('planar_schar_mtn_wave');                call planar_schar_mountain_wave_init(elem,hybrid,hvcoord,nets,nete)
       case('planar_rising_bubble');                 call planar_rising_bubble_init(elem,hybrid,hvcoord,nets,nete)
+      case('planar_rising_bubble_pg2')
+         call dcmip2016_pg_init(elem,hybrid,hvcoord,nets,nete,2)
+         call planar_rising_bubble_init(elem,hybrid,hvcoord,nets,nete)
       case('planar_density_current');               call planar_density_current_init(elem,hybrid,hvcoord,nets,nete)
       case('planar_baroclinic_instab');             call planar_baroclinic_instab_init(elem,hybrid,hvcoord,nets,nete)
       case('planar_moist_rising_bubble');           call planar_moist_rising_bubble_init(elem,hybrid,hvcoord,nets,nete)
@@ -166,10 +172,20 @@ subroutine set_test_initial_conditions(elem, deriv, hybrid, hvcoord, tl, nets, n
       case('planar_moist_baroclinic_instab');       call planar_moist_baroclinic_instab_init(elem,hybrid,hvcoord,nets,nete)
       case('planar_tropical_cyclone');              call planar_tropical_cyclone_init(elem,hybrid,hvcoord,nets,nete)
       case('planar_supercell');                     call planar_supercell_init(elem,hybrid,hvcoord,nets,nete)
+      case('planar_transport_a')
+         midpoint_eta_dot_dpdn = .true.
+         call test_conv_planar_advection( &
+              test_case,elem,hybrid,hvcoord,deriv,nets,nete,0.0d0,1,timelevels)
       case default;               call abortmp('unrecognized test case')
 
     endselect
 !  endif
+
+    if (midpoint_eta_dot_dpdn) then
+       do ie = nets,nete
+          elem(ie)%derived%eta_dot_dpdn = 0
+       end do
+    end if
 end subroutine
 
 !_______________________________________________________________________
@@ -201,9 +217,13 @@ subroutine set_test_prescribed_wind(elem, deriv, hybrid, hvcoord, dt, tl, nets, 
   ! set prescribed quantities at timelevel np1 
   select case(test_case)
     case('dcmip2012_test1_1'); call dcmip2012_test1_1(elem,hybrid,hvcoord,nets,nete,time,np1,np1)
-    case('dcmip2012_test1_1_conv'); call dcmip2012_test1_1_conv(elem,hybrid,hvcoord,nets,nete,time,np1,np1)
+    case('dcmip2012_test1_3a_conv', 'dcmip2012_test1_3b_conv', 'dcmip2012_test1_3c_conv', &
+         'dcmip2012_test1_3d_conv', 'dcmip2012_test1_3e_conv', 'dcmip2012_test1_3f_conv')
+       call dcmip2012_test1_conv(test_case,elem,hybrid,hvcoord,deriv,nets,nete,time,np1,np1)
     case('dcmip2012_test1_2'); call dcmip2012_test1_2(elem,hybrid,hvcoord,nets,nete,time,np1,np1)
     case('dcmip2012_test1_3'); call dcmip2012_test1_3(elem,hybrid,hvcoord,nets,nete,time,np1,np1,deriv)
+    case('planar_transport_a')
+       call test_conv_planar_advection(test_case,elem,hybrid,hvcoord,deriv,nets,nete,time,np1,np1)
   endselect
 
 end subroutine
@@ -215,7 +235,6 @@ subroutine compute_test_forcing(elem,hybrid,hvcoord,nt,ntQ,dt,nets,nete,tl)
 
   use dcmip12_wrapper, only:  dcmip2012_test2_x_forcing
   use held_suarez_mod, only: hs_forcing
-  use control_mod,     only: ftype
   implicit none
   type(element_t),  intent(inout) :: elem(:)                            ! element array
   type(hybrid_t),   intent(in)    :: hybrid                             ! hybrid parallel structure
@@ -224,8 +243,7 @@ subroutine compute_test_forcing(elem,hybrid,hvcoord,nt,ntQ,dt,nets,nete,tl)
   integer,          intent(in)    :: nets,nete,nt,ntQ
   type(TimeLevel_t),intent(in)    :: tl
 
-  integer :: ie,q,k
-  real (kind=real_kind) :: dp(np,np)
+  integer :: ie
 
   ! zero out forcing terms
   do ie=nets,nete
@@ -257,9 +275,9 @@ subroutine compute_test_forcing(elem,hybrid,hvcoord,nt,ntQ,dt,nets,nete,tl)
     case('dcmip2016_test3');    call dcmip2016_test3_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl)
 
     case('planar_rising_bubble');  
-            !if (bubble_moist) call dcmip2016_test1_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl)
-            !if (bubble_moist) call bubble_new_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl)
-            call interface_to_p3(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl)
+       call interface_to_p3(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl)
+    case('planar_rising_bubble_pg2');
+       if (bubble_moist) call dcmip2016_test1_pg_forcing(elem,hybrid,hvcoord,nets,nete,nt,ntQ,dt,tl)
 
     case('held_suarez0');
        do ie=nets,nete
@@ -286,7 +304,6 @@ end subroutine compute_test_forcing
 
     real (kind=real_kind), parameter :: half = 0.5d0
 
-    real (kind=real_kind) :: dp(np,np)! pressure thickness, vflux
     real(kind=real_kind)  :: eta_dot_dpdn(np,np,nlevp)
 
     integer :: ie,k,n0,np1
@@ -355,6 +372,7 @@ end subroutine compute_test_forcing
   subroutine print_test_results(elem, tl, hvcoord, par)
     use parallel_mod, only: parallel_t
     use dcmip12_wrapper, only: dcmip2012_print_test1_conv_results
+    use planar_transport_tests, only: print_conv_planar_advection_results
 
     type(element_t), intent(in) :: elem(:)
     type(timelevel_t), intent(in) :: tl
@@ -362,7 +380,11 @@ end subroutine compute_test_forcing
     type(parallel_t), intent(in) :: par
 
     select case(test_case)
-       case('dcmip2012_test1_1_conv'); call dcmip2012_print_test1_conv_results(elem, tl, hvcoord, par, 1)
+    case('dcmip2012_test1_3a_conv', 'dcmip2012_test1_3b_conv', 'dcmip2012_test1_3c_conv', &
+         'dcmip2012_test1_3d_conv', 'dcmip2012_test1_3e_conv', 'dcmip2012_test1_3f_conv')
+       call dcmip2012_print_test1_conv_results(test_case, elem, tl, hvcoord, par, 1)
+    case('planar_transport_a')
+       call print_conv_planar_advection_results(test_case, elem, tl, hvcoord, par)
     end select
   end subroutine print_test_results
 

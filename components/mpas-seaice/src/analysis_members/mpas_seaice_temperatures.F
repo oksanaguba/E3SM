@@ -218,9 +218,9 @@ contains
 
    subroutine seaice_compute_temperatures(domain, instance, timeLevel, err)!{{{
 
-      use ice_colpkg, only: &
-           colpkg_ice_temperature, &
-           colpkg_snow_temperature
+      use icepack_intfc, only: &
+           icepack_ice_temperature, &
+           icepack_snow_temperature
 
       !-----------------------------------------------------------------
       !
@@ -261,6 +261,9 @@ contains
            tracersPool, &
            temperaturesAMPool
 
+      character(len=strKIND), pointer :: &
+           config_column_physics_type
+
       real(kind=RKIND), dimension(:,:,:), pointer :: &
            iceAreaCategory, &
            snowVolumeCategory, &
@@ -287,6 +290,8 @@ contains
       block => domain % blocklist
       do while (associated(block))
 
+         call MPAS_pool_get_config(block % configs, "config_column_physics_type", config_column_physics_type)
+
          call MPAS_pool_get_subpool(block % structs, 'temperaturesAM', temperaturesAMPool)
          call MPAS_pool_get_subpool(block % structs, 'tracers', tracersPool)
 
@@ -309,6 +314,9 @@ contains
          snowTemperature = 0.0_RKIND
 
          ! compute temperatures
+
+!         if (trim(config_column_physics_type) == "icepack") then
+
          do iCell = 1, nCellsSolve
             do iCategory = 1, nCategories
 
@@ -318,8 +326,8 @@ contains
                   ! ice layers
                   do iIceLayer = 1, nIceLayers
                      iceTemperature(iIceLayer, iCategory, iCell) = &
-                          colpkg_ice_temperature(iceEnthalpy(iIceLayer,iCategory,iCell), &
-                                                 iceSalinity(iIceLayer,iCategory,iCell))
+                          icepack_ice_temperature(iceEnthalpy(iIceLayer,iCategory,iCell), &
+                                                  iceSalinity(iIceLayer,iCategory,iCell))
                   enddo ! iIceLayer
 
                   ! snow layers
@@ -327,7 +335,7 @@ contains
 
                      do iSnowLayer = 1, nSnowLayers
                         snowTemperature(iSnowLayer, iCategory, iCell) = &
-                             colpkg_snow_temperature(snowEnthalpy(iSnowLayer,iCategory,iCell))
+                             icepack_snow_temperature(snowEnthalpy(iSnowLayer,iCategory,iCell))
                      enddo ! iIceLayer
 
                   endif ! snowVolumeCategory
@@ -336,6 +344,8 @@ contains
 
             enddo ! iCategory
          enddo ! iCell
+
+!         endif ! config_column_physics_type
 
          block => block % next
       enddo
